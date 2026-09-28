@@ -10,6 +10,7 @@ import {
   runRate,
   variationsFor,
 } from '@crease/sim';
+import { QUICK_CHAT } from '@crease/net';
 import { Action, Input } from '../input/input';
 import { esc, h } from './dom';
 
@@ -37,6 +38,10 @@ export class Hud {
   private picker = h('div', { class: 'picker' });
   private timingUntil = 0;
   private roleBox = h('div', { class: 'role-box' });
+  private chatLog = h('div', { class: 'chat-log' });
+  private chatMenu = h('div', { class: 'chat-menu' });
+  private partnerCall = h('div', { class: 'partner-call' });
+  private partnerUntil = 0;
   private reviewBox = h('div', { class: 'review-box' });
   private trackBox = h('div', { class: 'track-box' });
   private reviewDeadline = 0;
@@ -53,7 +58,8 @@ export class Hud {
   constructor(parent: HTMLElement, private input: Input, onPause: () => void) {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.dpad, pause);
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.dpad, pause);
+    this.chatMenu.style.display = 'none';
     this.roleBox.style.display = 'none';
     this.reviewBox.style.display = 'none';
     this.trackBox.style.display = 'none';
@@ -145,6 +151,45 @@ export class Hud {
     }
     this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done', h('kbd', {}, 'H / Space'))));
     this.picker.style.display = '';
+  }
+
+  /** A quick-chat line (fades after a few seconds). */
+  showChat(name: string, text: string, teamOnly: boolean): void {
+    const line = h('div', { class: `chat-line${teamOnly ? ' team' : ''}` }, h('b', {}, `${name}${teamOnly ? ' (team)' : ''}: `), text);
+    this.chatLog.append(line);
+    while (this.chatLog.children.length > 5) this.chatLog.firstChild!.remove();
+    setTimeout(() => line.classList.add('fade'), 5000);
+    setTimeout(() => line.remove(), 6000);
+  }
+
+  get chatMenuOpen(): boolean {
+    return this.chatMenu.style.display !== 'none';
+  }
+
+  /** Quick-chat picker: click a phrase, or press its number (1-9, 0). */
+  toggleChatMenu(onPick: (id: number, teamOnly: boolean) => void): void {
+    if (this.chatMenuOpen) {
+      this.chatMenu.style.display = 'none';
+      return;
+    }
+    this.chatMenu.innerHTML = '';
+    QUICK_CHAT.forEach((p, i) => {
+      this.chatMenu.append(h('button', { class: 'ctrl', onclick: () => { onPick(i, !!p.team); this.chatMenu.style.display = 'none'; } },
+        p.text, h('kbd', {}, i < 10 ? String((i + 1) % 10) : '')));
+    });
+    this.chatMenu.style.display = '';
+  }
+
+  hideChatMenu(): void {
+    this.chatMenu.style.display = 'none';
+  }
+
+  /** 2v2: your partner's running call. */
+  showPartnerCall(call: string, now: number): void {
+    const txt: Record<string, [string, string]> = { run: ['YES!', 'yes'], wait: ['NO!', 'no'], back: ['GO BACK!', 'no'] };
+    const [t, cls] = txt[call] ?? [call.toUpperCase(), 'wait'];
+    this.partnerCall.innerHTML = `<div class="call-bubble ${cls}"><span class="who">Partner</span>${t}</div>`;
+    this.partnerUntil = now + 2.2;
   }
 
   /** Online: which role(s) the local player has, and network buffer health. */
@@ -328,6 +373,7 @@ export class Hud {
     if (now > this.bannerUntil) this.banner.innerHTML = '';
     if (now > this.feedbackUntil) this.feedback.textContent = '';
     this.timing.style.display = now < this.timingUntil ? '' : 'none';
+    this.partnerCall.style.display = now < this.partnerUntil ? '' : 'none';
     if (this.reviewDeadline) {
       const bar = this.reviewBox.querySelector('.rb-timer') as HTMLElement | null;
       if (bar) bar.style.width = `${Math.max(0, ((this.reviewDeadline - now) / 6) * 100)}%`;

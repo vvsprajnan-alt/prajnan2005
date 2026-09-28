@@ -63,9 +63,19 @@
 - [x] Rate limiting, heartbeats, message size limits; AI takes over a seat when a player leaves
 - [x] Tests: replication, serialization, rewind bounds, roles, end-to-end server (1v1 + spectator + resync, 2v2)
 
+### Phase 6 - rooms, invites, reconnect, chat, matchmaking
+- [x] Session tokens: reconnect to the same identity, room and seat (full state on rejoin); newer tab replaces older
+- [x] Automatic reconnect with backoff in the client; "Rejoin room" after closing the tab
+- [x] Disconnects never stall a match: partner or AI covers the seat at once, control returns on reconnect (server-only replicated command)
+- [x] Grace periods (1 min lobby, 3 min match), empty-room and stale-session cleanup, host migration
+- [x] Invite links (`?room=CODE`, copy / share), prefilled join
+- [x] Quick-chat (12 phrases, team-only calls, rate-limited) in rooms and matches; partner's running calls shown in 2v2
+- [x] Public matchmaking: 1v1 and 2v2 queues, countdown, AI fills a 2v2 after 30 s
+- [x] Tests: lobby with a fake clock; end-to-end drop and reconnect mid-match; browser checks for queueing, chat, reload-rejoin, invite link, auto-reconnect
+
 ## Current task
 
-- Phase 5 review: play a real online match over the internet; check latency feel before Phase 6.
+- Phase 6 review: try a real match with friends over the internet before Phase 7 (presentation).
 
 ## Known bugs / limitations
 
@@ -78,12 +88,11 @@
 - The crowd is instanced boxes; audio is synthesized ambience only.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
 - Single client bundle (~650 KB, ~180 KB gzip).
-- Online: a dropped connection loses the seat (the AI takes over) - reconnecting is Phase 6.
+- Online: sessions and rooms live in the server's memory (a server restart ends them); matchmaking has no skill rating yet.
 - Online: the local player's own input is shown when the server echoes it (one round trip); shot timing itself is compensated.
 - Online: pausing only opens the menu; the match keeps running for everyone.
 
 ## Next tasks
 
-1. Phase 6: invite links, reconnect to the same seat (session tokens), disconnect grace period, quick-chat and on-screen partner calls, public matchmaking queue, host migration
-2. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
-3. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
+1. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
+2. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio

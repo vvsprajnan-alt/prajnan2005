@@ -17,9 +17,9 @@ import { World } from './render/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
 import { fieldEditor } from './ui/fieldEditor';
-import { NetClient } from './net/client';
+import { NetClient, loadSession, saveSession } from './net/client';
 import { NetDriver } from './game/driver';
-import { RoomState, Seat, ServerMsg } from '@crease/net';
+import { QUICK_CHAT, QueueMode, RoomState, Seat, ServerMsg } from '@crease/net';
 
 const GAME_NAME = 'CREASE CLASH';
 
@@ -54,7 +54,7 @@ export class App {
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
     this.startAttract();
-    this.mainMenu();
+    if (!this.handleInviteLink()) this.mainMenu();
     requestAnimationFrame(this.loop);
     // Expose for automated smoke tests / debugging.
     (window as unknown as { __crease: App }).__crease = this;
@@ -137,8 +137,10 @@ export class App {
       h('div', { class: 'menu-grid' },
         this.tile('Play', 'Quick match against the AI. Toss, bat, bowl, win.', () => this.quickMatch(), true),
         this.tile('Practice', 'Nets: face the AI bowlers or bowl at AI batters.', () => this.practiceMenu()),
-        this.tile('Play Online', 'Create a room or join one with a code. Up to 2v2.', () => this.onlineMenu()),
-        this.tile('Invites & Matchmaking', 'Invite links, reconnect, quick-chat, public matchmaking.', null, false, 'Phase 6'),
+        this.tile('Play Online', 'Quick match (1v1 / 2v2) or a private room with friends.', () => this.onlineMenu(), true),
+        loadSession()?.room
+          ? this.tile('Rejoin room', `Get back into room ${loadSession()!.room} (your seat is kept for a while).`, () => void this.rejoin())
+          : this.tile('Invite friends', 'Create a room and share the link - up to four players.', () => this.onlineMenu()),
         this.tile('Teams', 'Four original franchises and their squads.', () => this.teamsScreen()),
         this.tile('Players', 'Ratings for every fictional cricketer.', () => this.playersScreen()),
         this.tile('Settings', 'Graphics quality, time of day, assists, sound.', () => this.settingsScreen()),
@@ -348,23 +350,78 @@ export class App {
   private net: NetClient | null = null;
   private room: RoomState | null = null;
   private lobbyMsg = '';
+  private queueState: { mode: QueueMode; size: number } | null = null;
+  private roomChat: string[] = [];
+  private reconnecting = false;
+  private leaving = false;
 
+  /** Connect (or resume our saved session). */
   private async ensureNet(): Promise<NetClient> {
     if (this.net?.connected) return this.net;
     const name = this.settings.playerName || 'Player';
     const c = new NetClient();
-    await c.connect(name);
+    await c.connect(name, loadSession()?.token);
     c.on((m) => this.onServer(m));
-    c.onClose = () => {
-      if (this.net !== c) return;
-      this.net = null;
-      this.room = null;
-      if (this.session?.driver.networked) this.startAttract();
-      this.show(h('div', { class: 'menu-card', style: 'max-width:520px' }, this.header('Disconnected from the server'),
-        h('button', { class: 'btn', onclick: () => this.mainMenu() }, 'Main menu')));
-    };
+    c.onClose = (replaced) => this.onNetClosed(c, replaced);
     this.net = c;
     return c;
+  }
+
+  private onNetClosed(c: NetClient, replaced: boolean): void {
+    if (this.net !== c) return;
+    this.net = null;
+    this.queueState = null;
+    if (replaced) {
+      this.room = null;
+      this.endOnlineSession();
+      this.message('Opened in another tab', 'This game session continued in a newer tab or window.');
+      return;
+    }
+    if (this.leaving || !loadSession()?.room) {
+      this.room = null;
+      this.endOnlineSession();
+      if (!this.leaving) this.message('Disconnected from the server', '');
+      return;
+    }
+    void this.reconnectLoop();
+  }
+
+  /** Lost the connection mid-room or mid-match: keep trying to get our seat back. */
+  private async reconnectLoop(): Promise<void> {
+    if (this.reconnecting) return;
+    this.reconnecting = true;
+    let cancelled = false;
+    const overlay = h('div', { class: 'overlay-msg' }, h('div', { class: 'menu-card' },
+      h('h2', {}, 'Connection lost'), h('p', { class: 'muted', id: 'rc-status' }, 'Reconnecting...'),
+      h('div', { class: 'spinner', style: 'margin:10px auto' }),
+      h('button', { class: 'btn secondary', onclick: () => { cancelled = true; } }, 'Give up')));
+    this.hudRoot.append(overlay);
+    const status = overlay.querySelector('#rc-status') as HTMLElement;
+    for (let attempt = 1; attempt <= 12 && !cancelled; attempt++) {
+      status.textContent = `Reconnecting... (attempt ${attempt})`;
+      try {
+        await this.ensureNet();
+        break;
+      } catch {
+        await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** attempt)));
+      }
+    }
+    overlay.remove();
+    this.reconnecting = false;
+    if (!this.net) {
+      saveSession(loadSession() ? { token: loadSession()!.token, room: null } : null);
+      this.endOnlineSession();
+      this.mainMenu();
+    }
+  }
+
+  private endOnlineSession(): void {
+    if (this.session?.driver.networked) this.startAttract();
+  }
+
+  private message(title: string, text: string): void {
+    this.show(h('div', { class: 'menu-card', style: 'max-width:520px' }, this.header(title), text ? h('p', {}, text) : null,
+      h('button', { class: 'btn', onclick: () => this.mainMenu() }, 'Main menu')));
   }
 
   private onServer(m: ServerMsg): void {
@@ -373,51 +430,115 @@ export class App {
     switch (m.t) {
       case 'room':
         this.room = m.room;
+        this.queueState = null;
         // During (and just after) an online match the game view owns the screen.
         if (!this.session?.driver.networked) this.roomScreen();
         break;
       case 'error':
         this.lobbyMsg = m.message;
-        if (!this.session?.driver.networked) this.roomScreen();
+        if (!this.session?.driver.networked) (this.room ? this.roomScreen() : this.onlineMenu());
         break;
       case 'left':
         this.room = null;
         this.onlineMenu();
         break;
+      case 'queue':
+        this.queueState = m.mode ? { mode: m.mode, size: m.size } : null;
+        if (!this.room) this.onlineMenu();
+        break;
+      case 'matchFound':
+        this.sfx.cheer(0.4);
+        break;
+      case 'chat': {
+        const text = QUICK_CHAT[m.id]?.text ?? '';
+        if (this.session?.driver.networked) this.session.hud.showChat(m.name, text, m.teamOnly);
+        else {
+          this.roomChat = [...this.roomChat, `${m.name}${m.teamOnly ? ' (team)' : ''}: ${text}`].slice(-4);
+          if (this.room) this.roomScreen();
+        }
+        break;
+      }
       case 'start':
         this.startOnline(c, m);
         break;
     }
   }
 
-  private onlineMenu(): void {
+  private sendChat(id: number, teamOnly: boolean): void {
+    this.net?.send({ t: 'chat', id, teamOnly });
+  }
+
+  private inviteLink(code: string): string {
+    const u = new URL(location.href);
+    u.search = '';
+    const server = new URLSearchParams(location.search).get('server');
+    if (server) u.searchParams.set('server', server);
+    u.searchParams.set('room', code);
+    return u.toString();
+  }
+
+  /** Opened with ?room=CODE (an invite link). */
+  handleInviteLink(): boolean {
+    const code = new URLSearchParams(location.search).get('room');
+    if (!code) return false;
+    this.onlineMenu(code.toUpperCase());
+    return true;
+  }
+
+  private async rejoin(): Promise<void> {
+    try {
+      const c = await this.ensureNet();
+      if (!c.resumed || !c.room) {
+        this.lobbyMsg = 'That room is no longer available';
+        saveSession({ token: c.token, room: null });
+        this.onlineMenu();
+      }
+    } catch (e) {
+      this.message('Could not reconnect', (e as Error).message);
+    }
+  }
+
+  private onlineMenu(prefillCode = ''): void {
     if (this.session && (this.session.humanTeam !== null || this.session.driver.networked)) this.startAttract();
     const nameInput = h('input', { type: 'text', value: this.settings.playerName, placeholder: 'Your name', maxlength: 20 }) as HTMLInputElement;
-    const codeInput = h('input', { type: 'text', placeholder: 'Room code', maxlength: 5, style: 'text-transform:uppercase' }) as HTMLInputElement;
+    const codeInput = h('input', { type: 'text', placeholder: 'Room code', maxlength: 5, value: prefillCode, style: 'text-transform:uppercase' }) as HTMLInputElement;
     const status = h('p', { class: 'muted' }, this.lobbyMsg);
-    const go = async (action: 'create' | 'join') => {
+    this.lobbyMsg = '';
+    const go = async (action: () => void) => {
       this.settings.playerName = nameInput.value.trim().slice(0, 20);
       saveSettings(this.settings);
       status.textContent = 'Connecting...';
       try {
-        const c = await this.ensureNet();
-        this.lobbyMsg = '';
-        if (action === 'create') c.send({ t: 'create' });
-        else c.send({ t: 'join', code: codeInput.value.trim().toUpperCase() });
+        await this.ensureNet();
+        status.textContent = '';
+        action();
       } catch (e) {
         status.textContent = (e as Error).message;
       }
     };
-    this.show(h('div', { class: 'menu-card', style: 'max-width:640px' }, this.header('Play online'),
+    const q = this.queueState;
+    const searching = q
+      ? h('div', { class: 'searching' }, h('div', { class: 'spinner' }),
+          h('span', {}, `Looking for a ${q.mode} match... ${q.size} in the queue${q.mode === '2v2' ? ' (AI fills empty seats after 30 s)' : ''}`),
+          h('button', { class: 'btn secondary', onclick: () => this.net?.send({ t: 'unqueue' }) }, 'Cancel'))
+      : null;
+    this.show(h('div', { class: 'menu-card', style: 'max-width:680px' }, this.header('Play online'),
       h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, 'Your name'), nameInput)),
-      h('div', { class: 'row', style: 'margin-top:16px' },
-        h('button', { class: 'btn', onclick: () => go('create') }, 'Create a room'),
+      h('div', { class: 'section-title' }, 'Quick match'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', disabled: !!q, onclick: () => go(() => this.net!.send({ t: 'queue', mode: '1v1' })) }, '1v1'),
+        h('button', { class: 'btn', disabled: !!q, onclick: () => go(() => this.net!.send({ t: 'queue', mode: '2v2' })) }, '2v2')),
+      searching,
+      h('div', { class: 'section-title' }, 'Play with friends'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onclick: () => go(() => this.net!.send({ t: 'create' })) }, 'Create a room'),
         codeInput,
-        h('button', { class: 'btn secondary', onclick: () => go('join') }, 'Join')),
+        h('button', { class: 'btn secondary', onclick: () => go(() => this.net!.send({ t: 'join', code: codeInput.value.trim().toUpperCase() })) }, 'Join')),
       status,
-      h('p', { class: 'muted', style: 'font-size:13px' }, 'Share the room code with up to three friends. Empty seats are played by the AI. Two players on a side split the roles: the striker\'s owner bats while the partner calls the runs; bowlers alternate overs while the partner fields.'),
-      h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
-    nameInput.focus();
+      h('p', { class: 'muted', style: 'font-size:13px' }, 'Empty seats are played by the AI. Two players on a side split the roles: the striker\'s owner bats while the partner calls the runs; bowlers alternate overs while the partner fields. Press M in a match for quick-chat.'),
+      h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'btn secondary', onclick: () => { this.net?.send({ t: 'unqueue' }); this.mainMenu(); } }, 'Back'))));
+    if (prefillCode && this.settings.playerName) void go(() => this.net!.send({ t: 'join', code: prefillCode }));
+    else nameInput.focus();
   }
 
   private roomScreen(): void {
@@ -429,15 +550,16 @@ export class App {
     const seatBox = (team: 0 | 1, slot: 0 | 1) => {
       const p = r.players.find((x) => x.seat?.team === team && x.seat?.slot === slot);
       const mine = p?.id === c.id;
+      const sub = !p ? 'Open seat' : !p.connected ? 'Reconnecting...' : p.ready ? 'Ready' : 'Not ready';
       return h('div', { class: `seat${p ? ' taken' : ''}${mine ? ' mine' : ''}` },
         h('div', { class: 'seat-name' }, p ? `${p.name}${p.host ? ' (host)' : ''}` : 'AI'),
-        h('div', { class: 'seat-sub' }, p ? (p.ready ? 'Ready' : 'Not ready') : 'Open seat'),
-        !p ? h('button', { class: 'ctrl', onclick: () => c.send({ t: 'seat', seat: { team, slot } }) }, 'Sit here') : mine ? h('button', { class: 'ctrl', onclick: () => c.send({ t: 'seat', seat: null }) }, 'Stand up') : null);
+        h('div', { class: 'seat-sub' }, sub),
+        r.public ? null : !p ? h('button', { class: 'ctrl', onclick: () => c.send({ t: 'seat', seat: { team, slot } }) }, 'Sit here') : mine ? h('button', { class: 'ctrl', onclick: () => c.send({ t: 'seat', seat: null }) }, 'Stand up') : null);
     };
     const teamName = (i: 0 | 1) => TEAMS.find((t) => t.id === r.config.teamIds[i])?.name ?? r.config.teamIds[i];
     const cfgRow = () => {
       const sel = (vals: [string, string][], cur: string, set: (v: string) => void) =>
-        h('select', { disabled: !isHost, onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...vals.map(([v, l]) => h('option', { value: v, selected: v === cur }, l)));
+        h('select', { disabled: !isHost || r.public, onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...vals.map(([v, l]) => h('option', { value: v, selected: v === cur }, l)));
       const teams = TEAMS.map((t) => [t.id, t.name] as [string, string]);
       const field = (label: string, el: HTMLElement) => h('div', { class: 'field' }, h('label', {}, label), el);
       return h('div', { class: 'row' },
@@ -447,23 +569,48 @@ export class App {
         field('AI', sel([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['expert', 'Expert']], r.config.difficulty, (v) => c.send({ t: 'config', config: { difficulty: v as Difficulty } }))),
         field('Fielding', sel([['assisted', 'Assisted'], ['manual', 'Manual'], ['auto', 'Automatic']], r.config.fielding, (v) => c.send({ t: 'config', config: { fielding: v as 'assisted' } }))));
     };
-    const spectators = r.players.filter((p) => !p.seat).map((p) => p.name);
+    const link = this.inviteLink(r.code);
+    const linkInput = h('input', { type: 'text', value: link, readonly: true }) as HTMLInputElement;
+    const copyBtn = h('button', { class: 'btn secondary', onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(link);
+        copyBtn.textContent = 'Copied!';
+      } catch {
+        linkInput.select();
+      }
+    } }, 'Copy invite link');
+    const nav = navigator as Navigator & { share?: (d: { title: string; text: string; url: string }) => Promise<void> };
+    const shareBtn = nav.share ? h('button', { class: 'btn secondary', onclick: () => nav.share!({ title: 'Crease Clash', text: `Join my cricket match! Room ${r.code}`, url: link }).catch(() => {}) }, 'Share') : null;
+    const spectators = r.players.filter((p) => !p.seat).map((p) => p.name + (p.connected ? '' : ' (away)'));
     const seated = r.players.filter((p) => p.seat);
-    const canStart = isHost && seated.length > 0 && seated.every((p) => p.ready);
+    const canStart = isHost && !r.public && seated.length > 0 && seated.every((p) => p.ready && p.connected);
+    const subtitle = r.startsIn !== undefined && r.status === 'lobby' ? `Match found! Starting in ${r.startsIn}...`
+      : r.status === 'playing' ? 'Match in progress' : r.status === 'finished' ? 'Match finished - ready up for another' : 'Share the invite link, pick your seats, then ready up.';
     this.show(h('div', { class: 'menu-card' },
-      h('div', { class: 'brand' }, h('h1', { style: 'font-size:34px' }, 'Room '), h('h1', { class: 'room-code', style: 'font-size:34px' }, r.code)),
-      h('p', { class: 'tagline' }, r.status === 'playing' ? 'Match in progress' : r.status === 'finished' ? 'Match finished - ready up for another' : 'Share the code, pick your seats, then ready up.'),
+      h('div', { class: 'brand' }, h('h1', { style: 'font-size:34px' }, r.public ? 'Quick match ' : 'Room '), h('h1', { class: 'room-code', style: 'font-size:34px' }, r.code)),
+      h('p', { class: 'tagline' }, subtitle),
+      r.public ? null : h('div', { class: 'invite-row' }, linkInput, copyBtn, shareBtn),
       h('div', { class: 'teams-grid' },
         h('div', {}, h('div', { class: 'section-title' }, teamName(0)), seatBox(0, 0), seatBox(0, 1)),
         h('div', {}, h('div', { class: 'section-title' }, teamName(1)), seatBox(1, 0), seatBox(1, 1))),
-      h('div', { class: 'section-title' }, 'Match settings', isHost ? '' : ' (host)'), cfgRow(),
+      r.public ? null : h('div', {}, h('div', { class: 'section-title' }, 'Match settings', isHost ? '' : ' (host)'), cfgRow()),
       spectators.length ? h('p', { class: 'muted' }, `Watching: ${spectators.join(', ')}`) : null,
+      h('div', { class: 'room-chat' }, ...QUICK_CHAT.slice(0, 6).map((p, i) => h('button', { class: 'ctrl', onclick: () => this.sendChat(i, false) }, p.text))),
+      h('div', { class: 'room-chat-log' }, this.roomChat.join('  ·  ')),
       this.lobbyMsg ? h('p', { class: 'lobby-err' }, this.lobbyMsg) : null,
       h('div', { class: 'row', style: 'margin-top:14px' },
-        me?.seat ? h('button', { class: `btn${me.ready ? ' secondary' : ''}`, onclick: () => c.send({ t: 'ready', ready: !me.ready }) }, me.ready ? 'Not ready' : 'Ready') : null,
-        isHost ? h('button', { class: 'btn', disabled: !canStart, onclick: () => c.send({ t: 'start' }) }, 'Start match') : null,
-        h('button', { class: 'btn secondary', onclick: () => { c.send({ t: 'leave' }); } }, 'Leave room'))));
+        me?.seat && !r.public ? h('button', { class: `btn${me.ready ? ' secondary' : ''}`, onclick: () => c.send({ t: 'ready', ready: !me.ready }) }, me.ready ? 'Not ready' : 'Ready') : null,
+        isHost && !r.public ? h('button', { class: 'btn', disabled: !canStart, onclick: () => c.send({ t: 'start' }) }, 'Start match') : null,
+        h('button', { class: 'btn secondary', onclick: () => this.leaveOnline() }, 'Leave room'))));
     this.lobbyMsg = '';
+  }
+
+  private leaveOnline(): void {
+    this.leaving = true;
+    this.net?.send({ t: 'leave' });
+    saveSession(loadSession() ? { token: loadSession()!.token, room: null } : null);
+    this.room = null;
+    setTimeout(() => (this.leaving = false), 500);
   }
 
   private startOnline(c: NetClient, m: Extract<ServerMsg, { t: 'start' }>): void {
@@ -476,6 +623,7 @@ export class App {
       onComplete: (mm) => this.onlineResults(mm),
       onPause: () => this.pauseMenu(),
       onFieldEditor: () => this.openFieldEditor(),
+      onChat: (id, teamOnly) => this.sendChat(id, teamOnly),
     }, this.hudRoot, driver);
   }
 
@@ -486,7 +634,7 @@ export class App {
       h('div', { html: m.innings.map((i) => this.scorecardHtml(m, i)).join('') }),
       h('div', { class: 'row', style: 'margin-top:18px' },
         h('button', { class: 'btn', onclick: () => { this.startAttract(); this.roomScreen(); } }, 'Back to the room'),
-        h('button', { class: 'btn secondary', onclick: () => { this.net?.send({ t: 'leave' }); this.mainMenu(); } }, 'Leave'))), true);
+        h('button', { class: 'btn secondary', onclick: () => { this.leaveOnline(); this.mainMenu(); } }, 'Leave'))), true);
   }
 
   private openFieldEditor(): void {
@@ -513,7 +661,7 @@ export class App {
         this.tile('Resume', '', resume, true),
         this.tile('Scorecard', '', () => this.scorecardOverlay(s.match, () => this.pauseMenu())),
         this.tile('Controls', '', () => this.controlsScreen(() => this.pauseMenu())),
-        this.tile('Quit to menu', '', () => { if (s.driver.networked) this.net?.send({ t: 'leave' }); this.mainMenu(); }))), true);
+        this.tile('Quit to menu', '', () => { if (s.driver.networked) this.leaveOnline(); this.mainMenu(); }))), true);
   }
 
   private scorecardHtml(m: CricketMatch, inn: InningsState): string {

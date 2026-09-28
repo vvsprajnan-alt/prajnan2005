@@ -182,3 +182,20 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .room-code { color: var(--accent); letter-spacing: 6px; user-select: text; }
 .lobby-err { color: var(--danger); font-weight: 700; }
 @media (max-width: 640px) { .teams-grid { grid-template-columns: 1fr; } }
+
+/* ---------- Chat / partner calls / reconnect ---------- */
+.chat-log { position: absolute; left: 16px; top: 108px; display: flex; flex-direction: column; gap: 4px; max-width: 320px; pointer-events: none; }
+.chat-line { background: rgba(5,12,24,.75); border-radius: 8px; padding: 4px 10px; font-size: 13px; transition: opacity .8s; }
+.chat-line.team { border-left: 3px solid var(--accent-2); }
+.chat-line.fade { opacity: 0; }
+.chat-menu { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
+.partner-call { position: absolute; right: 16px; top: 45%; }
+.overlay-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(5,12,24,.6); z-index: 5; }
+.overlay-msg .menu-card { max-width: 460px; text-align: center; }
+.invite-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0 14px; }
+.invite-row input { flex: 1; min-width: 220px; }
+.room-chat { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.room-chat-log { font-size: 13px; color: var(--muted); min-height: 20px; margin-top: 6px; }
+.searching { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.spinner { width: 18px; height: 18px; border: 3px solid rgba(255,255,255,.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -20,6 +20,7 @@ export type Action =
   | 'field' // bowling: open the field editor
   | 'bowlers' // bowling: choose the bowler for this over
   | 'review' // ask for a ball-tracking review
+  | 'chat' // open quick-chat (online)
   | `var${number}`;
 
 const KEYMAP: Record<string, Action> = {
@@ -44,6 +45,7 @@ const KEYMAP: Record<string, Action> = {
   KeyG: 'field',
   KeyH: 'bowlers',
   KeyU: 'review',
+  KeyM: 'chat',
 };
 
 // Standard gamepad mapping. LT/RT (6/7) are held modifiers for footwork, not actions.
@@ -78,7 +80,7 @@ export class Input {
       this.device = 'keyboard';
       if (!this.keys.has(e.code)) {
         let a = KEYMAP[e.code];
-        if (/^Digit[1-8]$/.test(e.code)) a = `var${Number(e.code.slice(5))}` as Action;
+        if (/^Digit[0-9]$/.test(e.code)) a = `var${Number(e.code.slice(5)) || 10}` as Action;
         if (a) this.queue.push(a);
       }
       this.keys.add(e.code);

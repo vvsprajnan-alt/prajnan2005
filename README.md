@@ -7,8 +7,9 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 5 complete - online multiplayer (1v1 to 2v2, plus spectators) through an authoritative
-server, in addition to single player. Single player against the AI is playable in the browser: batting with
+**Status:** Phase 6 complete - online multiplayer (1v1 to 2v2, plus spectators) through an authoritative
+server: private rooms with invite links, public 1v1/2v2 matchmaking, reconnecting to your seat, quick-chat
+and partner calls - in addition to single player. Single player against the AI is playable in the browser: batting with
 footwork and charging, bowling from over or round the wicket with a delivery-path guide, bowler selection,
 field placement under T20 fielding restrictions, LBW reviews with ball tracking, the one-bouncer rule,
 super overs, batting orders, human-controlled fielding (assisted or manual), physics, AI fielding, running,
@@ -65,6 +66,7 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Fielding: run / dive / catch | WASD / Space / L | Stick / A / B | Pad / Dive / Catch |
 | Fielding: throw to keeper / bowler | Space / K (holding) | A / X | Throw buttons |
 | Fielding: switch fielder / auto | Q / E | LB / RB | Switch / Auto |
+| Quick-chat (online) | M, then 1-9 / 0 | - | - |
 | Run in, then release | Space (twice) | A (twice) | Bowl, then Release |
 | Pause | Esc or P | Start | II |
 
@@ -151,9 +153,18 @@ npm run server          # builds the client, then serves game + multiplayer on h
 ```
 
 Everyone opens the server's address (e.g. `http://<your-ip>:8787` on your network, or deploy it anywhere
-Node runs), chooses **Play Online**, and one player creates a room. Share the 5-letter room code; friends join,
-pick seats (two per team) and press Ready; the host picks teams/overs/AI/fielding and starts. Empty seats are
-played by the AI, so 1v1, 2v1 and 2v2 all work, and extra people can watch.
+Node runs) and chooses **Play Online**:
+
+- **Quick match** - join the public 1v1 or 2v2 queue. A 2v2 starts as soon as four players are waiting, or
+  after 30 seconds with whoever is there (the AI fills the gaps).
+- **Play with friends** - create a room and send the **invite link** (or the 5-letter code). Friends pick
+  seats (two per team) and press Ready; the host picks teams, overs, AI level and fielding mode and starts.
+  Empty seats are played by the AI, so 1v1, 2v1 and 2v2 all work, and extra people can watch.
+
+If your connection drops the game reconnects by itself and puts you back in your seat; after closing the tab,
+**Rejoin room** on the main menu does the same. While you're away your partner (or the AI) covers your role, so
+nobody waits. Press **M** in a match for quick-chat (phrases like "Nice shot!" or team calls like "YES! Run!");
+in 2v2 your partner's running calls appear on screen.
 
 For development run `npm run dev:server` (port 8787) and `npm run dev` (Vite proxies `/ws` to the server). A
 client can also point at another server with `?server=wss://host/ws`.
@@ -179,9 +190,14 @@ overs as bowler; the other one fields (and can set the field). A lone human on a
   (at most 0.3 s) so a shot timed perfectly on screen is judged perfect. Releases get a small network grace.
 - **Smoothing.** The client plays ~100 ms behind the newest server tick and speeds up or slows down slightly to
   hold that buffer; if it falls far behind (e.g. a hidden tab) it catches up instantly.
+- **Sessions and reconnecting.** The server issues a session token (kept in the browser). Reconnecting with it
+  restores the same player, room and seat and sends the full match state. While a player is away their partner
+  takes their roles, or the AI if nobody is left on that side (switched through a server-only command that is
+  replicated like any other, so mirrors stay identical). Seats are held for 3 minutes in a match and 1 minute
+  in a lobby; hosts migrate to a connected player; a newer tab replaces an older one.
 - **Hardening.** Handshake with protocol version, message size limits, per-connection rate limiting,
-  heartbeats, input clamping, room codes without look-alike characters; if a player leaves mid-match the AI
-  takes over their seat. Invite links, reconnecting to the same seat and matchmaking are Phase 6.
+  heartbeats, input clamping, validated quick-chat ids (no free text), chat rate limits, room codes without
+  look-alike characters, and clients can never send server-only commands.
 
 ## Graphics settings
 
@@ -190,11 +206,13 @@ antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under flo
 
 ## Testing
 
-`npm test` runs ~100 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~110 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
 wicket, delivery previews, AI captaincy over a full T20, LBW tracking and umpire's call, reviews, the bouncer
 rule, super overs, batting orders, reverse swing, human fielding control, adaptive AI fields, replication
 (mirror stays identical to the server, full-state round trip), input back-dating limits, 2v2 role rules, and
-end-to-end server tests with real WebSocket clients (1v1 with a mid-match spectator and a resync, and 2v2).
+end-to-end server tests with real WebSocket clients (1v1 with a mid-match spectator and a resync, 2v2, and a
+player dropping and reconnecting mid-match), plus lobby tests with a fake clock (resume, replaced tabs, grace
+periods, host migration, chat, matchmaking).

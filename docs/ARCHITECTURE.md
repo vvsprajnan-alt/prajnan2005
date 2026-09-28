@@ -129,5 +129,16 @@ browser client                          server (Node)
   match state and the seated humans, so server and clients agree without extra messages.
 - **Latency compensation.** Commands carry `at` (the tick the player saw). `CricketMatch.rewind` converts that
   into a bounded back-dating (default 0.3 s) for shot press time, release timing and catch presses.
-- **Next (Phase 6):** session tokens to reconnect to the same seat with a grace period before the AI takes
-  over, invite links, quick-chat, matchmaking and host migration.
+## Sessions, reconnects and matchmaking (Phase 6)
+
+- `Lobby` separates a **session** (identity, token, room, queue) from a **connection**. `hello` with a known
+  token re-attaches the session to the new socket (the old one gets `replaced`), then `rejoin` restores the
+  room membership and, mid-match, sends `start` + full `state`.
+- Presence is per seat: `ServerMatch.setPresent` flips the seat's human flag. Roles (`roleMap`) are derived
+  from those flags, so a partner automatically inherits an absent player's roles; if a side has no humans left
+  the server submits `admin.fieldingControl` (source flagged `admin`, sent on the wire with role `admin`) so
+  every mirror switches that side's fielding to the AI at the same tick. `humans` messages keep client role
+  badges and input gating current.
+- `Lobby.tick()` (every 500 ms, injectable clock for tests) handles matchmaking timeouts, countdowns, grace
+  periods, host migration fallback and cleanup.
+- Quick-chat sends only phrase ids from `QUICK_CHAT`, validated and rate-limited server-side.

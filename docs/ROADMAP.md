@@ -7,8 +7,8 @@
 | 3 | Physics and rules polish: ball-tracking LBW, umpire's call and reviews, bouncer limit, overthrows, super over, batting order, reverse swing, umpire signals | **Done** |
 | 4 | Human-controlled fielding with auto/manual switching; smarter AI captaincy | **Done** |
 | 5 | Authoritative Node.js server, WebSocket protocol, lockstep command replication with hashes/resync, latency compensation, basic rooms | **Done** |
-| 6 | Invite links, reconnect to your seat, disconnect grace, quick-chat, matchmaking, host migration | Next |
-| 7 | Presentation: team intros, replays, wagon wheel, pitch map, commentary captions | |
+| 6 | Invite links, reconnect to your seat, disconnect grace, quick-chat, matchmaking, host migration | **Done** |
+| 7 | Presentation: team intros, replays, wagon wheel, pitch map, commentary captions | Next |
 | 8 | Art and audio: skinned characters and animation, crowd, stadium detail, sound design | |
 | 9 | Optimization: code-splitting, instancing/LOD, network bandwidth, mobile tuning | |
 | 10 | Testing and bug fixing: end-to-end multiplayer tests, soak tests, balancing | |

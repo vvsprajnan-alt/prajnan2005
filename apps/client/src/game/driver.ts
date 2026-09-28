@@ -50,6 +50,8 @@ export class LocalDriver implements MatchDriver {
 export class NetDriver implements MatchDriver {
   readonly mirror: Mirror;
   readonly networked = true;
+  /** Seats with a connected human right now (roles follow this). */
+  humans: [boolean[], boolean[]];
   private off: () => void;
   private resyncAsked = 0;
 
@@ -59,9 +61,11 @@ export class NetDriver implements MatchDriver {
     readonly seat: Seat | null,
   ) {
     this.mirror = new Mirror(buildMatchConfig(net));
+    this.humans = [[...net.humans[0]], [...net.humans[1]]];
     this.off = client.on((m) => {
       if (m.t === 'ticks') this.mirror.receive(m.to, m.cmds, m.hash);
       else if (m.t === 'state') this.mirror.restore(m.tick, m.data);
+      else if (m.t === 'humans') this.humans = m.humans;
     });
   }
 
@@ -93,7 +97,7 @@ export class NetDriver implements MatchDriver {
 
   myRoles(): (keyof RoleMap)[] {
     if (!this.seat) return [];
-    const map = roleMap(this.match, this.seat.team, this.net.humans[this.seat.team]!);
+    const map = roleMap(this.match, this.seat.team, this.humans[this.seat.team]!);
     return (Object.keys(map) as (keyof RoleMap)[]).filter((k) => map[k] === this.seat!.slot);
   }
 

@@ -29,6 +29,7 @@ import { World } from '../render/world';
 import { ASSIST_LEVEL, Settings } from '../settings';
 import { Hud, HudMode } from '../ui/hud';
 import { LocalDriver, MatchDriver } from './driver';
+import { QUICK_CHAT } from '@crease/net';
 
 export interface SessionCallbacks {
   onInningsBreak(m: CricketMatch): void;
@@ -36,6 +37,8 @@ export interface SessionCallbacks {
   onPause(): void;
   /** Open the field editor (the session pauses while it is open). */
   onFieldEditor(): void;
+  /** Send a quick-chat phrase (online only). */
+  onChat?(id: number, teamOnly: boolean): void;
 }
 
 const TIMING_TEXT: Record<string, [string, string]> = {
@@ -182,6 +185,18 @@ export class GameSession {
     const actions = this.input.poll();
     const m = this.match;
     const mode = this.mode();
+    // Quick-chat (online): M opens the menu, digits pick a phrase.
+    if (this.driver.networked) {
+      for (const a of actions) {
+        if (a === 'chat') this.hud.toggleChatMenu((id, teamOnly) => this.cb.onChat?.(id, teamOnly));
+        else if (this.hud.chatMenuOpen && /^var\d+$/.test(a)) {
+          const id = Number(a.slice(3)) - 1;
+          if (id >= 0 && id < QUICK_CHAT.length) this.cb.onChat?.(id, !!QUICK_CHAT[id]!.team);
+          this.hud.hideChatMenu();
+          return;
+        }
+      }
+    }
     for (const a of actions) {
       if (a === 'pause') {
         this.cb.onPause();
@@ -402,6 +417,12 @@ export class GameSession {
           hud.showFeedback(`${txt} · ${what}`, r.outcome === 'miss' ? 'bad' : cls, now);
           hud.showTimingBar(r.timingError, timingWindows(m.strikerDef, ASSIST_LEVEL[this.settings.assist]), now);
         }
+        break;
+      }
+      case 'call': {
+        // 2v2: show the partner's call (our own calls are shown when we make them).
+        const mine = this.driver.myRoles();
+        if (mine && !mine.includes(e.by) && e.call !== 'no') this.hud.showPartnerCall(e.call, now);
         break;
       }
       case 'padHit':

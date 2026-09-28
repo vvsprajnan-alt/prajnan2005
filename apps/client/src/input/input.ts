@@ -15,6 +15,10 @@ export type Action =
   | 'varNext'
   | 'pause'
   | 'camera'
+  | 'charge' // batting: advance down the pitch
+  | 'side' // bowling: toggle over / round the wicket
+  | 'field' // bowling: open the field editor
+  | 'bowlers' // bowling: choose the bowler for this over
   | `var${number}`;
 
 const KEYMAP: Record<string, Action> = {
@@ -34,8 +38,13 @@ const KEYMAP: Record<string, Action> = {
   Escape: 'pause',
   KeyP: 'pause',
   KeyC: 'camera',
+  KeyF: 'charge',
+  KeyT: 'side',
+  KeyG: 'field',
+  KeyH: 'bowlers',
 };
 
+// Standard gamepad mapping. LT/RT (6/7) are held modifiers for footwork, not actions.
 const PAD_BUTTONS: Record<number, Action> = {
   0: 'primary',
   1: 'defend',
@@ -43,12 +52,14 @@ const PAD_BUTTONS: Record<number, Action> = {
   3: 'run',
   4: 'sweep',
   5: 'reverseSweep',
-  6: 'back',
-  7: 'wait',
+  10: 'back',
+  11: 'side',
+  12: 'charge',
+  13: 'wait',
   14: 'varPrev',
   15: 'varNext',
   9: 'pause',
-  8: 'camera',
+  8: 'field',
 };
 
 export class Input {
@@ -65,7 +76,6 @@ export class Input {
       this.device = 'keyboard';
       if (!this.keys.has(e.code)) {
         let a = KEYMAP[e.code];
-        if (e.code === 'Space' && e.shiftKey) a = 'lofted';
         if (/^Digit[1-8]$/.test(e.code)) a = `var${Number(e.code.slice(5))}` as Action;
         if (a) this.queue.push(a);
       }
@@ -75,6 +85,19 @@ export class Input {
     target.addEventListener('keyup', (e) => this.keys.delete(e.code));
     target.addEventListener('blur', () => this.keys.clear());
     target.addEventListener('touchstart', () => (this.device = 'touch'), { passive: true });
+  }
+
+  /** Footwork chosen by touch UI (sticky toggle). */
+  touchFootwork: 'auto' | 'front' | 'back' = 'auto';
+
+  /** Held footwork modifier: Shift / RT = front foot, V / LT = back foot. */
+  footwork(): 'auto' | 'front' | 'back' {
+    const pad = this.pad();
+    const lt = pad?.buttons[6]?.pressed ?? false;
+    const rt = pad?.buttons[7]?.pressed ?? false;
+    if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || rt) return 'front';
+    if (this.keys.has('KeyV') || lt) return 'back';
+    return this.touchFootwork;
   }
 
   trigger(a: Action): void {

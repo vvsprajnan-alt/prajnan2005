@@ -7,8 +7,10 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 1 prototype. Single player against the AI is playable in the browser: batting,
-bowling, physics, fielding, running, full scoring and a match result. Online 2v2 comes in Phases 5-6.
+**Status:** Phase 2 complete. Single player against the AI is playable in the browser: batting with
+footwork and charging, bowling from over or round the wicket with a delivery-path guide, bowler selection,
+field placement under T20 fielding restrictions, physics, fielding, running, full scoring and a result.
+Online 2v2 comes in Phases 5-6.
 See [TODO.md](TODO.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Quick start
@@ -44,11 +46,16 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | --- | --- | --- | --- |
 | Aim shot / move bowling marker | WASD or arrows | Left stick | Direction pad (bottom left) |
 | Ground shot | Space or J | A | Ground |
-| Lofted shot | K or Shift+Space | X | Lofted |
+| Lofted shot | K | X | Lofted |
 | Defend | L | B | Defend |
 | Sweep / reverse sweep | Q / E | LB / RB | Sweep / Rev Sweep |
-| Run ("YES") / Stay ("NO") / Go back | R or Y / N / B | Y / RT / LT | Run / Stay / Back |
+| Front foot / back foot (hold) | Shift / V | RT / LT | Feet toggle |
+| Charge down the pitch | F (during the run-up) | D-pad up | Charge |
+| Run ("YES") / Stay ("NO") / Go back | R or Y / N / B | Y / D-pad down / L3 | Run / Stay / Back |
 | Pick delivery | 1-8, Z / X | D-pad left/right | Delivery buttons |
+| Over / round the wicket | T | R3 | Over / Round |
+| Set the field | G | Back / Select | Field |
+| Choose the bowler (start of an over) | H | - | Bowler |
 | Run in, then release | Space (twice) | A (twice) | Bowl, then Release |
 | Pause | Esc or P | Start | II |
 
@@ -58,10 +65,23 @@ is chosen from your aim and the length and line of the ball, so the same button 
 full ball and a cut to a short one. Timing is graded perfect / good / early / late. Early timing drags the
 ball to the leg side, late timing to the off side. Movement off the seam after you commit can beat the bat
 or find the edge. When the ball is in the field, your partner shouts **YES / NO / WAIT**; press Run to go.
+Footwork is automatic unless you hold a modifier: getting forward to full balls and back to short ones
+improves contact, the wrong foot costs you. Charge (F) during the run-up to turn good-length spin into a
+half-volley - but if you miss, a keeper standing up will stump you. Lofted + aim behind plays the scoop (full
+balls) or the upper cut (short, wide ones). After each shot a timing bar shows how many milliseconds early or
+late you were; on Beginner a closing ring on the pitch shows when to play.
 
 **Bowling.** Move the marker to choose line and length (the coloured bands show yorker, full, good and short
 lengths), pick a delivery, press Space to run in and press again in the green zone of the release meter.
-Early releases lose pace and accuracy; late ones overstep for a no-ball and a free hit.
+Early releases lose pace and accuracy; late ones overstep for a no-ball and a free hit. On Beginner and
+Standard assistance a dotted line previews the delivery's path, including swing and turn. Press T to switch
+between over and round the wicket.
+
+**Captaincy.** At the start of each over you pick the bowler (or keep the captain's choice). Press G between
+balls to set the field: pick a preset or drag fielders on the map. T20 restrictions are enforced by the rules
+engine - 2 fielders outside the 30-yard circle in the powerplay, 5 after it, no more than 2 behind square on the
+leg side - and illegal positions are pulled inside automatically. "Auto" lets the AI captain set fields by
+phase and situation.
 
 ## Architecture
 
@@ -122,7 +142,8 @@ antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under flo
 
 ## Testing
 
-`npm test` runs 40+ unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~60 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
-determinism and command validation.
+determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
+wicket, delivery previews and AI captaincy over a full T20.

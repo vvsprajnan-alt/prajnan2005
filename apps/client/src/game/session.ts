@@ -7,13 +7,18 @@ import {
   MatchConfig,
   MatchEvent,
   MatchHost,
+  Rng,
+  STRIKER_STUMPS_Z,
   STROKES,
+  SWING_TIME,
   ShotFamily,
   VARIATION_LABEL,
   Variation,
   defaultIntent,
   lengthToZ,
   lineToX,
+  planDelivery,
+  predictTrajectory,
   timingWindows,
   variationsFor,
 } from '@crease/sim';
@@ -27,6 +32,8 @@ export interface SessionCallbacks {
   onInningsBreak(m: CricketMatch): void;
   onComplete(m: CricketMatch): void;
   onPause(): void;
+  /** Open the field editor (the session pauses while it is open). */
+  onFieldEditor(): void;
 }
 
 const TIMING_TEXT: Record<string, [string, string]> = {
@@ -58,6 +65,8 @@ export class GameSession {
   private completeShown = false;
   private disposed = false;
   private screenKey = '';
+  private pickerFor = '';
+  private previewKey = '';
 
   constructor(
     cfg: MatchConfig,
@@ -128,7 +137,7 @@ export class GameSession {
     this.present(this.paused ? 0 : dt);
   }
 
-  private send(cmd: Parameters<MatchHost['submit']>[1], role: 'striker' | 'nonStriker' | 'bowler' = 'striker'): void {
+  private send(cmd: Parameters<MatchHost['submit']>[1], role: 'striker' | 'nonStriker' | 'bowler' | 'fielder' = 'striker'): void {
     if (this.humanTeam === null) return;
     this.host.submit({ team: this.humanTeam, role }, cmd);
   }
@@ -157,12 +166,16 @@ export class GameSession {
     if (f) {
       if (m.phase === 'inPlay' && !m.swing && !m.batContact) {
         const d = this.input.dir();
-        this.send({ type: 'bat.shot', shot: { family: f, aimX: d.x, aimY: d.y } });
+        this.send({ type: 'bat.shot', shot: { family: f, aimX: d.x, aimY: d.y, footwork: this.input.footwork() } });
       } else if (m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact) && a === 'primary') {
         // Space doubles as "run" once the ball is in the field.
         this.send({ type: 'run.call', call: 'run' });
         this.lastCall = 'run';
       }
+      return;
+    }
+    if (a === 'charge') {
+      this.send({ type: 'bat.charge' });
       return;
     }
     if (a === 'run' || a === 'wait' || a === 'back') {
@@ -187,6 +200,24 @@ export class GameSession {
       this.sfx.ui();
     };
     for (const a of actions) {
+      if (a === 'field') {
+        if (m.phase === 'preDelivery' || m.phase === 'dead') this.cb.onFieldEditor();
+        continue;
+      }
+      if (a === 'bowlers') {
+        if (this.hud.pickerOpen) this.hud.hidePicker();
+        else if (m.phase === 'preDelivery' && m.inn.thisOver.length === 0) this.openPicker();
+        continue;
+      }
+      if (a === 'side' && m.phase === 'preDelivery') {
+        this.intent = { ...this.intent, side: this.intent.side === 'round' ? 'over' : 'round' };
+        this.sfx.ui();
+        continue;
+      }
+      if (a === 'primary' && this.hud.pickerOpen) {
+        this.hud.hidePicker();
+        continue;
+      }
       if (a.startsWith('var') && a !== 'varPrev' && a !== 'varNext') {
         const v = vars[Number(a.slice(3)) - 1];
         if (v) pick(v);
@@ -213,6 +244,25 @@ export class GameSession {
         this.send({ type: 'bowl.aim', intent: { ...this.intent } }, 'bowler');
       }
     }
+  }
+
+  private openPicker(): void {
+    this.hud.showPicker(
+      this.match,
+      (p) => {
+        this.send({ type: 'bowler.select', player: p }, 'bowler');
+        this.hud.hidePicker();
+      },
+      () => this.hud.hidePicker(),
+    );
+  }
+
+  /** Apply a result from the field editor. */
+  applyField(r: { auto?: boolean; preset?: string; field?: import('@crease/sim').FieldSetting }): void {
+    const kind = this.match.fieldKind;
+    if (r.auto) this.send({ type: 'field.set', kind, auto: true }, 'fielder');
+    else if (r.preset) this.send({ type: 'field.set', kind, preset: r.preset }, 'fielder');
+    else if (r.field) this.send({ type: 'field.set', kind, field: r.field }, 'fielder');
   }
 
   private onEvent(e: MatchEvent): void {
@@ -244,6 +294,7 @@ export class GameSession {
           const [txt, cls] = TIMING_TEXT[r.timing] ?? ['', ''];
           const what = r.outcome === 'miss' ? 'MISSED' : r.outcome === 'edge' ? `${r.edge?.toUpperCase()} EDGE` : STROKES[r.stroke].label.toUpperCase();
           hud.showFeedback(`${txt} · ${what}`, r.outcome === 'miss' ? 'bad' : cls, now);
+          hud.showTimingBar(r.timingError, timingWindows(m.strikerDef, ASSIST_LEVEL[this.settings.assist]), now);
         }
         break;
       }
@@ -346,10 +397,21 @@ export class GameSession {
       lg.scale.z = 1;
     }
 
+    this.updatePathPreview(m, mode, assist);
+    this.updateShotCue(m, mode, assist);
+    if (mode === 'bowling' && m.phase === 'preDelivery' && m.inn.thisOver.length === 0) {
+      // New over: offer the bowler choice once.
+      const key = `${m.inningsIndex}:${m.inn.legalBalls}`;
+      if (key !== this.pickerFor) {
+        this.pickerFor = key;
+        this.openPicker();
+      }
+    } else if (this.hud.pickerOpen && m.phase !== 'preDelivery') this.hud.hidePicker();
+
     // HUD.
     const hud = this.hud;
     hud.update(m, now, mode);
-    hud.setControls(mode, m.phase, this.input.device);
+    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over' });
     if (mode === 'bowling') {
       hud.setVariations(m.phase === 'preDelivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => {
         this.intent = { ...this.intent, variation: v };
@@ -369,10 +431,10 @@ export class GameSession {
     let hint = '';
     if (mode === 'batting') {
       if (m.phase === 'preDelivery' || m.phase === 'runUp' || (m.phase === 'inPlay' && !m.swing && !m.batContact && !m.passedBatter))
-        hint = pad ? 'Left stick: aim · A ground · X lofted · B defend · LB/RB sweeps' : 'Aim with WASD/arrows · Space ground · K lofted · L defend · Q/E sweeps';
+        hint = pad ? 'Stick: aim · A ground · X lofted · B defend · RT/LT front/back foot · D-pad ▲ charge' : 'Aim WASD · Space ground · K lofted · L defend · hold Shift/V front/back foot · F charge';
       else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'Y run · RT stay · LT back' : 'R/Y run · N stay · B back';
     } else if (mode === 'bowling') {
-      if (m.phase === 'preDelivery') hint = pad ? 'Stick: move marker · D-pad: variation · A: run in' : 'WASD/arrows: marker · 1-8 or Z/X: variation · Space: run in';
+      if (m.phase === 'preDelivery') hint = pad ? 'Stick: marker · D-pad: variation · R3: over/round · Back: field · A: run in' : 'WASD: marker · 1-8: variation · T: over/round · G: field · H: bowler · Space: run in';
       else if (m.phase === 'runUp') hint = pad ? 'Press A in the green zone' : 'Press Space in the green zone to release';
     }
     hud.setHint(hint);
@@ -404,6 +466,48 @@ export class GameSession {
     const lines = [`${m.battingTeam.shortName} ${inn.runs}/${inn.wickets}`, `OVERS ${overs}`];
     lines.push(inn.target !== null ? `TARGET ${inn.target}` : m.lastSummary.toUpperCase() || 'CREASE CLASH');
     this.world.stadium.screen.draw(lines, m.battingTeam.colors.primary);
+  }
+
+  /** Dashed line along the intended delivery (beginner/standard assistance). */
+  private updatePathPreview(m: CricketMatch, mode: string, assist: number): void {
+    const show = mode === 'bowling' && this.settings.showPitchGuide && assist >= 0.5 && (m.phase === 'preDelivery' || m.phase === 'runUp');
+    if (!show) {
+      if (this.previewKey) this.world.setPathPreview(null);
+      this.previewKey = '';
+      return;
+    }
+    const key = `${JSON.stringify(this.intent)}|${m.inn.currentBowler}|${m.strikerDef.id}`;
+    if (key === this.previewKey) return;
+    this.previewKey = key;
+    const plan = planDelivery(m.bowlerDef, m.strikerDef.batHand, this.intent, 0, m.cfg.conditions, new Rng(1), assist, { preview: true });
+    const traj = predictTrajectory(plan.ball, m.cfg.conditions, 1.5, DT, 3);
+    const pts = [];
+    for (const t of traj) {
+      pts.push(t.pos);
+      if (t.pos.z > STRIKER_STUMPS_Z + 0.5) break;
+    }
+    this.world.setPathPreview(pts);
+  }
+
+  /** Beginner cue: a ring at the contact point that closes when it is time to play. */
+  private updateShotCue(m: CricketMatch, mode: string, assist: number): void {
+    if (mode !== 'batting' || assist < 1 || m.phase !== 'inPlay' || m.swing || m.batContact || m.passedBatter || m.padContact) {
+      this.world.setShotCue(null);
+      return;
+    }
+    const plane = m.frontPlane;
+    const t = m.timeToPlane(plane);
+    const at = m.predictAtPlane(plane);
+    if (t === null || !at) {
+      this.world.setShotCue(null);
+      return;
+    }
+    const lead = t - SWING_TIME.ground;
+    if (lead > 0.6 || lead < -0.08) {
+      this.world.setShotCue(null);
+      return;
+    }
+    this.world.setShotCue(at.pos, Math.max(0, lead) / 0.6);
   }
 
   continueMatch(): void {

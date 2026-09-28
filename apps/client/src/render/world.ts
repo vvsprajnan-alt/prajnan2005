@@ -10,6 +10,8 @@ import { Stadium, animateStumps, buildStadium } from './stadium';
  * Owns the three.js renderer and scene, and turns simulation snapshots into
  * pictures. Holds no game logic.
  */
+const PREVIEW_DOTS = 80;
+
 export class World {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -23,6 +25,8 @@ export class World {
   private rosterKey = '';
   private excitement = 0;
   private stumpsBrokenAt: { S: number | null; B: number | null } = { S: null, B: null };
+  private preview: THREE.InstancedMesh;
+  private cue: THREE.Mesh;
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     const q = QUALITY[settings.quality];
@@ -43,8 +47,65 @@ export class World {
       this.umpires.push(u);
       this.scene.add(u.root);
     }
+    // Bowling guide: predicted path of the delivery, drawn as a trail of glowing dots.
+    this.preview = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.05, 8, 6),
+      new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.9, depthWrite: false }),
+      PREVIEW_DOTS,
+    );
+    this.preview.frustumCulled = false;
+    this.preview.visible = false;
+    this.scene.add(this.preview);
+    // Batting cue: a ring at the contact point that closes as the moment to play arrives.
+    this.cue = new THREE.Mesh(
+      new THREE.RingGeometry(0.16, 0.2, 40),
+      new THREE.MeshBasicMaterial({ color: '#7bd88f', transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }),
+    );
+    this.cue.renderOrder = 10;
+    this.cue.visible = false;
+    this.scene.add(this.cue);
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  setPathPreview(points: { x: number; y: number; z: number }[] | null): void {
+    if (!points || points.length < 2) {
+      this.preview.visible = false;
+      return;
+    }
+    // Resample to evenly spaced dots.
+    const m = new THREE.Matrix4();
+    let n = 0;
+    let carry = 0;
+    for (let i = 1; i < points.length && n < PREVIEW_DOTS; i++) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+      let d = carry;
+      while (d < seg && n < PREVIEW_DOTS) {
+        const t = d / seg;
+        m.makeTranslation(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+        this.preview.setMatrixAt(n++, m);
+        d += 0.45;
+      }
+      carry = d - seg;
+    }
+    this.preview.count = n;
+    this.preview.instanceMatrix.needsUpdate = true;
+    this.preview.visible = true;
+  }
+
+  /** `k` = 1 far from the moment to play, 0 = play now. */
+  setShotCue(pos: { x: number; y: number; z: number } | null, k = 0): void {
+    if (!pos) {
+      this.cue.visible = false;
+      return;
+    }
+    this.cue.visible = true;
+    this.cue.position.set(pos.x, pos.y, pos.z);
+    this.cue.quaternion.copy(this.cams.camera.quaternion);
+    this.cue.scale.setScalar(1 + 4 * k);
+    (this.cue.material as THREE.MeshBasicMaterial).color.set(k < 0.12 ? '#7bd88f' : '#ffffff');
   }
 
   resize(): void {

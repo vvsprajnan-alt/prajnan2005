@@ -16,6 +16,7 @@ import { Input } from './input/input';
 import { World } from './render/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
+import { fieldEditor } from './ui/fieldEditor';
 
 const GAME_NAME = 'CREASE CLASH';
 
@@ -74,6 +75,7 @@ export class App {
       onInningsBreak: () => {},
       onComplete: () => this.startAttract(),
       onPause: () => {},
+      onFieldEditor: () => {},
     }, this.hudRoot);
   }
 
@@ -92,6 +94,7 @@ export class App {
       onInningsBreak: (m) => this.inningsBreak(m),
       onComplete: (m) => this.results(m, setup),
       onPause: () => this.pauseMenu(),
+      onFieldEditor: () => this.openFieldEditor(),
     }, this.hudRoot);
   }
 
@@ -267,20 +270,38 @@ export class App {
       <tr><td>Lofted shot</td><td>K / Shift+Space</td><td>X</td><td>Lofted</td></tr>
       <tr><td>Defend</td><td>L</td><td>B</td><td>Defend</td></tr>
       <tr><td>Sweep / Reverse sweep</td><td>Q / E</td><td>LB / RB</td><td>Sweep buttons</td></tr>
-      <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y / N / B</td><td>Y / RT / LT</td><td>Run / Stay / Back</td></tr>
+      <tr><td>Front-foot / back-foot (hold while playing)</td><td>Shift / V</td><td>RT / LT</td><td>Feet toggle</td></tr>
+      <tr><td>Charge down the pitch (during the run-up)</td><td>F</td><td>D-pad up</td><td>Charge</td></tr>
+      <tr><td>Scoop / upper cut</td><td>Lofted + aim behind</td><td>X + stick down</td><td>Lofted + pad down</td></tr>
+      <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y / N / B</td><td>Y / D-pad down / L3</td><td>Run / Stay / Back</td></tr>
       </tbody></table>
+      <p class="muted">Footwork is automatic by default. Getting forward to full balls and back to short ones improves your contact; the wrong foot costs you. Charging makes good-length spin into a half-volley, but miss it and the keeper will stump you.</p>
       <p class="muted">Up = straight down the ground, left/right = the side of the screen you want to hit to, down = behind the wicket. Timing is everything: start the shot as the ball arrives. The stroke (drive, pull, cut, flick...) is chosen from your aim and the length of the ball.</p>
       <h3>Bowling</h3>
       <table class="card"><tbody>
       <tr><td>Move the pitch marker (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
       <tr><td>Choose delivery</td><td>1-8, Z / X</td><td>D-pad left/right</td><td>Delivery buttons</td></tr>
+      <tr><td>Over / round the wicket</td><td>T</td><td>R3</td><td>Over / Round</td></tr>
+      <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field</td></tr>
+      <tr><td>Choose the bowler (start of an over)</td><td>H</td><td>—</td><td>Bowler</td></tr>
       <tr><td>Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
       </tbody></table>
-      <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy.</p>
+      <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. On Beginner and Standard assistance a dashed line previews the delivery's path including swing and turn. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
       <h3>General</h3>
       <table class="card"><tbody><tr><td>Pause</td><td>Esc / P</td><td>Start</td><td>II button</td></tr></tbody></table>`;
     this.show(h('div', { class: 'menu-card' }, this.header('Controls'), h('div', { html }),
       h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: back }, 'Back'))));
+  }
+
+  private openFieldEditor(): void {
+    const s = this.session;
+    if (!s || s.humanTeam === null) return;
+    s.paused = true;
+    this.show(fieldEditor(s.match, (r) => {
+      if (r) s.applyField(r);
+      s.paused = false;
+      this.clearScreens();
+    }), true);
   }
 
   private pauseMenu(): void {

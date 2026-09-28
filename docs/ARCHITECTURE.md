@@ -49,6 +49,24 @@ While `inPlay`, every 1/120 s tick:
 - Exit velocity comes from stroke bat speed, power, quality and incoming pace; direction from the aim plus
   timing bias (early to leg, late to off) and scatter; elevation from ground vs lofted and mistiming.
 
+### Captaincy and fields
+
+- A field is nine `FieldSpot`s relative to the striker (angle from straight, + = off side; distance from the
+  striker's stumps), so it mirrors automatically for left-handers.
+- `legalizeField` enforces the restrictions for the current over (`maxOutsideForOver`: powerplay vs later,
+  plus at most two behind square on the leg side). The match always applies it, so neither the AI nor a
+  client can field an illegal side. `sanitizeField` validates fields sent by clients.
+- `ai/captain.ts` picks the bowler for each over (phase-aware, quota-aware) and a preset field for the
+  situation when a team's field is on "auto".
+
+### Footwork and charging
+
+- Contact planes are relative to where the batter will be (`batterZ()`): a charge moves them ~1.9 m up the
+  pitch, which changes the length the batter meets. Forced front/back footwork multiplies stroke suitability
+  (`footworkFit`).
+- A charging batter who misses is out of ground; the keeper's normal "break the wicket at the end in danger"
+  logic plus the stumping rule in `onStumpsBroken` does the rest.
+
 ### Determinism
 
 - Fixed timestep, no wall-clock time, a seeded `Rng` for every random decision; AI uses its own seeded RNGs so

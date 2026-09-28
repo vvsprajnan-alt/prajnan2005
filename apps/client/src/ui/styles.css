@@ -66,6 +66,7 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .scorebug .score small { font-family: var(--font); font-size: 14px; color: #3d4f69; font-weight: 700; }
 .scorebug .info { background: var(--panel-solid); padding: 6px 12px; font-size: 12px; display: flex; flex-direction: column; justify-content: center; gap: 2px; color: var(--muted); }
 .scorebug .info b { color: var(--text); }
+.pp { background: var(--accent-2); color: #042; padding: 0 10px; display: flex; align-items: center; font-size: 11px; letter-spacing: .1em; font-weight: 900; }
 .freehit { background: var(--danger); color: #fff; padding: 0 10px; display: flex; align-items: center; font-size: 12px; letter-spacing: .1em; }
 
 .lowerthird { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 8px; align-items: stretch; font-size: 14px; filter: drop-shadow(0 8px 20px rgba(0,0,0,.35)); max-width: calc(100% - 24px); }
@@ -126,3 +127,25 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
   .dpad { bottom: 70px; width: 130px; height: 130px; }
   .dpad .knob { left: 37px; top: 37px; }
 }
+
+/* ---------- Field editor / bowler picker ---------- */
+.field-editor { max-width: 720px; padding: 20px 24px; }
+.field-editor h1 { font-size: 26px !important; }
+.field-editor p { margin: 4px 0 10px; }
+.field-wrap { display: flex; justify-content: center; margin: 12px 0; }
+.field-map { width: min(440px, 80vw, 46vh); height: auto; touch-action: none; border-radius: 50%; }
+.fielder-dot { cursor: grab; }
+.fielder-dot:focus { outline: none; stroke: #fff; stroke-width: 1; }
+.field-status { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; }
+.field-status .bad { color: var(--danger); } .field-status .okc { color: var(--good); }
+.picker { position: absolute; left: 50%; top: 150px; max-height: calc(100vh - 260px); overflow: auto; transform: translateX(-50%); width: min(560px, 94vw); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.4); }
+.picker h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.picker .opt { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; width: 100%; text-align: left; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 6px; }
+.picker .opt.on { border-color: var(--accent); background: rgba(255,182,39,.15); }
+.picker .opt:disabled { opacity: .45; cursor: not-allowed; }
+.timing-bar { position: absolute; left: 50%; top: calc(34% + 34px); transform: translateX(-50%); width: min(380px, 72vw); pointer-events: none; background: rgba(5,12,24,.7); padding: 8px 10px 6px; border-radius: 10px; }
+.timing-bar .track { position: relative; height: 10px; border-radius: 5px; background: rgba(255,90,78,.45); overflow: hidden; }
+.timing-bar .z { position: absolute; top: 0; bottom: 0; }
+.timing-bar .mark { position: absolute; top: -4px; bottom: -4px; width: 3px; background: #fff; box-shadow: 0 0 6px #fff; }
+.timing-bar .lbl { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 3px; letter-spacing: .08em; }
+.ctrl.toggle.front { border-color: #5dade2; } .ctrl.toggle.back { border-color: #d2a8ff; }

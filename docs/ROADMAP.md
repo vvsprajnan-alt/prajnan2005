@@ -2,9 +2,9 @@
 
 | Phase | Goal | Status |
 | --- | --- | --- |
-| 1 | Project structure and smallest playable cricket loop | **Done** (this prototype) |
-| 2 | Batting and bowling depth: footwork, bowler/field selection, delivery path preview, timing bar | Next |
-| 3 | Physics and rules polish: ball-tracking LBW, umpire's call, bouncer limits, super over | |
+| 1 | Project structure and smallest playable cricket loop | **Done** |
+| 2 | Batting and bowling depth: footwork, charging, advanced shots, over/round the wicket, bowler/field selection with T20 restrictions, delivery path preview, timing bar, AI captaincy | **Done** |
+| 3 | Physics and rules polish: ball-tracking LBW, umpire's call, bouncer limits, super over, batting order | Next |
 | 4 | Human-controlled fielding with auto/manual switching; smarter AI captaincy | |
 | 5 | Authoritative Node.js server, WebSocket protocol, snapshot/event sync, latency compensation | |
 | 6 | Private rooms: codes, invites, ready check, seats, reconnect and AI takeover, quick-chat | |

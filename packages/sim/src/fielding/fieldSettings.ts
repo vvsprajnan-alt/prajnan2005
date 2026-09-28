@@ -139,6 +139,12 @@ export function insideCircle(pos: { x: number; z: number }): boolean {
   return Math.hypot(pos.x, pos.z - cz) <= INNER_CIRCLE_RADIUS;
 }
 
+/** Difference between two spots in world space (x, z). */
+const xy = (a: FieldSpot, b: FieldSpot): [number, number] => {
+  const p = spotToWorld(a, 'R');
+  const q = spotToWorld(b, 'R');
+  return [p.x - q.x, p.z - q.z];
+};
 const isOutside = (s: FieldSpot) => !insideCircle(spotToWorld(s, 'R'));
 /** Leg side, behind square (relative to the batter). */
 const legBehindSquare = (s: FieldSpot) => s.angle < -90;
@@ -168,6 +174,7 @@ export function legalizeField(setting: FieldSetting, maxOutside: number): FieldS
     const s = spots[i]!;
     if (legBehindSquare(s)) {
       s.angle = -80;
+      s.name = describeSpot(s.angle, s.dist);
       lbs--;
     }
   }
@@ -175,10 +182,12 @@ export function legalizeField(setting: FieldSetting, maxOutside: number): FieldS
   for (let i = spots.length - 1; i >= 0 && out > maxOutside; i--) {
     const s = spots[i]!;
     if (isOutside(s)) {
-      // Bring them in to the edge of the ring.
+      // Bring them in to the edge of the ring, clear of team-mates already there.
       while (isOutside(s) && s.dist > 5) s.dist -= 1;
-      s.dist = Math.max(5, s.dist - 1);
-      s.name = s.name.replace(/^(Deep|Long)[- ]/, '').replace(/^Third Man$/, 'Short Third');
+      s.dist = Math.max(5, s.dist - 1.5);
+      const clash = (a: FieldSpot) => spots.some((o) => o !== a && Math.hypot(...xy(o, a)) < 7);
+      for (let k = 1; k <= 6 && clash(s); k++) s.angle += (k % 2 ? 1 : -1) * k * 7;
+      s.name = describeSpot(s.angle, s.dist);
       out--;
     }
   }
@@ -201,4 +210,29 @@ export function sanitizeField(input: unknown, kind: FieldKind): FieldSetting | n
   }
   const keeperBack = kind === 'spin' ? 0.9 : 12;
   return { id: 'custom', name: String(f.name ?? 'Custom').slice(0, 24), kind, keeperBack, spots };
+}
+
+/** Conventional name for a position (relative angle/dist from the striker). */
+export function describeSpot(angle: number, dist: number): string {
+  const a = angle;
+  const off = a >= 0;
+  const abs = Math.abs(a);
+  const close = dist < 9;
+  const deep = dist > 45;
+  if (close) {
+    if (abs > 150) return off ? 'Slip' : 'Leg Slip';
+    if (abs > 110) return off ? 'Gully' : 'Leg Gully';
+    if (abs > 60) return off ? 'Silly Point' : 'Short Leg';
+    return off ? 'Silly Mid-off' : 'Silly Mid-on';
+  }
+  if (abs > 165 && !deep) return dist < 18 ? (off ? 'Slip' : 'Leg Slip') : 'Fly Slip';
+  if (abs > 130) {
+    if (deep) return off ? 'Third Man' : 'Fine Leg';
+    return off ? (dist < 18 ? 'Gully' : 'Short Third') : 'Short Fine Leg';
+  }
+  if (abs > 100) return off ? (deep ? 'Deep Backward Point' : 'Backward Point') : deep ? 'Deep Backward Square' : 'Backward Square';
+  if (abs > 75) return off ? (deep ? 'Deep Point' : 'Point') : deep ? 'Deep Square Leg' : 'Square Leg';
+  if (abs > 35) return off ? (deep ? 'Deep Cover' : 'Cover') : deep ? 'Deep Midwicket' : 'Midwicket';
+  if (abs > 8) return off ? (deep ? 'Long-off' : 'Mid-off') : deep ? 'Long-on' : 'Mid-on';
+  return deep ? 'Straight Hit' : 'Short Straight';
 }

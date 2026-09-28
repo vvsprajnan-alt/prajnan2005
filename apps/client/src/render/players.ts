@@ -312,10 +312,11 @@ export class Cricketer {
    */
   private batSwing(t: number, stroke: string, shotAngleDeg: number): void {
     const horizontalLeg = stroke === 'pull' || stroke === 'hook' || stroke === 'sweep';
-    const horizontalOff = stroke === 'cut' || stroke === 'lateCut' || stroke === 'reverseSweep';
+    const horizontalOff = stroke === 'cut' || stroke === 'lateCut' || stroke === 'reverseSweep' || stroke === 'upperCut';
+    const scoop = stroke === 'scoop';
     const sweep = stroke === 'sweep' || stroke === 'reverseSweep';
     const defence = stroke === 'defence';
-    const front = !(stroke === 'pull' || stroke === 'hook' || stroke === 'cut' || stroke === 'lateCut' || stroke === 'punch' || stroke === 'glance');
+    const front = !(stroke === 'pull' || stroke === 'hook' || stroke === 'cut' || stroke === 'lateCut' || stroke === 'punch' || stroke === 'glance' || stroke === 'upperCut');
     const a = (shotAngleDeg * Math.PI) / 180;
     const aim = new THREE.Vector3(Math.cos(a), 0, Math.sin(a)); // local: +x bowler, +z off side
 
@@ -332,6 +333,14 @@ export class Cricketer {
     } else if (horizontalLeg) {
       K.contact = { h: new THREE.Vector3(0.2, sweep ? 0.45 : 1.05, 0.34), d: new THREE.Vector3(0.25, sweep ? -0.25 : 0.1, 1) };
       K.follow = { h: new THREE.Vector3(-0.1, sweep ? 0.6 : 1.25, -0.15), d: new THREE.Vector3(-0.7, 0.35, -0.6) };
+    } else if (scoop) {
+      // Get low and paddle the ball up over the keeper.
+      K.back = { h: new THREE.Vector3(0.05, 0.9, 0.3), d: new THREE.Vector3(0.2, -1, 0.1) };
+      K.contact = { h: new THREE.Vector3(0.3, 0.55, 0.35), d: new THREE.Vector3(0.7, -0.2, 0.2) };
+      K.follow = { h: new THREE.Vector3(0.05, 1.0, 0.3), d: new THREE.Vector3(0.2, 0.95, -0.1) };
+    } else if (stroke === 'upperCut') {
+      K.contact = { h: new THREE.Vector3(0.2, 1.45, 0.45), d: new THREE.Vector3(0.5, 0.2, 0.85) };
+      K.follow = { h: new THREE.Vector3(-0.2, 1.6, 0.25), d: new THREE.Vector3(-0.8, 0.5, 0.3) };
     } else if (horizontalOff) {
       K.contact = { h: new THREE.Vector3(0.18, sweep ? 0.45 : 1.0, 0.45), d: new THREE.Vector3(0.55, -0.3, 0.8) };
       K.follow = { h: new THREE.Vector3(-0.25, sweep ? 0.6 : 1.1, 0.3), d: new THREE.Vector3(-0.85, 0.2, 0.45) };
@@ -353,7 +362,7 @@ export class Cricketer {
     const legs: Pose = front
       ? { lHip: [-0.55 * stride, 0.1, 0.25 * stride], lKnee: [0.55 * stride, 0, 0], rHip: [0.1, 0, -0.12], rKnee: [0.2, 0, 0] }
       : { rHip: [0.25 * stride, 0, -0.3 * stride], lHip: [-0.1, 0, 0.15], lKnee: [0.2, 0, 0], rKnee: [0.15, 0, 0] };
-    if (sweep) Object.assign(legs, { hipsY: 0.95 - 0.4 * stride, lHip: [-1.2 * stride, 0, 0.3], lKnee: [1.3 * stride, 0, 0], rHip: [0.3, 0, -0.2], rKnee: [1.9 * stride, 0, 0] });
+    if (sweep || scoop) Object.assign(legs, { hipsY: 0.95 - 0.4 * stride, lHip: [-1.2 * stride, 0, 0.3], lKnee: [1.3 * stride, 0, 0], rHip: [0.3, 0, -0.2], rKnee: [1.9 * stride, 0, 0] });
     this.apply({ hipsY: 0.9, lean: 0.2 + 0.15 * stride, head: [0, 1.1, 0], chest: [0, -0.35 * stride + (horizontalLeg ? -0.4 * clamp01(t / 0.2) : 0), 0], ...legs });
     if (front) this.body.position.x = 0.15 * stride;
     this.placeBat(k.h, k.d);

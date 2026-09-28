@@ -1,6 +1,7 @@
 import {
   CricketMatch,
   InningsState,
+  TimingWindows,
   VARIATION_LABEL,
   Variation,
   oversString,
@@ -31,6 +32,9 @@ export class Hud {
   private variations = h('div', { class: 'variations' });
   private hint = h('div', { class: 'hint' });
   private toast = h('div', { class: 'toast' });
+  private timing = h('div', { class: 'timing-bar' });
+  private picker = h('div', { class: 'picker' });
+  private timingUntil = 0;
   private dpad: HTMLElement;
   private bannerUntil = 0;
   private feedbackUntil = 0;
@@ -42,7 +46,8 @@ export class Hud {
   constructor(parent: HTMLElement, private input: Input, onPause: () => void) {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.dpad, pause);
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.dpad, pause);
+    this.picker.style.display = 'none';
     parent.append(this.el);
   }
 
@@ -92,6 +97,52 @@ export class Hud {
     this.feedback.className = `feedback ${cls}`;
     this.feedback.textContent = text;
     this.feedbackUntil = now + 1.4;
+  }
+
+  /** Timing bar: where the shot landed against the perfect/good/ok windows. */
+  showTimingBar(err: number, w: TimingWindows, now: number): void {
+    const span = w.edge * 1.15;
+    const pct = (x: number) => `${50 + (Math.max(-span, Math.min(span, x)) / span) * 50}%`;
+    const zone = (a: number, color: string) => `<div class="z" style="left:${pct(-a)};width:calc(${pct(a)} - ${pct(-a)});background:${color}"></div>`;
+    this.timing.innerHTML = `<div class="track">${zone(w.ok, 'rgba(255,182,39,.6)')}${zone(w.good, 'rgba(198,246,141,.75)')}${zone(w.perfect, 'rgba(123,216,143,1)')}
+      <div class="mark" style="left:calc(${pct(err)} - 1px)"></div></div>
+      <div class="lbl"><span>EARLY</span><span>${Math.round(err * 1000)} ms</span><span>LATE</span></div>`;
+    this.timingUntil = now + 1.8;
+  }
+
+  /** Choose the bowler for the over. */
+  showPicker(m: CricketMatch, onPick: (player: number) => void, onClose: () => void): void {
+    const inn = m.inn;
+    const team = m.bowlingTeam;
+    const eligible = new Set(m.eligibleBowlers());
+    const rules = m.cfg.rules;
+    const rows = team.players
+      .map((p, i) => ({ p, i, card: inn.bowlers.find((b) => b.player === i) }))
+      .filter(({ p, i }) => p.attrs.bowling >= 55 || inn.bowlers.some((b) => b.player === i))
+      .sort((a, b) => b.p.attrs.bowling - a.p.attrs.bowling);
+    this.picker.innerHTML = '';
+    this.picker.append(h('h3', {}, `Choose your bowler · over ${Math.floor(inn.legalBalls / rules.ballsPerOver) + 1}`));
+    for (const { p, i, card } of rows) {
+      const left = rules.maxOversPerBowler > 0 ? rules.maxOversPerBowler - Math.floor((card?.balls ?? 0) / rules.ballsPerOver) : '∞';
+      const fig = card ? `${oversString(card.balls)}-${card.maidens}-${card.runs}-${card.wickets}` : 'Yet to bowl';
+      const why = i === inn.lastOverBowler ? 'bowled last over' : !eligible.has(i) ? 'quota used' : `${left} ov left`;
+      this.picker.append(
+        h('button', { class: `opt${i === inn.currentBowler ? ' on' : ''}`, disabled: !eligible.has(i), onclick: () => onPick(i) },
+          h('span', {}, h('b', {}, p.name), ' ', h('span', { class: 'muted' }, `${p.bowlStyle} · ${p.bowlArm}-arm · BOWL ${p.attrs.bowling}`)),
+          h('span', { class: 'muted' }, fig),
+          h('span', { class: 'pill' }, why)),
+      );
+    }
+    this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done', h('kbd', {}, 'H / Space'))));
+    this.picker.style.display = '';
+  }
+
+  hidePicker(): void {
+    this.picker.style.display = 'none';
+  }
+
+  get pickerOpen(): boolean {
+    return this.picker.style.display !== 'none';
   }
 
   showToast(text: string, now: number): void {
@@ -147,8 +198,8 @@ export class Hud {
   }
 
   /** Context-sensitive on-screen buttons (also the touch controls). */
-  setControls(mode: HudMode, phase: string, device: string): void {
-    const key = `${mode}|${phase}|${device}`;
+  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string } = {}): void {
+    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -158,20 +209,32 @@ export class Hud {
     const row = (...b: HTMLElement[]) => h('div', { class: 'ctrl-row' }, ...b);
     this.dpad.style.display = mode === 'watching' ? 'none' : '';
     if (mode === 'batting') {
+      const fw = extra.footwork ?? 'auto';
+      const next = fw === 'auto' ? 'front' : fw === 'front' ? 'back' : 'auto';
+      const fwBtn = h('button', {
+        class: `ctrl toggle ${fw}`,
+        onpointerdown: (e: Event) => { e.preventDefault(); this.input.touchFootwork = next; this.controlsKey = ''; },
+      }, `Feet: ${fw === 'auto' ? 'Auto' : fw === 'front' ? 'Front' : 'Back'}`, h('kbd', {}, pad ? 'RT / LT hold' : 'Shift / V hold'));
       this.controls.append(
-        row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'RT', 'wait'), btn('Back', 'B', 'LT', 'back')),
-        row(btn('Sweep', 'Q', 'LB', 'sweep'), btn('Rev Sweep', 'E', 'RB', 'reverseSweep')),
+        row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
+        row(fwBtn, btn('Charge', 'F', 'D-pad ▲', 'charge'), btn('Sweep', 'Q', 'LB', 'sweep'), btn('Rev Sweep', 'E', 'RB', 'reverseSweep')),
         row(btn('Defend', 'L', 'B', 'defend'), btn('Lofted', 'K', 'X', 'lofted', 'big'), btn('Ground', 'Space', 'A', 'primary', 'big')),
       );
     } else if (mode === 'bowling') {
       const label = phase === 'runUp' ? 'Release' : 'Bowl';
-      this.controls.append(row(btn('Prev', 'Z', '◀', 'varPrev'), btn('Next', 'X', '▶', 'varNext')), row(btn(label, 'Space', 'A', 'primary', 'big')));
+      const sideLbl = extra.side === 'round' ? 'Round' : 'Over';
+      this.controls.append(
+        row(btn('Field', 'G', 'Back', 'field'), btn('Bowler', 'H', '—', 'bowlers'), btn(`${sideLbl} the wkt`, 'T', 'R3', 'side')),
+        row(btn('Prev', 'Z', '◀', 'varPrev'), btn('Next', 'X', '▶', 'varNext')),
+        row(btn(label, 'Space', 'A', 'primary', 'big')),
+      );
     }
   }
 
   update(m: CricketMatch, now: number, mode: HudMode): void {
     if (now > this.bannerUntil) this.banner.innerHTML = '';
     if (now > this.feedbackUntil) this.feedback.textContent = '';
+    this.timing.style.display = now < this.timingUntil ? '' : 'none';
     this.toast.style.display = now < this.toastUntil ? '' : 'none';
     const inn = m.inn;
     const key = `${m.inningsIndex}|${inn.log.length}|${inn.runs}|${inn.wickets}|${m.phase}|${inn.currentBowler}|${inn.striker}`;
@@ -198,7 +261,8 @@ export class Hud {
     this.scorebug.style.setProperty('--team', bat.colors.primary);
     this.scorebug.innerHTML = `<div class="team">${esc(bat.shortName)}</div>
       <div class="score">${inn.runs}-${inn.wickets}<small>${oversString(inn.legalBalls, rules.ballsPerOver)}</small></div>
-      <div class="info">${info}</div>${inn.freeHit ? '<div class="freehit">FREE HIT</div>' : ''}`;
+      <div class="info">${info}</div>${inn.freeHit ? '<div class="freehit">FREE HIT</div>' : ''}${
+        inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver ? '<div class="pp">POWERPLAY</div>' : ''}`;
 
     const card = (i: number) => inn.batters[i]!;
     const s = card(inn.striker);

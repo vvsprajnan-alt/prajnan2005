@@ -168,3 +168,17 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .order-row { display: grid; grid-template-columns: 32px 1fr auto auto; gap: 8px; align-items: center; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px; }
 .order-no { font-family: var(--display); color: var(--accent); text-align: center; }
 .order-row .ctrl { min-width: 44px; padding: 6px 10px; }
+
+.role-box { position: absolute; left: 16px; top: 72px; font-weight: 800; }
+.role-box .net.ok { color: var(--good); } .role-box .net.lagging { color: var(--accent); } .role-box .net.waiting { color: var(--danger); }
+
+.teams-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.seat { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; gap: 2px 10px; align-items: center; background: rgba(255,255,255,.05); border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+.seat.taken { border-style: solid; }
+.seat.mine { border-color: var(--accent); }
+.seat .seat-name { font-weight: 800; }
+.seat .seat-sub { color: var(--muted); font-size: 12px; grid-row: 2; }
+.seat button { grid-row: 1 / span 2; grid-column: 2; }
+.room-code { color: var(--accent); letter-spacing: 6px; user-select: text; }
+.lobby-err { color: var(--danger); font-weight: 700; }
+@media (max-width: 640px) { .teams-grid { grid-template-columns: 1fr; } }

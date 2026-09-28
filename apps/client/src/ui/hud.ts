@@ -36,6 +36,7 @@ export class Hud {
   private timing = h('div', { class: 'timing-bar' });
   private picker = h('div', { class: 'picker' });
   private timingUntil = 0;
+  private roleBox = h('div', { class: 'role-box' });
   private reviewBox = h('div', { class: 'review-box' });
   private trackBox = h('div', { class: 'track-box' });
   private reviewDeadline = 0;
@@ -52,7 +53,8 @@ export class Hud {
   constructor(parent: HTMLElement, private input: Input, onPause: () => void) {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.dpad, pause);
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.dpad, pause);
+    this.roleBox.style.display = 'none';
     this.reviewBox.style.display = 'none';
     this.trackBox.style.display = 'none';
     this.picker.style.display = 'none';
@@ -143,6 +145,14 @@ export class Hud {
     }
     this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done', h('kbd', {}, 'H / Space'))));
     this.picker.style.display = '';
+  }
+
+  /** Online: which role(s) the local player has, and network buffer health. */
+  setRole(label: string, backlog: number): void {
+    this.roleBox.style.display = '';
+    const net = backlog > 36 ? 'lagging' : backlog < 2 ? 'waiting' : 'ok';
+    const html = `<span class="pill">${esc(label)}</span> <span class="net ${net}" title="network">●</span>`;
+    if (this.roleBox.innerHTML !== html) this.roleBox.innerHTML = html;
   }
 
   /** Pick the incoming batter (after a wicket). */

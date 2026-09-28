@@ -7,7 +7,8 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 4 complete. Single player against the AI is playable in the browser: batting with
+**Status:** Phase 5 complete - online multiplayer (1v1 to 2v2, plus spectators) through an authoritative
+server, in addition to single player. Single player against the AI is playable in the browser: batting with
 footwork and charging, bowling from over or round the wicket with a delivery-path guide, bowler selection,
 field placement under T20 fielding restrictions, LBW reviews with ball tracking, the one-bouncer rule,
 super overs, batting orders, human-controlled fielding (assisted or manual), physics, AI fielding, running,
@@ -31,6 +32,8 @@ Other scripts:
 | `npm run dev` | Vite dev server with hot reload |
 | `npm run build` | Typecheck everything, then build the client to `apps/client/dist` |
 | `npm run preview` | Serve the production build at http://localhost:4173 |
+| `npm run server` | Build the client and start the multiplayer server + game on http://localhost:8787 |
+| `npm run dev:server` | Multiplayer server with reload (use with `npm run dev`) |
 | `npm test` | Run the simulation test suite (Vitest) |
 | `npm run typecheck` | Typecheck the sim and client |
 | `npx tsx scripts/sim-match.ts 5 42` | Play a headless 5-over AI vs AI match (seed 42) and print scorecards |
@@ -106,6 +109,8 @@ goes in after each wicket. Late in an innings pace bowlers can find reverse swin
 
 ```
 packages/sim      @crease/sim: deterministic cricket simulation (no rendering, no DOM)
+packages/net      @crease/net: multiplayer protocol, 2v2 roles, client mirror (no transport)
+apps/server       @crease/server: HTTP + WebSocket server, lobby/rooms, authoritative match loop
   physics/        ball flight (drag, swing, Magnus), impulse bounce with spin and seam, launch solver
   bowling/        deliveries, variations, release timing
   batting/        timing windows, stroke selection, contact quality, edges
@@ -138,21 +143,45 @@ Key design rules (they are what make multiplayer straightforward later):
 
 More detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## How multiplayer will work
+## Playing online (multiplayer)
 
-Not implemented yet (Phases 5-6); the plan the code is built for:
+```bash
+npm install
+npm run server          # builds the client, then serves game + multiplayer on http://localhost:8787
+```
 
-- A Node.js server runs `MatchHost` for each room. It is the only place scores, wickets, ball state and
-  movement are decided.
-- Each of the four players connects over WebSocket and is assigned a team and role (striker, non-striker,
-  bowler, fielder). The server stamps the `CommandSource` from the connection, so a client cannot act for
-  another player or team.
-- Clients send small commands (shot + aim, run call, bowling intent, release). The server applies them at
-  tick boundaries, compensating for measured latency on timing-critical inputs (shot and release times).
-- The server broadcasts events plus periodic compact snapshots; clients interpolate between them and can
-  run the deterministic sim locally for prediction of the ball flight.
-- Private rooms get a short room code, invite links, a ready check and seat selection; a player who drops
-  has a grace period to reconnect before an AI takes over their role.
+Everyone opens the server's address (e.g. `http://<your-ip>:8787` on your network, or deploy it anywhere
+Node runs), chooses **Play Online**, and one player creates a room. Share the 5-letter room code; friends join,
+pick seats (two per team) and press Ready; the host picks teams/overs/AI/fielding and starts. Empty seats are
+played by the AI, so 1v1, 2v1 and 2v2 all work, and extra people can watch.
+
+For development run `npm run dev:server` (port 8787) and `npm run dev` (Vite proxies `/ws` to the server). A
+client can also point at another server with `?server=wss://host/ws`.
+
+**2v2 roles.** With two humans on a side the roles are split and follow the match: each batter "owns" one of
+the two batters at the crease (openers first; a new batter inherits the dismissed batter's owner). The owner of
+the striker plays the shots while the partner calls the runs. On the bowling side the two players alternate
+overs as bowler; the other one fields (and can set the field). A lone human on a side does everything.
+
+### How it works
+
+- **Authoritative server.** `apps/server` runs the only real match (`MatchHost`, including every AI player) at
+  120 Hz. Clients send intents only (`bat.shot`, `run.call`, `bowl.release`, `field.move`...); the server
+  checks the sender's seat and current role (`@crease/net` `authorize`) and the simulation validates the
+  command again. Scores, wickets and ball physics are decided on the server alone.
+- **Deterministic lockstep replication.** Every command the server applies is broadcast with its tick in
+  batches of 6 ticks (20 per second). Each client replays exactly that stream on a mirror of the match
+  (`Mirror`); because the simulation is deterministic the mirror is identical, so the client renders and runs
+  the HUD from real match state while sending only a few bytes of input.
+- **Drift detection and resync.** The server sends a state hash every second. A mismatch triggers a full-state
+  resync (`serializeMatch` / `restoreMatch`); the same path lets spectators join a match in progress.
+- **Latency compensation.** Timing-critical inputs carry the tick the player saw; the server back-dates them
+  (at most 0.3 s) so a shot timed perfectly on screen is judged perfect. Releases get a small network grace.
+- **Smoothing.** The client plays ~100 ms behind the newest server tick and speeds up or slows down slightly to
+  hold that buffer; if it falls far behind (e.g. a hidden tab) it catches up instantly.
+- **Hardening.** Handshake with protocol version, message size limits, per-connection rate limiting,
+  heartbeats, input clamping, room codes without look-alike characters; if a player leaves mid-match the AI
+  takes over their seat. Invite links, reconnecting to the same seat and matchmaking are Phase 6.
 
 ## Graphics settings
 
@@ -161,9 +190,11 @@ antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under flo
 
 ## Testing
 
-`npm test` runs ~85 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~100 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
 wicket, delivery previews, AI captaincy over a full T20, LBW tracking and umpire's call, reviews, the bouncer
-rule, super overs, batting orders, reverse swing, human fielding control and adaptive AI fields.
+rule, super overs, batting orders, reverse swing, human fielding control, adaptive AI fields, replication
+(mirror stays identical to the server, full-state round trip), input back-dating limits, 2v2 role rules, and
+end-to-end server tests with real WebSocket clients (1v1 with a mid-match spectator and a resync, and 2v2).

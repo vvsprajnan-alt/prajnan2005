@@ -28,6 +28,7 @@ import { Action, Input } from '../input/input';
 import { World } from '../render/world';
 import { ASSIST_LEVEL, Settings } from '../settings';
 import { Hud, HudMode } from '../ui/hud';
+import { LocalDriver, MatchDriver } from './driver';
 
 export interface SessionCallbacks {
   onInningsBreak(m: CricketMatch): void;
@@ -51,7 +52,7 @@ const TIMING_TEXT: Record<string, [string, string]> = {
  * translates input into commands and simulation events into presentation.
  */
 export class GameSession {
-  readonly host: MatchHost;
+  readonly driver: MatchDriver;
   readonly hud: Hud;
   private acc = 0;
   private time = 0;
@@ -79,14 +80,18 @@ export class GameSession {
     private settings: Settings,
     private cb: SessionCallbacks,
     hudParent: HTMLElement,
+    driver?: MatchDriver,
   ) {
-    const assist = ASSIST_LEVEL[settings.assist];
-    cfg.assist = [humanTeam === 0 ? assist : 0, humanTeam === 1 ? assist : 0];
-    cfg.autoContinueAfter = humanTeam === null ? 4 : null;
-    if (humanTeam !== null) cfg.fieldingControl = humanTeam === 0 ? [settings.fielding, 'auto'] : ['auto', settings.fielding];
-    this.host = new MatchHost(cfg, { humanTeams: humanTeam === null ? [] : [humanTeam], autoRunForHumans: settings.autoRun });
+    if (driver) this.driver = driver;
+    else {
+      const assist = ASSIST_LEVEL[settings.assist];
+      cfg.assist = [humanTeam === 0 ? assist : 0, humanTeam === 1 ? assist : 0];
+      cfg.autoContinueAfter = humanTeam === null ? 4 : null;
+      if (humanTeam !== null) cfg.fieldingControl = humanTeam === 0 ? [settings.fielding, 'auto'] : ['auto', settings.fielding];
+      this.driver = new LocalDriver(cfg, humanTeam === null ? [] : [humanTeam], settings.autoRun);
+    }
     this.hud = new Hud(hudParent, input, () => cb.onPause());
-    if (humanTeam === null) this.hud.el.style.display = 'none';
+    if (humanTeam === null && !this.driver.networked) this.hud.el.style.display = 'none';
     this.intent = defaultIntent(this.match.bowlerDef.bowlStyle);
     this.syncRoster();
     this.world.resetStumps();
@@ -95,12 +100,19 @@ export class GameSession {
   }
 
   get match(): CricketMatch {
-    return this.host.match;
+    return this.driver.match;
   }
 
   dispose(): void {
     this.disposed = true;
+    this.driver.dispose();
     this.hud.destroy();
+  }
+
+  /** Whether the local player holds a role (always true in single player). */
+  private can(role: 'striker' | 'nonStriker' | 'bowler' | 'fielder'): boolean {
+    const roles = this.driver.myRoles();
+    return roles === null || roles.includes(role);
   }
 
   private mode(): HudMode {
@@ -127,22 +139,43 @@ export class GameSession {
   frame(realDt: number): void {
     if (this.disposed) return;
     const dt = Math.min(realDt, 0.1);
-    if (!this.paused) {
-      this.handleInput();
-      this.acc += dt;
+    const net = this.driver.networked;
+    if (!this.paused) this.handleInput();
+    if (!this.paused || net) {
+      // Online the mirror plays ~100 ms behind the newest server tick, speeding
+      // up or slowing down slightly to hold that buffer.
+      let rate = 1;
+      if (net) {
+        const backlog = this.driver.backlog();
+        if (backlog > 240) {
+          // Far behind (e.g. the tab was hidden): catch up at once.
+          while (this.driver.backlog() > 12) {
+            const ev = this.driver.step();
+            if (!ev) break;
+            this.time += DT;
+            for (const e of ev) this.onEvent(e);
+          }
+        }
+        rate = backlog > 36 ? 1.25 : backlog > 16 ? 1.05 : backlog < 6 ? 0.9 : 1;
+      }
+      this.acc += dt * rate;
       while (this.acc >= DT) {
+        const events = this.driver.step();
+        if (!events) {
+          this.acc = 0;
+          break;
+        }
         this.acc -= DT;
         this.time += DT;
-        const events = this.host.step();
         for (const e of events) this.onEvent(e);
       }
     }
-    this.present(this.paused ? 0 : dt);
+    this.present(this.paused && !net ? 0 : dt);
   }
 
   private send(cmd: Parameters<MatchHost['submit']>[1], role: 'striker' | 'nonStriker' | 'bowler' | 'fielder' = 'striker'): void {
     if (this.humanTeam === null) return;
-    this.host.submit({ team: this.humanTeam, role }, cmd);
+    this.driver.submit({ team: this.humanTeam, role }, cmd);
   }
 
   private handleInput(): void {
@@ -173,8 +206,9 @@ export class GameSession {
     const m = this.match;
     if (f) {
       if (m.phase === 'inPlay' && !m.swing && !m.batContact) {
+        if (!this.can('striker')) return;
         const d = this.input.dir();
-        this.send({ type: 'bat.shot', shot: { family: f, aimX: d.x, aimY: d.y, footwork: this.input.footwork() } });
+        this.send({ type: 'bat.shot', shot: { family: f, aimX: d.x, aimY: d.y, footwork: this.input.footwork() }, at: m.tick });
       } else if (m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact) && a === 'primary') {
         // Space doubles as "run" once the ball is in the field.
         this.send({ type: 'run.call', call: 'run' });
@@ -183,7 +217,7 @@ export class GameSession {
       return;
     }
     if (a === 'charge') {
-      this.send({ type: 'bat.charge' });
+      if (this.can('striker')) this.send({ type: 'bat.charge' });
       return;
     }
     if (a === 'run' || a === 'wait' || a === 'back') {
@@ -197,7 +231,7 @@ export class GameSession {
   /** Is the human currently controlling a fielder? */
   private fieldingActive(m: CricketMatch): boolean {
     const h = m.fielding.human;
-    return this.mode() === 'bowling' && m.phase === 'inPlay' && !!h && h.controlled >= 0 && (m.batContact || m.passedBatter || m.padContact);
+    return this.mode() === 'bowling' && this.can('fielder') && m.phase === 'inPlay' && !!h && h.controlled >= 0 && (m.batContact || m.passedBatter || m.padContact);
   }
 
   private fieldingInput(actions: Action[], m: CricketMatch): void {
@@ -219,7 +253,7 @@ export class GameSession {
     for (const a of actions) {
       if (a === 'primary') this.send(holding ? { type: 'field.throw', end: 'S' } : { type: 'field.dive' }, 'fielder');
       else if (a === 'lofted' && holding) this.send({ type: 'field.throw', end: 'B' }, 'fielder');
-      else if (a === 'defend') this.send({ type: 'field.catch' }, 'fielder');
+      else if (a === 'defend') this.send({ type: 'field.catch', at: m.tick }, 'fielder');
       else if (a === 'sweep') this.send({ type: 'field.switch', to: 'nearest' }, 'fielder');
       else if (a === 'reverseSweep') this.send({ type: 'field.switch', to: 'auto' }, 'fielder');
     }
@@ -231,6 +265,11 @@ export class GameSession {
       return;
     }
     if (this.lastMove.x || this.lastMove.z) this.lastMove = { x: 0, z: 0 };
+    if (!this.can('bowler')) {
+      // The fielding partner can still set the field between balls.
+      for (const a of actions) if (a === 'field' && (m.phase === 'preDelivery' || m.phase === 'dead')) this.cb.onFieldEditor();
+      return;
+    }
     const bowlerIdx = m.inn.currentBowler;
     const style = m.bowlerDef.bowlStyle;
     if (bowlerIdx !== this.intentBowler) {
@@ -272,7 +311,7 @@ export class GameSession {
         pick(vars[(i + (a === 'varNext' ? 1 : vars.length - 1)) % vars.length]!);
       } else if (a === 'primary') {
         if (m.phase === 'preDelivery') this.send({ type: 'bowl.start' }, 'bowler');
-        else if (m.phase === 'runUp') this.send({ type: 'bowl.release' }, 'bowler');
+        else if (m.phase === 'runUp') this.send({ type: 'bowl.release', at: m.tick }, 'bowler');
       }
     }
     if (m.phase === 'preDelivery' || m.phase === 'runUp') {
@@ -520,7 +559,7 @@ export class GameSession {
 
     this.updatePathPreview(m, mode, assist);
     this.updateShotCue(m, mode, assist);
-    if (mode === 'bowling' && m.phase === 'preDelivery' && m.inn.thisOver.length === 0) {
+    if (mode === 'bowling' && this.can('bowler') && m.phase === 'preDelivery' && m.inn.thisOver.length === 0) {
       // New over: offer the bowler choice once.
       const key = `${m.inningsIndex}:${m.inn.legalBalls}`;
       if (key !== this.pickerFor) {
@@ -534,6 +573,11 @@ export class GameSession {
     // HUD.
     const hud = this.hud;
     hud.update(m, now, mode);
+    if (this.driver.networked) {
+      const roles = this.driver.myRoles() ?? [];
+      const label = this.humanTeam === null ? 'Spectating' : roles.length ? roles.map((r) => ({ striker: 'Striker', nonStriker: 'Non-striker', bowler: 'Bowler', fielder: 'Fielder' })[r]).join(' + ') : 'Watching';
+      hud.setRole(label, this.driver.backlog());
+    }
     const fielding = this.fieldingActive(m) ? (m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled ? 'holding' : 'chasing') : null;
     hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding });
     if (mode === 'bowling') {
@@ -549,7 +593,7 @@ export class GameSession {
       hud.setMeter(false);
     }
     if (mode === 'batting' && m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact)) {
-      hud.setCall(this.settings.autoRun ? null : this.host.runHint(), 'Partner', this.lastCall);
+      hud.setCall(this.settings.autoRun && !this.driver.networked ? null : this.driver.runHint(), 'Partner', this.lastCall);
     } else if (mode === 'bowling' || m.phase !== 'inPlay') hud.setCall(null, '', null);
     const pad = this.input.device === 'gamepad';
     let hint = '';
@@ -565,6 +609,8 @@ export class GameSession {
       if (m.phase === 'preDelivery') hint = pad ? 'Stick: marker · D-pad: variation · R3: over/round · Back: field · A: run in' : 'WASD: marker · 1-8: variation · T: over/round · G: field · H: bowler · Space: run in';
       else if (m.phase === 'runUp') hint = pad ? 'Press A in the green zone' : 'Press Space in the green zone to release';
     }
+    if (this.driver.networked && mode === 'batting' && !this.can('striker')) hint = 'You are the non-striker: call the runs (R / N / B) - your partner plays the shots';
+    if (this.driver.networked && mode === 'bowling' && !this.can('bowler') && !fielding) hint = 'Your partner is bowling this over - you field when the ball is hit (G: set the field)';
     hud.setHint(hint);
 
     if (m.phase === 'inningsBreak' && this.breakShownFor !== m.innings.length) {
@@ -596,7 +642,7 @@ export class GameSession {
 
   /** Dashed line along the intended delivery (beginner/standard assistance). */
   private updatePathPreview(m: CricketMatch, mode: string, assist: number): void {
-    const show = mode === 'bowling' && this.settings.showPitchGuide && assist >= 0.5 && (m.phase === 'preDelivery' || m.phase === 'runUp');
+    const show = mode === 'bowling' && this.can('bowler') && this.settings.showPitchGuide && assist >= 0.5 && (m.phase === 'preDelivery' || m.phase === 'runUp');
     if (!show) {
       if (this.previewKey) this.world.setPathPreview(null);
       this.previewKey = '';
@@ -638,7 +684,7 @@ export class GameSession {
 
   continueMatch(): void {
     if (this.humanTeam === null) return;
-    this.host.submit({ team: this.humanTeam }, { type: 'match.continue' });
+    this.driver.submit({ team: this.humanTeam }, { type: 'match.continue' });
     this.world.cams.mode = this.preBallCam();
   }
 }

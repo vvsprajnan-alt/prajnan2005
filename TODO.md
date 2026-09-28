@@ -51,9 +51,21 @@
 - [x] Commands validated in the sim (`field.move/switch/dive/throw/catch`), so a second bowling-side player can field in 2v2
 - [x] Wagon wheel (shot angles on every scoring shot) and an AI captain that moves a boundary fielder into a batter's favourite area
 
+### Phase 5 - authoritative multiplayer server
+- [x] `@crease/server`: HTTP (serves the built client) + WebSocket `/ws`, handshake with protocol version
+- [x] Lobby: room codes, join, seats (2 per team), ready, host settings (teams, overs, AI, fielding), start; spectators
+- [x] Authoritative 120 Hz match with all AI on the server; seat/role authorization (`@crease/net`)
+- [x] Deterministic lockstep replication: applied commands broadcast per tick in 20 Hz batches; client `Mirror`
+- [x] State hashes every second, full-state resync, late join from full state
+- [x] Latency compensation for shots, releases and catch presses (bounded to 0.3 s); release grace online
+- [x] 2v2 roles: batter ownership (striker plays, partner calls runs), bowlers alternate overs, partner fields
+- [x] Client: Play Online screens (create/join, seats, ready, settings), network driver with buffer pacing, role badge, role-gated controls
+- [x] Rate limiting, heartbeats, message size limits; AI takes over a seat when a player leaves
+- [x] Tests: replication, serialization, rewind bounds, roles, end-to-end server (1v1 + spectator + resync, 2v2)
+
 ## Current task
 
-- Phase 4 review: feedback on fielding feel (camera, steering speed, catch timing) before Phase 5 (the multiplayer server).
+- Phase 5 review: play a real online match over the internet; check latency feel before Phase 6.
 
 ## Known bugs / limitations
 
@@ -65,11 +77,13 @@
 - Fielding steering is camera-relative; the fielding camera can swing when the ball passes the fielder.
 - The crowd is instanced boxes; audio is synthesized ambience only.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
-- Single client bundle (~630 KB, ~175 KB gzip).
+- Single client bundle (~650 KB, ~180 KB gzip).
+- Online: a dropped connection loses the seat (the AI takes over) - reconnecting is Phase 6.
+- Online: the local player's own input is shown when the server echoes it (one round trip); shot timing itself is compensated.
+- Online: pausing only opens the menu; the match keeps running for everyone.
 
 ## Next tasks
 
-1. Phase 5: Node.js authoritative server running `MatchHost`, WebSocket protocol, snapshot/event sync, latency compensation for shot/release timing
-2. Phase 6: private rooms (codes, invites, ready check, seats), reconnect and AI takeover, quick-chat
-3. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
-4. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
+1. Phase 6: invite links, reconnect to the same seat (session tokens), disconnect grace period, quick-chat and on-screen partner calls, public matchmaking queue, host migration
+2. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
+3. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio

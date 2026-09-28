@@ -17,6 +17,9 @@ import { World } from './render/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
 import { fieldEditor } from './ui/fieldEditor';
+import { NetClient } from './net/client';
+import { NetDriver } from './game/driver';
+import { RoomState, Seat, ServerMsg } from '@crease/net';
 
 const GAME_NAME = 'CREASE CLASH';
 
@@ -128,14 +131,14 @@ export class App {
   }
 
   mainMenu(): void {
-    if (this.session && this.session.humanTeam !== null) this.startAttract();
+    if (this.session && (this.session.humanTeam !== null || this.session.driver.networked)) this.startAttract();
     const card = h('div', { class: 'menu-card' },
       this.header('Fast, friendly T20 cricket. Built for 2v2 with your mates.'),
       h('div', { class: 'menu-grid' },
         this.tile('Play', 'Quick match against the AI. Toss, bat, bowl, win.', () => this.quickMatch(), true),
         this.tile('Practice', 'Nets: face the AI bowlers or bowl at AI batters.', () => this.practiceMenu()),
-        this.tile('Multiplayer', 'Online 2v2 matchmaking.', null, false, 'Phase 5'),
-        this.tile('Private Room', 'Room codes, invites and ready-up for four friends.', null, false, 'Phase 6'),
+        this.tile('Play Online', 'Create a room or join one with a code. Up to 2v2.', () => this.onlineMenu()),
+        this.tile('Invites & Matchmaking', 'Invite links, reconnect, quick-chat, public matchmaking.', null, false, 'Phase 6'),
         this.tile('Teams', 'Four original franchises and their squads.', () => this.teamsScreen()),
         this.tile('Players', 'Ratings for every fictional cricketer.', () => this.playersScreen()),
         this.tile('Settings', 'Graphics quality, time of day, assists, sound.', () => this.settingsScreen()),
@@ -340,6 +343,152 @@ export class App {
       h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: back }, 'Back'))));
   }
 
+  // ------------------------------------------------------------- online
+
+  private net: NetClient | null = null;
+  private room: RoomState | null = null;
+  private lobbyMsg = '';
+
+  private async ensureNet(): Promise<NetClient> {
+    if (this.net?.connected) return this.net;
+    const name = this.settings.playerName || 'Player';
+    const c = new NetClient();
+    await c.connect(name);
+    c.on((m) => this.onServer(m));
+    c.onClose = () => {
+      if (this.net !== c) return;
+      this.net = null;
+      this.room = null;
+      if (this.session?.driver.networked) this.startAttract();
+      this.show(h('div', { class: 'menu-card', style: 'max-width:520px' }, this.header('Disconnected from the server'),
+        h('button', { class: 'btn', onclick: () => this.mainMenu() }, 'Main menu')));
+    };
+    this.net = c;
+    return c;
+  }
+
+  private onServer(m: ServerMsg): void {
+    const c = this.net;
+    if (!c) return;
+    switch (m.t) {
+      case 'room':
+        this.room = m.room;
+        // During (and just after) an online match the game view owns the screen.
+        if (!this.session?.driver.networked) this.roomScreen();
+        break;
+      case 'error':
+        this.lobbyMsg = m.message;
+        if (!this.session?.driver.networked) this.roomScreen();
+        break;
+      case 'left':
+        this.room = null;
+        this.onlineMenu();
+        break;
+      case 'start':
+        this.startOnline(c, m);
+        break;
+    }
+  }
+
+  private onlineMenu(): void {
+    if (this.session && (this.session.humanTeam !== null || this.session.driver.networked)) this.startAttract();
+    const nameInput = h('input', { type: 'text', value: this.settings.playerName, placeholder: 'Your name', maxlength: 20 }) as HTMLInputElement;
+    const codeInput = h('input', { type: 'text', placeholder: 'Room code', maxlength: 5, style: 'text-transform:uppercase' }) as HTMLInputElement;
+    const status = h('p', { class: 'muted' }, this.lobbyMsg);
+    const go = async (action: 'create' | 'join') => {
+      this.settings.playerName = nameInput.value.trim().slice(0, 20);
+      saveSettings(this.settings);
+      status.textContent = 'Connecting...';
+      try {
+        const c = await this.ensureNet();
+        this.lobbyMsg = '';
+        if (action === 'create') c.send({ t: 'create' });
+        else c.send({ t: 'join', code: codeInput.value.trim().toUpperCase() });
+      } catch (e) {
+        status.textContent = (e as Error).message;
+      }
+    };
+    this.show(h('div', { class: 'menu-card', style: 'max-width:640px' }, this.header('Play online'),
+      h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, 'Your name'), nameInput)),
+      h('div', { class: 'row', style: 'margin-top:16px' },
+        h('button', { class: 'btn', onclick: () => go('create') }, 'Create a room'),
+        codeInput,
+        h('button', { class: 'btn secondary', onclick: () => go('join') }, 'Join')),
+      status,
+      h('p', { class: 'muted', style: 'font-size:13px' }, 'Share the room code with up to three friends. Empty seats are played by the AI. Two players on a side split the roles: the striker\'s owner bats while the partner calls the runs; bowlers alternate overs while the partner fields.'),
+      h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
+    nameInput.focus();
+  }
+
+  private roomScreen(): void {
+    const r = this.room;
+    const c = this.net;
+    if (!r || !c) return this.onlineMenu();
+    const me = r.players.find((p) => p.id === c.id);
+    const isHost = !!me?.host;
+    const seatBox = (team: 0 | 1, slot: 0 | 1) => {
+      const p = r.players.find((x) => x.seat?.team === team && x.seat?.slot === slot);
+      const mine = p?.id === c.id;
+      return h('div', { class: `seat${p ? ' taken' : ''}${mine ? ' mine' : ''}` },
+        h('div', { class: 'seat-name' }, p ? `${p.name}${p.host ? ' (host)' : ''}` : 'AI'),
+        h('div', { class: 'seat-sub' }, p ? (p.ready ? 'Ready' : 'Not ready') : 'Open seat'),
+        !p ? h('button', { class: 'ctrl', onclick: () => c.send({ t: 'seat', seat: { team, slot } }) }, 'Sit here') : mine ? h('button', { class: 'ctrl', onclick: () => c.send({ t: 'seat', seat: null }) }, 'Stand up') : null);
+    };
+    const teamName = (i: 0 | 1) => TEAMS.find((t) => t.id === r.config.teamIds[i])?.name ?? r.config.teamIds[i];
+    const cfgRow = () => {
+      const sel = (vals: [string, string][], cur: string, set: (v: string) => void) =>
+        h('select', { disabled: !isHost, onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...vals.map(([v, l]) => h('option', { value: v, selected: v === cur }, l)));
+      const teams = TEAMS.map((t) => [t.id, t.name] as [string, string]);
+      const field = (label: string, el: HTMLElement) => h('div', { class: 'field' }, h('label', {}, label), el);
+      return h('div', { class: 'row' },
+        field('Team A', sel(teams, r.config.teamIds[0], (v) => c.send({ t: 'config', config: { teamIds: [v, r.config.teamIds[1]] } }))),
+        field('Team B', sel(teams, r.config.teamIds[1], (v) => c.send({ t: 'config', config: { teamIds: [r.config.teamIds[0], v] } }))),
+        field('Overs', sel([['1', '1'], ['2', '2'], ['3', '3'], ['5', '5'], ['10', '10'], ['20', '20']], String(r.config.overs), (v) => c.send({ t: 'config', config: { overs: Number(v) } }))),
+        field('AI', sel([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['expert', 'Expert']], r.config.difficulty, (v) => c.send({ t: 'config', config: { difficulty: v as Difficulty } }))),
+        field('Fielding', sel([['assisted', 'Assisted'], ['manual', 'Manual'], ['auto', 'Automatic']], r.config.fielding, (v) => c.send({ t: 'config', config: { fielding: v as 'assisted' } }))));
+    };
+    const spectators = r.players.filter((p) => !p.seat).map((p) => p.name);
+    const seated = r.players.filter((p) => p.seat);
+    const canStart = isHost && seated.length > 0 && seated.every((p) => p.ready);
+    this.show(h('div', { class: 'menu-card' },
+      h('div', { class: 'brand' }, h('h1', { style: 'font-size:34px' }, 'Room '), h('h1', { class: 'room-code', style: 'font-size:34px' }, r.code)),
+      h('p', { class: 'tagline' }, r.status === 'playing' ? 'Match in progress' : r.status === 'finished' ? 'Match finished - ready up for another' : 'Share the code, pick your seats, then ready up.'),
+      h('div', { class: 'teams-grid' },
+        h('div', {}, h('div', { class: 'section-title' }, teamName(0)), seatBox(0, 0), seatBox(0, 1)),
+        h('div', {}, h('div', { class: 'section-title' }, teamName(1)), seatBox(1, 0), seatBox(1, 1))),
+      h('div', { class: 'section-title' }, 'Match settings', isHost ? '' : ' (host)'), cfgRow(),
+      spectators.length ? h('p', { class: 'muted' }, `Watching: ${spectators.join(', ')}`) : null,
+      this.lobbyMsg ? h('p', { class: 'lobby-err' }, this.lobbyMsg) : null,
+      h('div', { class: 'row', style: 'margin-top:14px' },
+        me?.seat ? h('button', { class: `btn${me.ready ? ' secondary' : ''}`, onclick: () => c.send({ t: 'ready', ready: !me.ready }) }, me.ready ? 'Not ready' : 'Ready') : null,
+        isHost ? h('button', { class: 'btn', disabled: !canStart, onclick: () => c.send({ t: 'start' }) }, 'Start match') : null,
+        h('button', { class: 'btn secondary', onclick: () => { c.send({ t: 'leave' }); } }, 'Leave room'))));
+    this.lobbyMsg = '';
+  }
+
+  private startOnline(c: NetClient, m: Extract<ServerMsg, { t: 'start' }>): void {
+    this.session?.dispose();
+    this.clearScreens();
+    const driver = new NetDriver(c, m.match, m.you);
+    const seat: Seat | null = m.you;
+    this.session = new GameSession(driver.match.cfg, seat ? seat.team : null, this.world, this.input, this.sfx, this.settings, {
+      onInningsBreak: (mm) => this.inningsBreak(mm),
+      onComplete: (mm) => this.onlineResults(mm),
+      onPause: () => this.pauseMenu(),
+      onFieldEditor: () => this.openFieldEditor(),
+    }, this.hudRoot, driver);
+  }
+
+  private onlineResults(m: CricketMatch): void {
+    const potm = m.playerOfMatch;
+    this.show(h('div', { class: 'menu-card' }, this.header(m.result ?? 'Match complete'),
+      potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name)) : null,
+      h('div', { html: m.innings.map((i) => this.scorecardHtml(m, i)).join('') }),
+      h('div', { class: 'row', style: 'margin-top:18px' },
+        h('button', { class: 'btn', onclick: () => { this.startAttract(); this.roomScreen(); } }, 'Back to the room'),
+        h('button', { class: 'btn secondary', onclick: () => { this.net?.send({ t: 'leave' }); this.mainMenu(); } }, 'Leave'))), true);
+  }
+
   private openFieldEditor(): void {
     const s = this.session;
     if (!s || s.humanTeam === null) return;
@@ -364,7 +513,7 @@ export class App {
         this.tile('Resume', '', resume, true),
         this.tile('Scorecard', '', () => this.scorecardOverlay(s.match, () => this.pauseMenu())),
         this.tile('Controls', '', () => this.controlsScreen(() => this.pauseMenu())),
-        this.tile('Quit to menu', '', () => this.mainMenu()))), true);
+        this.tile('Quit to menu', '', () => { if (s.driver.networked) this.net?.send({ t: 'leave' }); this.mainMenu(); }))), true);
   }
 
   private scorecardHtml(m: CricketMatch, inn: InningsState): string {

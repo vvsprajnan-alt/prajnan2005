@@ -107,14 +107,27 @@ While `inPlay`, every 1/120 s tick:
   contact shadow and trail, and the camera director. It holds no game logic.
 - Quality presets change pixel ratio, shadows, antialiasing, crowd size and effects.
 
-## Multiplayer plan (Phases 5-6)
+## Multiplayer (Phase 5)
 
-- Server: Node.js + WebSocket, one `MatchHost` per room, 120 Hz sim, 20-30 Hz snapshot broadcast plus
-  reliable events. The server validates role and phase (already done by `CricketMatch.command`) and
-  rate-limits commands.
-- Timing-critical inputs (shot, release) are latency-compensated: the server evaluates timing against the
-  ball state the client saw (bounded rewind), which the deterministic sim makes cheap.
-- Clients interpolate actors between snapshots and extrapolate the ball with the shared physics.
-- Anti-cheat: clients only send intents, never outcomes (runs, catches, timing grades). Input values are
-  clamped and validated server-side; the room seat decides the `CommandSource`.
-- Reconnect: a session token maps a returning socket to its seat; while a player is away, the AI plays that role.
+```
+browser client                          server (Node)
+ input -> Command {at: tick seen} ----->  authorize(seat, role) -> MatchHost.submit
+                                          MatchHost.step() at 120 Hz (AI included)
+ Mirror.receive(ticks, cmds, hash) <----  batch of applied commands every 6 ticks (+ hash every 120)
+ Mirror.step(): replay cmds, m.step()
+ hash mismatch -> {t:'resync'} -------->  serializeMatch -> {t:'state'}
+```
+
+- **Why lockstep instead of snapshots.** The simulation is deterministic, so replicating inputs is enough to
+  reproduce the match exactly. Bandwidth is tiny, the client keeps the full `CricketMatch` (so the HUD, camera
+  and presentation code are the same as single player), and the server stays authoritative because it alone
+  decides which commands are applied and when.
+- **Robustness.** JavaScript engines may differ in the last bit of some `Math` functions, so the server sends
+  `stateHash` values; a client that drifts resyncs from a full serialized state (`replication.ts`), which is
+  also how spectators join mid-match.
+- **Roles.** `@crease/net/roles.ts` derives who holds striker / non-striker / bowler / fielder purely from the
+  match state and the seated humans, so server and clients agree without extra messages.
+- **Latency compensation.** Commands carry `at` (the tick the player saw). `CricketMatch.rewind` converts that
+  into a bounded back-dating (default 0.3 s) for shot press time, release timing and catch presses.
+- **Next (Phase 6):** session tokens to reconnect to the same seat with a grace period before the AI takes
+  over, invite links, quick-chat, matchmaking and host migration.

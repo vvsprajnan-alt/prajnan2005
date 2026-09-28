@@ -174,4 +174,40 @@ describe('multiplayer server', () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(srv.lobby.rooms.has(a.room)).toBe(false);
   }, 30000);
+
+  it('plays 2v2: only the player holding a role is obeyed, and everyone stays in sync', async () => {
+    const bots = [new Bot(), new Bot(), new Bot(), new Bot()];
+    await Promise.all(bots.map((b, i) => b.open(`P${i}`)));
+    bots[0]!.send({ t: 'create' });
+    await bots[0]!.wait((m) => m.t === 'room');
+    const code = bots[0]!.room;
+    for (const b of bots.slice(1)) {
+      b.send({ t: 'join', code });
+      await b.wait((m) => m.t === 'room');
+    }
+    const seats: [0 | 1, 0 | 1][] = [[0, 0], [0, 1], [1, 0], [1, 1]];
+    bots.forEach((b, i) => b.send({ t: 'seat', seat: { team: seats[i]![0], slot: seats[i]![1] } }));
+    await new Promise((r) => setTimeout(r, 150));
+    bots.forEach((b) => b.send({ t: 'ready', ready: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    bots[0]!.send({ t: 'config', config: { overs: 1 } }); // un-readies everyone
+    await new Promise((r) => setTimeout(r, 100));
+    bots.forEach((b) => b.send({ t: 'ready', ready: true }));
+    await new Promise((r) => setTimeout(r, 150));
+    bots[0]!.send({ t: 'start' });
+    for (const b of bots) await b.wait((m) => m.t === 'start');
+    const server = srv.lobby.rooms.get(code)!.match!.host.match;
+    const t0 = Date.now();
+    while (server.inn.log.length < 3 && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 50));
+    expect(server.inn.log.length).toBeGreaterThanOrEqual(3);
+    await new Promise((r) => setTimeout(r, 300));
+    for (const b of bots) {
+      expect(b.mirror!.desynced).toBe(false);
+      expect(b.mirror!.rejected).toBe(0);
+      expect(b.mirror!.match.inn.log.slice(0, 3).map((l) => l.symbol)).toEqual(server.inn.log.slice(0, 3).map((l) => l.symbol));
+    }
+    // Every bowling-side bot sent bowl.start each ball, but only one per ball was applied.
+    expect(server.inn.log.length).toBeLessThanOrEqual(server.inn.legalBalls + 3);
+    bots.forEach((b) => b.close());
+  }, 30000);
 });

@@ -17,6 +17,7 @@ export * from './match/running';
 export * from './match/fielding';
 export * from './match/match';
 export * from './match/host';
+export * from './match/replication';
 export * from './ai/difficulty';
 export * from './ai/bowlerAi';
 export * from './ai/batterAi';

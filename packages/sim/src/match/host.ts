@@ -28,6 +28,8 @@ export class MatchHost {
   private bowlAi: [BowlerAI, BowlerAI];
   private queue: { src: CommandSource; cmd: Command }[] = [];
   private reviewRng: Rng;
+  /** Commands applied during the last step, in order (what a network mirror must replay). */
+  lastApplied: { src: CommandSource; cmd: Command }[] = [];
   private reviewDecided = false;
   opts: HostOptions;
 
@@ -56,7 +58,11 @@ export class MatchHost {
 
   step(): MatchEvent[] {
     const m = this.match;
-    for (const q of this.queue) m.command(q.src, q.cmd);
+    const applied: { src: CommandSource; cmd: Command }[] = [];
+    const apply = (src: CommandSource, cmd: Command) => {
+      if (m.command(src, cmd)) applied.push({ src, cmd });
+    };
+    for (const q of this.queue) apply(q.src, q.cmd);
     this.queue = [];
     const bat = m.inn.battingTeam as 0 | 1;
     const bowl = m.inn.bowlingTeam as 0 | 1;
@@ -64,18 +70,20 @@ export class MatchHost {
     const humanBat = this.isHuman(bat);
     batAi.controlsBatting = !humanBat;
     batAi.controlsRunning = !humanBat || this.opts.autoRunForHumans;
-    for (const c of batAi.think(m)) m.command({ team: bat, role: 'striker' }, c);
-    if (!this.isHuman(bowl)) for (const c of this.bowlAi[bowl].think(m)) m.command({ team: bowl, role: 'bowler' }, c);
-    if (m.phase === 'inningsBreak' && this.opts.humanTeams.length === 0) m.command({ team: 0 }, { type: 'match.continue' });
+    for (const c of batAi.think(m)) apply({ team: bat, role: 'striker' }, c);
+    if (!this.isHuman(bowl)) for (const c of this.bowlAi[bowl].think(m)) apply({ team: bowl, role: 'bowler' }, c);
+    if (m.phase === 'inningsBreak' && this.opts.humanTeams.length === 0) apply({ team: 0 }, { type: 'match.continue' });
     // AI sides decide on reviews after a moment's thought.
     if (m.phase === 'review' && m.pendingReview) {
       const team = m.pendingReview.team;
       if (!this.reviewDecided && !this.isHuman(team) && m.phaseTime > 1.2) {
         this.reviewDecided = true;
-        if (aiWantsReview(m, this.reviewRng)) m.command({ team }, { type: 'review' });
+        if (aiWantsReview(m, this.reviewRng)) apply({ team }, { type: 'review' });
       }
     } else this.reviewDecided = false;
+    this.lastApplied = applied;
     m.step();
     return m.drainEvents();
   }
+
 }

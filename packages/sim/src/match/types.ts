@@ -23,8 +23,9 @@ export type RunCall = 'run' | 'wait' | 'back';
 export type Command =
   | { type: 'bowl.aim'; intent: BowlIntent }
   | { type: 'bowl.start' }
-  | { type: 'bowl.release' }
-  | { type: 'bat.shot'; shot: ShotInput }
+  /** `at` = the tick the player pressed on (latency compensation, bounded by the server). */
+  | { type: 'bowl.release'; at?: number }
+  | { type: 'bat.shot'; shot: ShotInput; at?: number }
   /** Advance down the pitch (during the run-up or early in the ball's flight). */
   | { type: 'bat.charge' }
   | { type: 'run.call'; call: RunCall }
@@ -44,7 +45,7 @@ export type Command =
   /** Throw to the striker's end (S), bowler's end (B) or let the fielder choose. */
   | { type: 'field.throw'; end: 'S' | 'B' | 'auto' }
   /** Timing press for a catch (manual fielding). */
-  | { type: 'field.catch' };
+  | { type: 'field.catch'; at?: number };
 
 /** Who issues a command. In multiplayer the server stamps this from the connection. */
 export interface CommandSource {

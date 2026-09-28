@@ -1,0 +1,22 @@
+{
+  "name": "@crease/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Authoritative multiplayer server: rooms, match loop, command replication.",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.mjs --packages=external --alias:@crease/sim=../../packages/sim/src/index.ts --alias:@crease/net=../../packages/net/src/index.ts"
+  },
+  "dependencies": {
+    "@crease/net": "0.1.0",
+    "@crease/sim": "0.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.25.0"
+  }
+}

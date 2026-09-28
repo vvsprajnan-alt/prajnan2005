@@ -10,9 +10,11 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @crease/client",
-    "build": "npm run typecheck && npm run build -w @crease/client",
+    "dev:server": "npm run dev -w @crease/server",
+    "server": "npm run build -w @crease/client && npm start -w @crease/server",
+    "build": "npm run typecheck && npm run build -w @crease/client && npm run build -w @crease/server",
     "preview": "npm run preview -w @crease/client",
-    "typecheck": "tsc -p packages/sim && tsc -p apps/client --noEmit",
+    "typecheck": "tsc -p packages/sim && tsc -p packages/net && tsc -p apps/server && tsc -p apps/client --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },

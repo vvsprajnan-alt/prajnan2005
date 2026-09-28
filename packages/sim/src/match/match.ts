@@ -72,6 +72,10 @@ export interface MatchConfig {
   battingOrders?: [number[] | null, number[] | null];
   /** Human fielding control per team (default: AI fields). */
   fieldingControl?: [FieldingControlMode, FieldingControlMode];
+  /** Max seconds a timing-critical input may be back-dated (network latency compensation). */
+  maxInputRewind?: number;
+  /** Extra seconds before an unreleased delivery is released automatically (networked play). */
+  netGrace?: number;
 }
 
 export function defaultConfig(teams: [TeamDef, TeamDef], overs = 2, seed = 12345): MatchConfig {
@@ -435,10 +439,10 @@ export class CricketMatch {
         return true;
       case 'bowl.release':
         if (!bowling || this.phase !== 'runUp') return false;
-        this.release(this.runUpTime - this.runUpDuration);
+        this.release(Math.max(0, this.runUpTime - this.rewind(c.at)) - this.runUpDuration);
         return true;
       case 'bat.shot':
-        return batting && this.startSwing(c.shot);
+        return batting && this.startSwing(c.shot, this.rewind(c.at));
       case 'bat.charge': {
         if (!batting || this.charged) return false;
         if (this.phase !== 'runUp' && !(this.phase === 'inPlay' && !this.swing && !this.batContact && this.ball.pos.z < -2)) return false;
@@ -535,10 +539,19 @@ export class CricketMatch {
         h.throwRequestAt = this.time;
         return true;
       case 'field.catch':
-        h.catchPressAt = this.time;
+        h.catchPressAt = this.time - this.rewind(c.at);
         return true;
     }
     return false;
+  }
+
+  /**
+   * Seconds to back-date an input stamped with tick `at` (the tick the player
+   * saw when pressing). Bounded so a client cannot reach far into the past.
+   */
+  private rewind(at: number | undefined): number {
+    if (at === undefined || !Number.isInteger(at) || at > this.tick) return 0;
+    return Math.min(this.cfg.maxInputRewind ?? 0.3, (this.tick - at) * DT);
   }
 
   private isIntentAllowed(i: BowlIntent): boolean {
@@ -600,7 +613,7 @@ export class CricketMatch {
   }
 
 
-  private startSwing(shot: ShotInput): boolean {
+  private startSwing(shot: ShotInput, rewind = 0): boolean {
     if (this.phase !== 'inPlay' || this.swing || this.batContact || this.padContact || this.passedBatter) return false;
     if (!['defend', 'ground', 'lofted', 'sweep', 'reverseSweep'].includes(shot.family)) return false;
     const aimX = Math.max(-1, Math.min(1, Number(shot.aimX) || 0));
@@ -618,8 +631,8 @@ export class CricketMatch {
     this.swing = {
       input,
       stroke,
-      pressTime: this.time,
-      contactTime: this.time + SWING_TIME[input.family],
+      pressTime: this.time - rewind,
+      contactTime: this.time - rewind + SWING_TIME[input.family],
       planeZ,
       resolved: false,
       read: { ...readAtPlane.pos },
@@ -642,7 +655,7 @@ export class CricketMatch {
         this.runUpTime += DT;
         if (this.charged) this.running.update(DT); // batter advancing while the bowler runs in
         // Nobody pressed release: auto-release late (legal, but inaccurate).
-        if (this.runUpTime >= this.runUpDuration + 0.1) this.release(0.1);
+        if (this.runUpTime >= this.runUpDuration + 0.1 + (this.cfg.netGrace ?? 0)) this.release(0.1);
         break;
       case 'inPlay':
         this.stepInPlay();

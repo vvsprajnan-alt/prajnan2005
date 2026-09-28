@@ -23,7 +23,7 @@ import {
   resolveContact,
 } from '../batting/shots';
 import { BowlIntent, DeliveryPlan, RUNUP_TIME, defaultIntent, deliverySide, planDelivery } from '../bowling/delivery';
-import { chooseBowler, chooseField } from '../ai/captain';
+import { adaptField, chooseBowler, chooseField } from '../ai/captain';
 import { PlayerDef, offSign } from '../data/players';
 import { TeamDef, bowlingOptions, keeperIndex } from '../data/teams';
 import { FieldKind, FieldSetting, fieldPreset, legalizeField, sanitizeField } from '../fielding/fieldSettings';
@@ -44,7 +44,7 @@ import {
   oversString,
   startOver,
 } from '../rules/scorecard';
-import { FieldContext, FieldEvent, FieldingUnit } from './fielding';
+import { FieldContext, FieldEvent, FieldingControlMode, FieldingUnit, newHumanFielding } from './fielding';
 import { End, Running, STANCE_Z, inGroundAt, runnerStart } from './running';
 import {
   ActorSnapshot,
@@ -70,6 +70,8 @@ export interface MatchConfig {
   autoContinueAfter: number | null;
   /** Optional batting orders (player indices) per team; default is squad order. */
   battingOrders?: [number[] | null, number[] | null];
+  /** Human fielding control per team (default: AI fields). */
+  fieldingControl?: [FieldingControlMode, FieldingControlMode];
 }
 
 export function defaultConfig(teams: [TeamDef, TeamDef], overs = 2, seed = 12345): MatchConfig {
@@ -294,7 +296,8 @@ export class CricketMatch {
     const kind = this.fieldKind;
     const chosen = kind === 'pace' ? tf.pace : tf.spin;
     if (!tf.auto && chosen) return chosen;
-    return chooseField(kind, this.inn, this.cfg.rules);
+    const inn = this.inn;
+    return adaptField(chooseField(kind, inn, this.cfg.rules), inn, inn.batters[inn.striker]!.player);
   }
 
   private buildFielding(): void {
@@ -311,6 +314,8 @@ export class CricketMatch {
       this.strikerDef.batHand,
       v3(0.9 * side, 0, BOWLER_CREASE_Z + 0.6),
     );
+    const ctl = this.cfg.fieldingControl?.[inn.bowlingTeam as 0 | 1] ?? 'auto';
+    this.fielding.human = ctl === 'auto' ? null : newHumanFielding(ctl);
   }
 
   /** Prepare actors and ball for the next delivery. */
@@ -487,6 +492,12 @@ export class CricketMatch {
         this.emit({ type: 'reviewStarted', team: pr.team, tracking: pr.tracking, onFieldOut: pr.onFieldOut });
         return true;
       }
+      case 'field.move':
+      case 'field.switch':
+      case 'field.dive':
+      case 'field.throw':
+      case 'field.catch':
+        return bowling && this.fieldingCommand(c);
       case 'batter.select': {
         if (!batting || !(this.phase === 'dead' || this.phase === 'preDelivery' || this.phase === 'review')) return false;
         if (!Number.isInteger(c.player)) return false;
@@ -495,6 +506,37 @@ export class CricketMatch {
         this.emit({ type: 'newBatter', player: c.player });
         return true;
       }
+    }
+    return false;
+  }
+
+  private fieldingCommand(c: Command): boolean {
+    const h = this.fielding.human;
+    if (!h || this.phase !== 'inPlay') return false;
+    switch (c.type) {
+      case 'field.move': {
+        const x = Number(c.x);
+        const z = Number(c.z);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
+        const m = Math.hypot(x, z);
+        h.move = m > 1 ? { x: x / m, z: z / m } : { x, z };
+        return true;
+      }
+      case 'field.switch':
+        if (c.to === 'nearest') this.fielding.switchToNearest(this.ball.pos);
+        else if (c.to === 'auto' && this.fielding.chaser >= 0) h.controlled = this.fielding.chaser;
+        else return false;
+        return true;
+      case 'field.dive':
+        return this.fielding.dive(this.ball.pos);
+      case 'field.throw':
+        if (c.end !== 'S' && c.end !== 'B' && c.end !== 'auto') return false;
+        h.throwRequest = c.end;
+        h.throwRequestAt = this.time;
+        return true;
+      case 'field.catch':
+        h.catchPressAt = this.time;
+        return true;
     }
     return false;
   }
@@ -637,6 +679,7 @@ export class CricketMatch {
       keeperOnly: !(this.batContact || this.padContact || this.passedBatter),
       catchesDismiss: !this.noBall && !freeHit,
       sinceContact: this.batContact ? this.time - this.contactTime : Infinity,
+      time: this.time,
     };
   }
 
@@ -1002,7 +1045,12 @@ export class CricketMatch {
         atStrikerEnd = outR.to === 'S' ? this.wicket.who : survivor;
       }
     }
-    return { batRuns, extra, extraRuns, boundary: this.boundary, wicket, atStrikerEnd };
+    let shotAngle: number | undefined;
+    if (this.batContact && this.contact?.vel) {
+      const v = this.contact.vel;
+      shotAngle = (Math.atan2(v.x * this.offS, -v.z) * 180) / Math.PI;
+    }
+    return { batRuns, extra, extraRuns, boundary: this.boundary, wicket, atStrikerEnd, shotAngle };
   }
 
   private dismissalText(w: Wicket): string {
@@ -1188,6 +1236,15 @@ export class CricketMatch {
 
   // ---------------------------------------------------------------- views
 
+  private controlSnapshot(): MatchSnapshot['control'] {
+    const f = this.fielding;
+    const h = f.human;
+    if (!h || h.controlled < 0 || this.phase !== 'inPlay') return null;
+    const c = f.fielders[h.controlled]!;
+    const airborne = this.batContact && this.ball.bounces === this.bouncesAtContact && !this.ball.rolling && f.holder < 0;
+    return { pos: c.pos, heading: c.heading, holding: f.holder === c.idx, diving: c.diveT > 0, landing: airborne ? f.landing : null, mode: h.mode };
+  }
+
   /** Plain-data view of everything a renderer needs this tick. */
   snapshot(): MatchSnapshot {
     const inn = this.inn;
@@ -1236,6 +1293,7 @@ export class CricketMatch {
       stumpsDown: { ...this.stumpsDown },
       bowlSide: deliverySide(this.bowlerDef.bowlArm, this.intent.side),
       charged: this.charged,
+      control: this.controlSnapshot(),
       score: {
         runs: inn.runs,
         wickets: inn.wickets,
@@ -1263,6 +1321,8 @@ export interface MatchSnapshot {
   /** World-x sign of the side the bowler delivers from. */
   bowlSide: 1 | -1;
   charged: boolean;
+  /** Human fielding: the controlled fielder, whether they hold the ball, and where a catch will come down. */
+  control: { pos: Vec3; heading: number; holding: boolean; diving: boolean; landing: Vec3 | null; mode: FieldingControlMode } | null;
   score: { runs: number; wickets: number; overs: string };
 }
 

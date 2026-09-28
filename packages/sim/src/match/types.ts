@@ -35,7 +35,16 @@ export type Command =
   /** Ask for a ball-tracking review of the on-field LBW decision. */
   | { type: 'review' }
   /** Send in a different batter (only the one who has just arrived and not yet faced). */
-  | { type: 'batter.select'; player: number };
+  | { type: 'batter.select'; player: number }
+  /** Human fielding: run direction in world space (x, z), magnitude <= 1. */
+  | { type: 'field.move'; x: number; z: number }
+  /** Switch the controlled fielder: nearest to the ball, or back to the automatic choice. */
+  | { type: 'field.switch'; to: 'nearest' | 'auto' }
+  | { type: 'field.dive' }
+  /** Throw to the striker's end (S), bowler's end (B) or let the fielder choose. */
+  | { type: 'field.throw'; end: 'S' | 'B' | 'auto' }
+  /** Timing press for a catch (manual fielding). */
+  | { type: 'field.catch' };
 
 /** Who issues a command. In multiplayer the server stamps this from the connection. */
 export interface CommandSource {

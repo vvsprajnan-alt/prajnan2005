@@ -10,6 +10,45 @@ import { End, Running, distToGround } from './running';
 
 export type FielderMode = 'set' | 'chase' | 'backup' | 'guard' | 'hold' | 'followThrough';
 
+/**
+ * How much of the fielding a human does:
+ * - auto: AI fields everything.
+ * - assisted: control switches to the relevant fielder, who runs to the ball
+ *   by himself until you steer; catches are automatic; throws are automatic
+ *   unless you pick an end within a moment.
+ * - manual: you steer, you must press to catch (timing matters), you choose
+ *   the throw (the AI throws after a long wait so play never stalls).
+ */
+export type FieldingControlMode = 'auto' | 'assisted' | 'manual';
+
+export interface HumanFielding {
+  mode: FieldingControlMode;
+  /** Fielder index under control, or -1. */
+  controlled: number;
+  /** Desired run direction in world space (magnitude 0..1). */
+  move: { x: number; z: number };
+  lastMoveAt: number;
+  catchPressAt: number;
+  throwRequest: End | 'auto' | null;
+  throwRequestAt: number;
+  /** Seconds the current holder has been waiting for a throw decision. */
+  holdWait: number;
+}
+
+export const newHumanFielding = (mode: FieldingControlMode): HumanFielding => ({
+  mode,
+  controlled: -1,
+  move: { x: 0, z: 0 },
+  lastMoveAt: -Infinity,
+  catchPressAt: -Infinity,
+  throwRequest: null,
+  throwRequestAt: -Infinity,
+  holdWait: 0,
+});
+
+const DIVE_TIME = 0.35;
+const DIVE_RECOVER = 0.55;
+
 export interface Fielder {
   idx: number;
   player: number;
@@ -33,6 +72,10 @@ export interface Fielder {
   speed: number;
   /** Horizontal distance to the ball last tick (for closest-approach catching). */
   lastBallDist: number;
+  /** Dive in progress (s remaining) and recovery afterwards. */
+  diveT: number;
+  recoverT: number;
+  diveDir: { x: number; z: number };
 }
 
 /** Everything fielding needs to know about the rest of the match. */
@@ -52,6 +95,8 @@ export interface FieldContext {
   catchesDismiss: boolean;
   /** Seconds since the ball last left the bat (Infinity if it hasn't). */
   sinceContact: number;
+  /** Match time (s), for input timing. */
+  time: number;
 }
 
 export type FieldEvent =
@@ -74,6 +119,10 @@ export class FieldingUnit {
   /** Seconds until the current chaser is expected to reach the ball (99 = won't). */
   chaseEta = 99;
   chasePoint: Vec3 = v3();
+  /** Where the ball will first come down (null when it is on the ground / held). */
+  landing: Vec3 | null = null;
+  /** Human control of one fielder (null = AI fields everything). */
+  human: HumanFielding | null = null;
   private planTimer = 0;
   private stumpsDelay = 0;
 
@@ -105,6 +154,9 @@ export class FieldingUnit {
       animT: 0,
       speed: 0,
       lastBallDist: Infinity,
+      diveT: 0,
+      recoverT: 0,
+      diveDir: { x: 0, z: 0 },
     });
     const keeperPos = v3(0.25 * (hand === 'R' ? 1 : -1), 0, STRIKER_STUMPS_Z + setting.keeperBack);
     this.fielders.push(mk(keeper, 'keeper', keeperPos));
@@ -133,11 +185,20 @@ export class FieldingUnit {
     return add(f.pos, v3(Math.sin(f.heading) * 0.35, 1.15, Math.cos(f.heading) * 0.35));
   }
 
-  /** Recompute who chases the ball and where. */
-  plan(ctx: FieldContext): void {
+  /**
+   * Recompute who chases the ball and where. `event` = something changed
+   * (hit, deflection, missed throw): a human's control switches to the new chaser.
+   */
+  plan(ctx: FieldContext, event = true): void {
     this.planTimer = 0.4;
     const ball = ctx.ball;
     const traj = predictTrajectory(ball, ctx.cond, 7, DT, 3);
+    this.landing = null;
+    if (!ball.rolling) {
+      const b0 = traj[0]!.bounces;
+      const hit = traj.find((s) => s.bounces > b0);
+      if (hit) this.landing = { ...hit.pos };
+    }
     const airborneCatch = ctx.batContact && ball.bounces === ctx.bouncesAtContact && !ball.rolling;
     let best: { f: Fielder; t: number; pos: Vec3; catching: boolean } | null = null;
     let second: { f: Fielder; t: number; pos: Vec3 } | null = null;
@@ -199,6 +260,45 @@ export class FieldingUnit {
       this.backup = f.idx;
     }
     this.assignGuards();
+    const h = this.human;
+    if (h && !ctx.keeperOnly && (event || h.controlled < 0) && this.chaser >= 0) h.controlled = this.chaser;
+  }
+
+  /** Switch human control to the fielder nearest the ball (other than the current one). */
+  switchToNearest(ball: Vec3): void {
+    const h = this.human;
+    if (!h) return;
+    let best = -1;
+    let bd = Infinity;
+    for (const f of this.fielders) {
+      if (f.idx === h.controlled || f.mode === 'followThrough') continue;
+      const d = distXZ(f.pos, ball);
+      if (d < bd) {
+        bd = d;
+        best = f.idx;
+      }
+    }
+    if (best >= 0) h.controlled = best;
+  }
+
+  /** Controlled fielder dives (towards the stick direction, else the ball). */
+  dive(ball: Vec3): boolean {
+    const h = this.human;
+    const f = h && h.controlled >= 0 ? this.fielders[h.controlled] : undefined;
+    if (!h || !f || f.idx === this.holder || f.diveT > 0 || f.recoverT > 0) return false;
+    let dx = h.move.x;
+    let dz = h.move.z;
+    if (Math.hypot(dx, dz) < 0.2) {
+      dx = ball.x - f.pos.x;
+      dz = ball.z - f.pos.z;
+    }
+    const m = Math.hypot(dx, dz) || 1;
+    f.diveDir = { x: dx / m, z: dz / m };
+    f.diveT = DIVE_TIME;
+    f.heading = Math.atan2(dx, dz);
+    f.anim = 'dive';
+    f.animT = DIVE_TIME + DIVE_RECOVER;
+    return true;
   }
 
   /** Keeper guards the striker's end, bowler the other (unless busy chasing). */
@@ -266,7 +366,8 @@ export class FieldingUnit {
     const ball = ctx.ball;
     this.planTimer -= dt;
     this.chaseEta -= dt;
-    if (this.holder < 0 && this.throwEnd === null && this.planTimer <= 0) this.plan(ctx);
+    if (this.holder < 0 && this.throwEnd === null && this.planTimer <= 0) this.plan(ctx, false);
+    const h = this.human;
 
     for (const f of this.fielders) {
       if (f.cooldown > 0) f.cooldown -= dt;
@@ -278,6 +379,11 @@ export class FieldingUnit {
         continue;
       }
       const spd = fieldSpeed(f.def);
+      if (h && f.idx === h.controlled && this.humanMove(f, h, ctx, spd, dt)) {
+        const special = f.anim === 'dive' || f.anim === 'throw' || f.anim === 'pickup';
+        if (!special || f.animT <= 0) f.anim = f.speed > 0.5 ? 'run' : 'ready';
+        continue;
+      }
       switch (f.mode) {
         case 'followThrough': {
           const t = v3(f.home.x, 0, -6.5);
@@ -331,13 +437,23 @@ export class FieldingUnit {
       const keeperCanReach = f.role !== 'keeper' || ball.pos.z > STRIKER_STUMPS_Z - 0.3 || ball.pos.y > 1.6;
       // Go for the catch at the ball's closest approach (or when it is right there).
       const closest = d >= prevD || d < 0.45;
-      const reachC = f.role === 'keeper' ? 1.5 : f.catching ? 1.7 : 1.0;
+      const controlled = !!h && h.mode !== 'auto' && f.idx === h.controlled;
+      const diving = f.diveT > 0;
+      let reachC = f.role === 'keeper' ? 1.5 : f.catching ? 1.7 : 1.0;
+      if (controlled) reachC = diving ? 2.1 : Math.max(reachC, 1.3);
       if (airborneCatch && keeperCanReach && closest && ball.pos.y < 2.5 && d < reachC) {
         const dive = d > 1.0;
         const speed = length(ball.vel);
         const onTheRun = f.speed > 5 ? 0.12 : 0;
         let p = 0.42 + 0.55 * a01(f.def.attrs.catching) - Math.max(0, speed - 16) * 0.012 - (dive ? 0.3 : 0) - (ball.pos.y > 2.1 ? 0.12 : 0) - onTheRun;
         if (f.role === 'keeper') p += 0.06;
+        if (controlled && h!.mode === 'manual') {
+          // Manual catching: a well-timed press helps, no press at all is a fumble waiting to happen.
+          const since = ctx.time - h!.catchPressAt;
+          if (since >= 0 && since <= 0.12) p += 0.12;
+          else if (since > 0.35) p *= 0.5;
+        }
+        if (diving) p += 0.12; // a committed dive gets hands to it
         // Reaction: close catches off the bat leave little time to get the hands there.
         const needT = 0.14 + d * 0.26 - 0.06 * a01(f.def.attrs.reaction);
         if (ctx.sinceContact < needT) p *= (ctx.sinceContact / needT) ** 1.5;
@@ -358,7 +474,7 @@ export class FieldingUnit {
         return out;
       }
       // Receiving a throw at the stumps: take it anywhere up to head height.
-      const reach = isThrowTarget ? 1.3 : 0.85;
+      const reach = isThrowTarget ? 1.3 : diving ? 1.7 : 0.85;
       const reachH = isThrowTarget ? 2.2 : 1.0;
       if (ball.pos.y < reachH && d < reach) {
         const speed = length(ball.vel);
@@ -388,6 +504,7 @@ export class FieldingUnit {
     f.speed = 0;
     // Keepers and players at the stumps release faster.
     f.holdT = f.role === 'keeper' ? 0.2 : 0.25 + 0.2 * (1 - a01(f.def.attrs.throwing));
+    if (this.human) this.human.holdWait = 0;
     this.chaser = -1;
     for (const o of this.fielders) if (o.mode === 'chase' || o.mode === 'backup') o.mode = 'set';
     this.assignGuards();
@@ -406,6 +523,29 @@ export class FieldingUnit {
     }
     f.holdT -= dt;
     if (f.holdT > 0) return [];
+
+    // A human holding the ball decides the throw (or runs it in to the stumps).
+    const h = this.human;
+    if (h && h.mode !== 'auto' && h.controlled === f.idx) {
+      for (const end of ['S', 'B'] as End[]) {
+        const r = run.runnerForEnd(end);
+        if (r && distToGround(r, end) > 0 && distXZ(f.pos, STUMPS[end]) < 1.2) {
+          this.stumpsDelay = 0.1;
+          f.anim = 'throw';
+          f.animT = 0.3;
+          return [];
+        }
+      }
+      const req = h.throwRequest && ctx.time - h.throwRequestAt < 1.5 ? h.throwRequest : null;
+      if (req && req !== 'auto') {
+        h.throwRequest = null;
+        return this.throwTo(ctx, f, req);
+      }
+      h.holdWait += dt;
+      const patience = h.mode === 'manual' ? 2.5 : 0.3;
+      if (!req && h.holdWait < patience) return [];
+      h.throwRequest = null;
+    }
 
     // Decide what to do with the ball.
     const danger = (end: End): number => {
@@ -435,7 +575,11 @@ export class FieldingUnit {
       }
       return [];
     }
-    // Throw.
+    return this.throwTo(ctx, f, end);
+  }
+
+  /** Throw from `f` to the stumps at `end`. */
+  private throwTo(ctx: FieldContext, f: Fielder, end: End): FieldEvent[] {
     const from = this.handPos(f);
     const to = v3(0, 0.55, STUMPS[end].z);
     const dist = distXZ(from, to);
@@ -467,6 +611,48 @@ export class FieldingUnit {
     this.chaser = -1;
     this.planTimer = Math.max(0.6, dist / speed + 0.3);
     return [{ type: 'throw', fielder: f, end }];
+  }
+
+  /**
+   * Human steering for the controlled fielder. Returns true if it handled the
+   * movement this tick (otherwise the AI behaviour applies, e.g. assisted mode
+   * with no input).
+   */
+  private humanMove(f: Fielder, h: HumanFielding, ctx: FieldContext, spd: number, dt: number): boolean {
+    if (h.mode === 'auto') return false;
+    if (f.diveT > 0) {
+      const step = 6.5 * (f.diveT / DIVE_TIME) * dt;
+      f.pos.x += f.diveDir.x * step;
+      f.pos.z += f.diveDir.z * step;
+      f.speed = step / dt;
+      f.diveT -= dt;
+      if (f.diveT <= 0) f.recoverT = DIVE_RECOVER;
+      return true;
+    }
+    if (f.recoverT > 0) {
+      f.recoverT -= dt;
+      f.speed = 0;
+      return true;
+    }
+    const m = Math.hypot(h.move.x, h.move.z);
+    if (m > 0.15) {
+      h.lastMoveAt = ctx.time;
+      const target = v3(f.pos.x + h.move.x * 5, 0, f.pos.z + h.move.z * 5);
+      this.moveToward(f, target, spd * Math.min(1, m), dt);
+      // Stay inside the rope.
+      const r = lengthXZ(f.pos);
+      if (r > BOUNDARY_RADIUS - 0.5) {
+        f.pos.x *= (BOUNDARY_RADIUS - 0.5) / r;
+        f.pos.z *= (BOUNDARY_RADIUS - 0.5) / r;
+      }
+      return true;
+    }
+    if (f.idx === this.holder) return true; // standing with the ball
+    // Assisted: after a moment without input the fielder carries on by himself.
+    if (h.mode === 'assisted' && ctx.time - h.lastMoveAt > 0.4) return false;
+    f.speed = 0;
+    this.faceBall(f, ctx.ball.pos);
+    return true;
   }
 
   /** A thrown ball that has sailed past its target: back to normal chasing. */

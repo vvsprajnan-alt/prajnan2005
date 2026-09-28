@@ -23,6 +23,8 @@ export interface BallOutcome {
   };
   /** Which batter (by pre-ball role) ends up at the striker's end. */
   atStrikerEnd: 'striker' | 'nonStriker';
+  /** Direction the ball was hit (degrees relative to the batter, + = off side), for the wagon wheel. */
+  shotAngle?: number;
 }
 
 export interface BatterCard {
@@ -344,3 +346,14 @@ export function substituteNewBatter(inn: InningsState, player: number): boolean 
 
 /** Players still to bat, in order. */
 export const yetToBat = (inn: InningsState): number[] => inn.order.slice(inn.nextBatter);
+
+/** Runs scored by a batter in each 30-degree sector (index 0 = -180..-150 ... 11 = 150..180). */
+export function wagonWheel(inn: InningsState, player: number): number[] {
+  const sectors = new Array(12).fill(0);
+  for (const l of inn.log) {
+    if (l.striker !== player || l.outcome.shotAngle === undefined || l.outcome.batRuns <= 0) continue;
+    const i = Math.min(11, Math.max(0, Math.floor((l.outcome.shotAngle + 180) / 30)));
+    sectors[i] += l.outcome.batRuns;
+  }
+  return sectors;
+}

@@ -107,6 +107,26 @@ While `inPlay`, every 1/120 s tick:
   contact shadow and trail, and the camera director. It holds no game logic.
 - Quality presets change pixel ratio, shadows, antialiasing, crowd size and effects.
 
+### Presentation (Phase 7)
+
+- **Data comes from the sim.** Every `BallOutcome` records where the ball pitched (line and length; balls hit
+  on the full use the aimed point, flagged `full`), the speed, the variation and the shot (stroke, timing,
+  hit/edge/miss, lofted). `rules/stats.ts` turns an innings into chart data: `wagonShots`, `pitchMap`,
+  `manhattan`, `worm`. A match can start in an `intro` phase (`introSeconds`) that ends by itself or on
+  `match.continue`; it is part of the replicated state like any other phase.
+- **Commentary** (`ui/commentary.ts`) is a pure function of the innings log, so it is identical for every
+  viewer and can be rebuilt at any time (the Match Centre regenerates the whole innings). Phrasing is picked by
+  a hash of the ball, never by `Math.random`.
+- **Replays** (`game/replay.ts`): the session copies a snapshot every other tick from the run-up until the ball
+  is dead (`BallRecorder`). `planReplay` turns a clip into camera shots - behind the bowler's arm in slow
+  motion up to the stroke, then following the ball; side-on for balls that were missed; a close-up of the
+  stumps for run outs and stumpings - and `frameAt` interpolates positions between recorded frames. The
+  renderer draws recorded snapshots exactly as it draws live ones. In single player the match waits while a
+  replay plays; online it keeps running and the replay gives way as soon as the next run-up starts.
+- **Match Centre** (`ui/matchCentre.ts`, `ui/charts.ts`): charts are SVG strings built by pure functions and
+  use one validated categorical palette on the chart surface (fours blue, sixes orange, wickets aqua with a
+  × marker, everything else neutral), legends, hover/tap tooltips and a table beside every chart.
+
 ## Multiplayer (Phase 5)
 
 ```

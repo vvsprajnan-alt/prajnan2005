@@ -7,7 +7,10 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 6 complete - online multiplayer (1v1 to 2v2, plus spectators) through an authoritative
+**Status:** Phase 7 complete - broadcast presentation: team introductions before the first ball, automatic
+slow-motion replays of boundaries, wickets and dropped catches (plus instant replay), commentary captions,
+milestone banners, end-of-over and new batter/bowler cards, and a Match Centre with the scorecard, wagon wheel,
+pitch map, Manhattan, worm and ball-by-ball commentary. Before that, Phase 6 brought online multiplayer (1v1 to 2v2, plus spectators) through an authoritative
 server: private rooms with invite links, public 1v1/2v2 matchmaking, reconnecting to your seat, quick-chat
 and partner calls - in addition to single player. Single player against the AI is playable in the browser: batting with
 footwork and charging, bowling from over or round the wicket with a delivery-path guide, bowler selection,
@@ -68,7 +71,9 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Fielding: switch fielder / auto | Q / E | LB / RB | Switch / Auto |
 | Quick-chat (online) | M, then 1-9 / 0 | - | - |
 | Run in, then release | Space (twice) | A (twice) | Bowl, then Release |
-| Pause | Esc or P | Start | II |
+| Pause (and the Match Centre) | Esc or P | Start | II |
+| Instant replay of the last ball | I | - | ⟲ |
+| Skip a replay / the team intros | Space | A | Skip |
 
 **Batting.** Hold a direction for where you want to hit it (up = straight, left/right = that side of the
 screen, down = behind) and press a shot as the ball arrives. The stroke (drive, cut, pull, flick, glance...)
@@ -95,8 +100,8 @@ leg side - and illegal positions are pulled inside automatically. "Auto" lets th
 phase and situation.
 
 **Fielding.** When your side bowls you control a fielder once the ball is hit (Settings -> Fielding). On
-Assisted, control jumps to the fielder chasing it, who runs there himself until you steer; catches are automatic
-and he picks a throw if you don't choose one quickly. On Manual you run, press Catch as the ball arrives (a white
+Assisted, control jumps to the fielder chasing it, who runs there automatically until you steer; catches are
+automatic and the fielder picks a throw if you don't choose one quickly. On Manual you run, press Catch as the ball arrives (a white
 ring shows where it will come down) and choose every throw. Dive for balls just out of reach, switch to the
 fielder nearest the ball with Q, and run the ball in to break the stumps yourself.
 
@@ -106,6 +111,16 @@ would have hit the stumps. A review is kept if the decision is overturned or it'
 allowed per over (the second is a no-ball and a free hit), overthrows that reach the rope add the runs already
 run, and a tied match goes to a Super Over. Set your batting order from the Quick Match screen and choose who
 goes in after each wicket. Late in an innings pace bowlers can find reverse swing with the old ball.
+
+**Presentation.** Matches open with the teams walking out: both line-ups, players to watch and the conditions
+while the camera circles the ground (Space skips). Every ball gets a line of commentary along the bottom of the
+screen, and fifties, hundreds, hat-tricks, three- and five-wicket hauls and team landmarks get a banner.
+Boundaries, wickets and dropped catches are replayed in slow motion from broadcast angles - behind the bowler's
+arm, side-on, following the ball, and close up on broken stumps - and I replays the last ball at any time
+between deliveries (Settings -> Replays / Commentary captions). The pause menu opens the **Match Centre**:
+scorecards, a wagon wheel per batter, a pitch map per bowler (with runs by length), runs per over (Manhattan),
+the worm with the target, run rates by phase, and the full ball-by-ball commentary. The same screens appear at
+the innings break and on the result screen.
 
 ## Architecture
 
@@ -123,9 +138,10 @@ apps/server       @crease/server: HTTP + WebSocket server, lobby/rooms, authorit
   data/           fictional players and teams
 apps/client       @crease/client: Vite + three.js front end
   render/         stadium, procedural players and animation, ball, cameras
-  game/           GameSession: fixed-step loop, input to commands, events to presentation
+  game/           GameSession: fixed-step loop, input to commands, events to presentation; replays
   input/          keyboard, gamepad and touch mapped to one set of actions
-  ui/             menus, HUD (scorebug, lower third, meters, touch controls)
+  ui/             menus, HUD (scorebug, lower third, meters, touch controls), commentary,
+                  Match Centre and its SVG charts
   audio/          synthesized sound effects (WebAudio)
 scripts/          headless match, physics probe, browser smoke test
 docs/             architecture notes and the roadmap
@@ -202,11 +218,12 @@ overs as bowler; the other one fields (and can set the field). A lone human on a
 ## Graphics settings
 
 Settings -> Graphics quality: Low / Medium / High / Ultra (resolution scale, shadows and shadow resolution,
-antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under floodlights.
+antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under floodlights. Replays: key moments
+or off; commentary captions: on or off.
 
 ## Testing
 
-`npm test` runs ~110 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~130 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
@@ -215,4 +232,6 @@ rule, super overs, batting orders, reverse swing, human fielding control, adapti
 (mirror stays identical to the server, full-state round trip), input back-dating limits, 2v2 role rules, and
 end-to-end server tests with real WebSocket clients (1v1 with a mid-match spectator and a resync, 2v2, and a
 player dropping and reconnecting mid-match), plus lobby tests with a fake clock (resume, replaced tabs, grace
-periods, host migration, chat, matchmaking).
+periods, host migration, chat, matchmaking), and presentation tests: the intro phase, per-ball delivery and
+shot data, chart data (wagon wheel, pitch map, Manhattan, worm), commentary and milestones for every ball of a
+real match, replay recording and camera planning, and the SVG charts.

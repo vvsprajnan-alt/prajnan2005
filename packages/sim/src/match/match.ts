@@ -1340,6 +1340,7 @@ export class CricketMatch {
       stumpsDown: { ...this.stumpsDown },
       bowlSide: deliverySide(this.bowlerDef.bowlArm, this.intent.side),
       charged: this.charged,
+      hit: this.batContact,
       control: this.controlSnapshot(),
       score: {
         runs: inn.runs,
@@ -1368,6 +1369,8 @@ export interface MatchSnapshot {
   /** World-x sign of the side the bowler delivers from. */
   bowlSide: 1 | -1;
   charged: boolean;
+  /** The bat has touched the ball this delivery. */
+  hit: boolean;
   /** Human fielding: the controlled fielder, whether they hold the ball, and where a catch will come down. */
   control: { pos: Vec3; heading: number; holding: boolean; diving: boolean; landing: Vec3 | null; mode: FieldingControlMode } | null;
   score: { runs: number; wickets: number; overs: string };

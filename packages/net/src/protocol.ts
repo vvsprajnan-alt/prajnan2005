@@ -93,6 +93,7 @@ export function buildMatchConfig(n: NetMatchConfig): MatchConfig {
   cfg.fieldingControl = n.fielding;
   cfg.maxInputRewind = 0.3;
   cfg.netGrace = 0.25;
+  cfg.introSeconds = 8;
   return cfg;
 }
 

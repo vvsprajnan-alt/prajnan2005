@@ -28,6 +28,8 @@ import { Action, Input } from '../input/input';
 import { World } from '../render/world';
 import { ASSIST_LEVEL, Settings } from '../settings';
 import { Hud, HudMode } from '../ui/hud';
+import { describeBall } from '../ui/commentary';
+import { BallRecorder, ReplayFrame, ReplayInfo, ReplayShot, frameAt, planReplay } from './replay';
 import { LocalDriver, MatchDriver } from './driver';
 import { QUICK_CHAT } from '@crease/net';
 
@@ -40,6 +42,8 @@ export interface SessionCallbacks {
   /** Send a quick-chat phrase (online only). */
   onChat?(id: number, teamOnly: boolean): void;
 }
+
+const WICKET_LABEL: Record<string, string> = { bowled: 'Bowled', caught: 'Caught', lbw: 'LBW', runOut: 'Run out', stumped: 'Stumped', hitWicket: 'Hit wicket' };
 
 const TIMING_TEXT: Record<string, [string, string]> = {
   perfect: ['PERFECT', 'perfect'],
@@ -73,6 +77,13 @@ export class GameSession {
   private screenKey = '';
   private pickerFor = '';
   private previewKey = '';
+  /** Snapshots of the current and last delivery, for replays. */
+  readonly recorder = new BallRecorder();
+  private replay: { frames: ReplayFrame[]; shots: ReplayShot[]; shot: number; t: number; simElapsed: number; down: { S: boolean; B: boolean } } | null = null;
+  private autoReplay: { at: number; info: ReplayInfo; label: string } | null = null;
+  private droppedThisBall = false;
+  private later: { at: number; fn: () => void }[] = [];
+  private batterSeen = { inn: '', count: 0, pending: false };
 
   constructor(
     cfg: MatchConfig,
@@ -144,7 +155,8 @@ export class GameSession {
     const dt = Math.min(realDt, 0.1);
     const net = this.driver.networked;
     if (!this.paused) this.handleInput();
-    if (!this.paused || net) {
+    const hold = this.paused || (this.replay !== null && !net);
+    if (!hold || net) {
       // Online the mirror plays ~100 ms behind the newest server tick, speeding
       // up or slowing down slightly to hold that buffer.
       let rate = 1;
@@ -155,8 +167,7 @@ export class GameSession {
           while (this.driver.backlog() > 12) {
             const ev = this.driver.step();
             if (!ev) break;
-            this.time += DT;
-            for (const e of ev) this.onEvent(e);
+            this.afterStep(ev);
           }
         }
         rate = backlog > 36 ? 1.25 : backlog > 16 ? 1.05 : backlog < 6 ? 0.9 : 1;
@@ -169,11 +180,22 @@ export class GameSession {
           break;
         }
         this.acc -= DT;
-        this.time += DT;
-        for (const e of events) this.onEvent(e);
+        this.afterStep(events);
       }
     }
     this.present(this.paused && !net ? 0 : dt);
+  }
+
+  private afterStep(events: MatchEvent[]): void {
+    this.time += DT;
+    for (const e of events) this.onEvent(e);
+    const m = this.match;
+    if (m.tick % 2 === 0 || m.phase !== 'inPlay') this.recorder.record(m.snapshot());
+  }
+
+  /** Run `fn` after `delay` seconds of match time (held while paused or replaying). */
+  private after(delay: number, fn: () => void): void {
+    this.later.push({ at: this.time + delay, fn });
   }
 
   private send(cmd: Parameters<MatchHost['submit']>[1], role: 'striker' | 'nonStriker' | 'bowler' | 'fielder' = 'striker'): void {
@@ -185,6 +207,24 @@ export class GameSession {
     const actions = this.input.poll();
     const m = this.match;
     const mode = this.mode();
+    if (this.replay) {
+      for (const a of actions) {
+        if (a === 'pause') this.cb.onPause();
+        else if (a === 'primary' || a === 'replay') this.endReplay();
+      }
+      return;
+    }
+    if (m.phase === 'intro') {
+      for (const a of actions) {
+        if (a === 'pause') this.cb.onPause();
+        else if (a === 'primary') this.skipIntro();
+      }
+      return;
+    }
+    if (actions.includes('replay') && (m.phase === 'preDelivery' || m.phase === 'dead')) {
+      this.instantReplay();
+      return;
+    }
     // Quick-chat (online): M opens the menu, digits pick a phrase.
     if (this.driver.networked) {
       for (const a of actions) {
@@ -366,6 +406,12 @@ export class GameSession {
     );
   }
 
+  /** Offer the incoming-batter choice once any replay has finished. */
+  private pickBatterWhenFree(): void {
+    if (this.replay || this.autoReplay) this.after(0.3, () => this.pickBatterWhenFree());
+    else if (this.mode() === 'batting' && !this.match.inn.complete && this.match.phase !== 'inPlay') this.openBatterPicker();
+  }
+
   private openPicker(): void {
     this.hud.showPicker(
       this.match,
@@ -393,6 +439,7 @@ export class GameSession {
     const world = this.world;
     switch (e.type) {
       case 'release':
+        this.droppedThisBall = false;
         hud.setSpeed(e.speedKmh, `${VARIATION_LABEL[e.variation as Variation] ?? e.variation}${e.reverse ? ' · reversing' : ''}`);
         this.world.ball.resetTrail();
         break;
@@ -485,6 +532,7 @@ export class GameSession {
         this.sfx.catchSound();
         break;
       case 'dropped':
+        this.droppedThisBall = true;
         hud.showToast(`Dropped by ${e.name}!`, now);
         this.world.cheer(0.4);
         this.sfx.cheer(0.3);
@@ -500,26 +548,28 @@ export class GameSession {
         const name = m.battingTeam.players[e.batter]?.name ?? '';
         hud.showBanner('OUT!', `${name} ${e.text}`, 'out', now, 3);
         if (e.kind !== 'lbw') world.umpireSignal('out', now + 0.3);
-        if (this.mode() === 'batting' && !m.inn.complete) setTimeout(() => !this.disposed && this.openBatterPicker(), 900);
+        if (this.mode() === 'batting' && !m.inn.complete) this.after(0.9, () => this.pickBatterWhenFree());
         this.world.cheer(1);
         this.sfx.cheer(0.9);
         break;
       }
       case 'ballDead': {
         if (!/^(FOUR|SIX|OUT)/.test(e.summary)) hud.showToast(e.summary, now);
+        this.onBallComplete();
         const last = m.inn.log[m.inn.log.length - 1]?.outcome;
         if (last && (last.extra === 'bye' || last.extra === 'legBye')) world.umpireSignal('bye', now + 0.3);
         this.followUntil = Math.min(this.followUntil, now + 1.4);
         break;
       }
       case 'overComplete':
-        setTimeout(() => !this.disposed && hud.showToast(`End of over ${e.over}`, this.time), 1200);
+        {
+          const inn = m.inn;
+          this.after(1.2, () => this.overCard(inn, e.over));
+        }
         break;
-      case 'newBowler': {
-        const p = m.bowlingTeam.players[e.player]!;
-        hud.showToast(`New bowler: ${p.name} (${p.bowlStyle})`, now);
+      case 'newBowler':
+        this.after(0.3, () => this.bowlerCard(e.player));
         break;
-      }
       case 'inningsComplete':
         break;
       case 'matchComplete':
@@ -533,6 +583,39 @@ export class GameSession {
     const m = this.match;
     const mode = this.mode();
     const now = this.time;
+    if (this.later.length) {
+      const due = this.later.filter((l) => l.at <= now);
+      if (due.length) {
+        this.later = this.later.filter((l) => l.at > now);
+        for (const l of due) if (!this.disposed) l.fn();
+      }
+    }
+    if (this.autoReplay && now >= this.autoReplay.at && !this.replay) {
+      const r = this.autoReplay;
+      this.autoReplay = null;
+      const frames = this.recorder.latest();
+      if (frames && (m.phase === 'dead' || m.phase === 'review' || this.driver.networked)) this.startReplay(frames, r.info, r.label);
+    }
+    if (this.replay && this.presentReplay(dt)) {
+      this.hud.update(m, now, mode);
+      this.checkScreens(m);
+      return;
+    }
+    // Team introductions.
+    if (m.phase === 'intro') {
+      if (!this.hud.introShown) this.hud.showIntro(m, this.humanTeam !== null ? () => this.skipIntro() : null);
+      this.world.cams.mode = 'intro';
+      this.hud.update(m, now, mode);
+      this.hud.setHint('');
+      this.hud.setControls('watching', m.phase, this.input.device);
+      this.world.render(m.snapshot(), dt, now);
+      return;
+    }
+    if (this.hud.introShown) {
+      this.hud.hideIntro();
+      this.world.cams.cut();
+    }
+    this.newBatterCard(m);
     // Camera choice.
     const reviewing = (m.phase === 'review' && m.pendingReview?.reviewing) || now < this.trackUntil;
     if (!reviewing && this.world.cams.mode === 'tracking') {
@@ -634,6 +717,13 @@ export class GameSession {
     if (this.driver.networked && mode === 'bowling' && !this.can('bowler') && !fielding) hint = 'Your partner is bowling this over - you field when the ball is hit (G: set the field)';
     hud.setHint(hint);
 
+    this.checkScreens(m);
+    this.updateBigScreen(m);
+    const snap = m.snapshot();
+    this.world.render(snap, dt, this.time);
+  }
+
+  private checkScreens(m: CricketMatch): void {
     if (m.phase === 'inningsBreak' && this.breakShownFor !== m.innings.length) {
       this.breakShownFor = m.innings.length;
       this.hud.hideReviewPrompt();
@@ -643,10 +733,185 @@ export class GameSession {
       this.completeShown = true;
       setTimeout(() => !this.disposed && this.cb.onComplete(m), 1500);
     }
+  }
 
-    this.updateBigScreen(m);
-    const snap = m.snapshot();
-    this.world.render(snap, dt, this.time);
+  private skipIntro(): void {
+    if (this.humanTeam === null || this.match.phase !== 'intro') return;
+    this.driver.submit({ team: this.humanTeam }, { type: 'match.continue' });
+  }
+
+  // ------------------------------------------------------------ presentation
+
+  /** A delivery has been scored: caption, milestone and (for key moments) a replay. */
+  private onBallComplete(): void {
+    const m = this.match;
+    const inn = m.inn;
+    const index = inn.log.length - 1;
+    if (index < 0) return;
+    const rec = inn.log[index]!;
+    const c = describeBall(m.cfg.teams, inn, index, m.cfg.rules.ballsPerOver);
+    const now = this.time;
+    if (this.settings.captions) this.hud.showCaption(c.over, c.text, now);
+    if (c.milestone) {
+      const text = c.milestone;
+      this.after(rec.outcome.boundary || rec.outcome.wicket ? 2.4 : 0.6, () => this.hud.showMilestone(text, this.time));
+    }
+    const o = rec.outcome;
+    const key = o.wicket || o.boundary || this.droppedThisBall;
+    const watching = this.humanTeam === null && !this.driver.networked; // attract mode
+    if (key && this.settings.replays === 'key' && !watching) {
+      const label = o.wicket ? WICKET_LABEL[o.wicket.kind] ?? 'Wicket' : o.boundary === 6 ? 'Six' : o.boundary === 4 ? 'Four' : 'Dropped catch';
+      this.autoReplay = { at: now + (o.wicket ? 1.3 : 1.0), info: { wicket: o.wicket?.kind, boundary: o.boundary }, label };
+    }
+  }
+
+  private instantReplay(): void {
+    const frames = this.recorder.latest();
+    if (!frames) return;
+    const last = this.match.inn.log[this.match.inn.log.length - 1]?.outcome;
+    this.startReplay(frames, { wicket: last?.wicket?.kind, boundary: last?.boundary }, 'Last ball');
+  }
+
+  private startReplay(frames: ReplayFrame[], info: ReplayInfo, label: string): void {
+    const shots = planReplay(frames, info);
+    if (!shots.length) return;
+    this.replay = { frames, shots, shot: -1, t: 0, simElapsed: 0, down: { S: false, B: false } };
+    this.hud.setReplay(label, () => this.endReplay());
+    this.hud.hideReviewPrompt();
+    this.world.clearSignal();
+    this.world.setPathPreview(null);
+    this.world.setShotCue(null);
+    this.world.stadium.marker.visible = false;
+    this.world.stadium.lengthGuide.visible = false;
+    this.nextShot();
+  }
+
+  private nextShot(): void {
+    const r = this.replay;
+    if (!r) return;
+    r.shot++;
+    const shot = r.shots[r.shot];
+    if (!shot) {
+      this.endReplay();
+      return;
+    }
+    r.t = shot.from;
+    const f = frameAt(r.frames, shot.from);
+    const cams = this.world.cams;
+    cams.mode = shot.cam;
+    if (shot.end) cams.focusEnd = shot.end;
+    if (shot.cam === 'follow') cams.startFollow(new THREE.Vector3(f.ball.vel.x, f.ball.vel.y, f.ball.vel.z));
+    cams.cut();
+    r.down = { ...f.stumpsDown };
+    this.world.setStumps(r.down, this.replayClock());
+    this.world.ball.resetTrail();
+  }
+
+  private replayClock(): number {
+    return this.time + (this.replay?.simElapsed ?? 0);
+  }
+
+  endReplay(): void {
+    if (!this.replay) return;
+    this.replay = null;
+    this.hud.setReplay(null);
+    this.world.setStumps(this.match.snapshot().stumpsDown, this.time);
+    this.world.ball.resetTrail();
+    this.world.cams.mode = this.preBallCam();
+    this.world.cams.cut();
+    this.followUntil = 0;
+    this.cutUntil = 0;
+  }
+
+  /** Draw the replay; false once it has finished (or must give way to live play online). */
+  private presentReplay(dt: number): boolean {
+    const r = this.replay!;
+    const m = this.match;
+    if (this.driver.networked && !['dead', 'preDelivery', 'review'].includes(m.phase)) {
+      this.endReplay();
+      return false;
+    }
+    let shot = r.shots[r.shot]!;
+    r.t += dt * shot.speed;
+    r.simElapsed += dt * shot.speed;
+    if (r.t >= shot.to) {
+      this.nextShot();
+      if (!this.replay) return false;
+      shot = r.shots[r.shot]!;
+    }
+    const snap = frameAt(r.frames, r.t);
+    for (const end of ['S', 'B'] as const) {
+      if (snap.stumpsDown[end] && !r.down[end]) {
+        this.world.onStumpsBroken(end, this.replayClock());
+        this.sfx.stumps();
+      }
+    }
+    r.down = { ...snap.stumpsDown };
+    this.world.render(snap, dt * shot.speed, this.replayClock());
+    return true;
+  }
+
+  private overCard(inn: import('@crease/sim').InningsState, over: number): void {
+    const m = this.match;
+    const bpo = m.cfg.rules.ballsPerOver;
+    const balls = inn.log.filter((l) => l.over === over - 1);
+    const runs = balls.reduce((a, l) => a + l.outcome.batRuns + l.outcome.extraRuns + (l.outcome.extra === 'wide' || l.outcome.extra === 'noBall' ? 1 : 0), 0);
+    const wkts = balls.filter((l) => l.outcome.wicket).length;
+    const bat = m.cfg.teams[inn.battingTeam]!;
+    const bowlTeam = m.cfg.teams[inn.bowlingTeam]!;
+    const bowlerIdx = balls[0]?.bowler;
+    const card = inn.bowlers.find((b) => b.player === bowlerIdx);
+    const rows: [string, string][] = [
+      [bat.shortName, `${inn.runs}/${inn.wickets} (${Math.floor(inn.legalBalls / bpo)} ov)`],
+      ['This over', `${runs} run${runs === 1 ? '' : 's'}${wkts ? `, ${wkts} wkt${wkts > 1 ? 's' : ''}` : ''} · ${balls.map((b) => b.symbol).join(' ')}`],
+    ];
+    if (card && bowlerIdx !== undefined) rows.push([bowlTeam.players[bowlerIdx]!.shortName, `${card.wickets}-${card.runs} (${Math.floor(card.balls / bpo)}.${card.balls % bpo})`]);
+    if (!inn.complete) {
+      for (const i of [inn.striker, inn.nonStriker]) {
+        const b = inn.batters[i];
+        if (b) rows.push([bat.players[b.player]!.shortName, `${b.runs} (${b.balls})`]);
+      }
+    }
+    if (inn.target !== null && !inn.complete) {
+      const left = inn.overs * bpo - inn.legalBalls;
+      rows.push(['Need', `${Math.max(0, inn.target - inn.runs)} off ${left}`]);
+    }
+    this.hud.showCard(`End of over ${over}`, rows, this.time, 5, bat.colors.primary);
+  }
+
+  private bowlerCard(player: number): void {
+    const m = this.match;
+    const p = m.bowlingTeam.players[player]!;
+    const bpo = m.cfg.rules.ballsPerOver;
+    const card = m.inn.bowlers.find((b) => b.player === player);
+    const styles: Record<string, string> = { fast: 'Fast', medium: 'Medium pace', offspin: 'Off-spin', legspin: 'Leg-spin' };
+    this.hud.showCard('Into the attack', [
+      [p.name, `${p.bowlArm === 'R' ? 'Right' : 'Left'}-arm ${styles[p.bowlStyle] ?? p.bowlStyle}`],
+      ['Today', card && card.balls ? `${Math.floor(card.balls / bpo)}.${card.balls % bpo}-${card.maidens}-${card.runs}-${card.wickets}` : 'First over'],
+      ['Bowling', String(p.attrs.bowling)],
+    ], this.time, 4, m.bowlingTeam.colors.primary);
+  }
+
+  /** Card for a batter walking out after a wicket (shown once they reach the crease). */
+  private newBatterCard(m: CricketMatch): void {
+    const inn = m.inn;
+    const key = `${m.inningsIndex}`;
+    if (this.batterSeen.inn !== key) this.batterSeen = { inn: key, count: inn.batters.length, pending: false };
+    if (inn.batters.length > this.batterSeen.count) {
+      this.batterSeen.count = inn.batters.length;
+      this.batterSeen.pending = true;
+    }
+    if (!this.batterSeen.pending || m.phase !== 'preDelivery') return;
+    this.batterSeen.pending = false;
+    const card = inn.batters[inn.batters.length - 1]!;
+    const p = m.battingTeam.players[card.player]!;
+    const pos = inn.order.indexOf(card.player) + 1;
+    this.hud.showCard('New batter', [
+      [p.name, `${p.batHand === 'R' ? 'Right' : 'Left'}-handed ${p.role}`],
+      ['Batting at', `No. ${pos > 0 ? pos : inn.batters.length}`],
+      ['Batting / Power', `${p.attrs.batting} / ${p.attrs.power}`],
+      ['Score', `${inn.runs}/${inn.wickets}`],
+    ], this.time, 4.5, m.battingTeam.colors.primary);
   }
 
   /** Stadium big screen mirrors the score. */

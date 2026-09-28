@@ -7,18 +7,21 @@ export interface WagonShot {
   runs: number;
   boundary: 0 | 4 | 6;
   over: number;
+  /** The batter (player index). */
+  player: number;
 }
 
 export function wagonShots(inn: InningsState, player?: number): WagonShot[] {
   return inn.log
     .filter((l) => l.outcome.shotAngle !== undefined && l.outcome.batRuns > 0 && (player === undefined || l.striker === player))
-    .map((l) => ({ angle: l.outcome.shotAngle!, runs: l.outcome.batRuns, boundary: l.outcome.boundary, over: l.over }));
+    .map((l) => ({ angle: l.outcome.shotAngle!, runs: l.outcome.batRuns, boundary: l.outcome.boundary, over: l.over, player: l.striker }));
 }
 
 export interface PitchPoint {
   line: number;
   length: number;
   runs: number;
+  boundary: 0 | 4 | 6;
   wicket: boolean;
   bowler: number;
   speedKmh?: number;
@@ -34,6 +37,7 @@ export function pitchMap(inn: InningsState, bowler?: number): PitchPoint[] {
       line: l.outcome.pitch!.line,
       length: l.outcome.pitch!.length,
       runs: l.outcome.batRuns + l.outcome.extraRuns,
+      boundary: l.outcome.boundary,
       wicket: !!l.outcome.wicket,
       bowler: l.bowler,
       speedKmh: l.outcome.speedKmh,

@@ -157,6 +157,15 @@ export class World {
     this.signal = { kind, at: time };
   }
 
+  clearSignal(): void {
+    this.signal = null;
+  }
+
+  /** Stumps state as of `time` (used when a replay ends). */
+  setStumps(down: { S: boolean; B: boolean }, time: number): void {
+    this.stumpsBrokenAt = { S: down.S ? time - 10 : null, B: down.B ? time - 10 : null };
+  }
+
   onStumpsBroken(end: 'S' | 'B', time: number): void {
     this.stumpsBrokenAt[end] = time;
   }
@@ -242,7 +251,7 @@ export class World {
     // Crowd and camera.
     this.excitement *= Math.exp(-0.5 * dt);
     this.stadium.update(time, this.excitement);
-    this.cams.update(dt, { ball: bp, bowler: new THREE.Vector3(s.bowler.pos.x, 0, s.bowler.pos.z), offS, runUpT: s.runUp.t });
+    this.cams.update(dt, { ball: bp, bowler: new THREE.Vector3(s.bowler.pos.x, 0, s.bowler.pos.z), offS, runUpT: s.runUp.t, time });
     this.renderer.render(this.scene, this.cams.camera);
   }
 }

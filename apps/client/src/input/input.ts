@@ -21,6 +21,7 @@ export type Action =
   | 'bowlers' // bowling: choose the bowler for this over
   | 'review' // ask for a ball-tracking review
   | 'chat' // open quick-chat (online)
+  | 'replay' // instant replay of the last ball
   | `var${number}`;
 
 const KEYMAP: Record<string, Action> = {
@@ -46,6 +47,7 @@ const KEYMAP: Record<string, Action> = {
   KeyH: 'bowlers',
   KeyU: 'review',
   KeyM: 'chat',
+  KeyI: 'replay',
 };
 
 // Standard gamepad mapping. LT/RT (6/7) are held modifiers for footwork, not actions.

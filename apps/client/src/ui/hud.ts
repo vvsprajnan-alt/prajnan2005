@@ -47,6 +47,14 @@ export class Hud {
   private reviewDeadline = 0;
   private trackStart = 0;
   private trackData: BallTracking | null = null;
+  private caption = h('div', { class: 'caption' });
+  private captionUntil = 0;
+  private infoCard = h('div', { class: 'info-card' });
+  private cardUntil = 0;
+  private replayBadge = h('div', { class: 'replay-badge' });
+  private intro = h('div', { class: 'intro' });
+  private milestone = h('div', { class: 'milestone' });
+  private milestoneUntil = 0;
   private dpad: HTMLElement;
   private bannerUntil = 0;
   private feedbackUntil = 0;
@@ -58,12 +66,14 @@ export class Hud {
   constructor(parent: HTMLElement, private input: Input, onPause: () => void) {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.dpad, pause);
+    const replay = h('button', { class: 'ctrl replay-btn', onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger('replay'); }, 'aria-label': 'Instant replay', title: 'Instant replay (I)' }, '⟲');
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.dpad, pause, replay);
     this.chatMenu.style.display = 'none';
     this.roleBox.style.display = 'none';
     this.reviewBox.style.display = 'none';
     this.trackBox.style.display = 'none';
     this.picker.style.display = 'none';
+    for (const e of [this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro]) e.style.display = 'none';
     parent.append(this.el);
   }
 
@@ -107,6 +117,78 @@ export class Hud {
   showBanner(big: string, small: string, cls: string, now: number, dur = 2.4): void {
     this.banner.innerHTML = `<div class="big ${cls}">${esc(big)}</div>${small ? `<div class="small">${esc(small)}</div>` : ''}`;
     this.bannerUntil = now + dur;
+  }
+
+  /** Commentary caption along the bottom of the screen. */
+  showCaption(over: string, text: string, now: number, dur = 5.5): void {
+    this.caption.innerHTML = `<span class="ov">${esc(over)}</span><span class="tx">${esc(text)}</span>`;
+    this.caption.style.display = '';
+    this.captionUntil = now + dur;
+  }
+
+  /** Milestone strip (fifty, hat-trick, team hundred...). */
+  showMilestone(text: string, now: number, dur = 3.5): void {
+    this.milestone.innerHTML = `<span>${esc(text)}</span>`;
+    this.milestone.style.display = '';
+    this.milestoneUntil = now + dur;
+  }
+
+  /** Broadcast info card: end of over, new batter, new bowler. */
+  showCard(title: string, rows: [string, string][], now: number, dur = 4.5, color = ''): void {
+    this.infoCard.innerHTML = `<div class="ic-title"${color ? ` style="border-color:${esc(color)}"` : ''}>${esc(title)}</div>${rows
+      .map(([k, v]) => `<div class="ic-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`)
+      .join('')}`;
+    this.infoCard.style.display = '';
+    this.cardUntil = now + dur;
+  }
+
+  /** "REPLAY" badge with a skip button; hides the playing controls while shown. */
+  setReplay(label: string | null, onSkip: () => void = () => {}): void {
+    this.el.classList.toggle('cinematic', !!label);
+    this.replayBadge.style.display = label ? '' : 'none';
+    if (!label) return;
+    this.replayBadge.innerHTML = '';
+    this.replayBadge.append(
+      h('span', { class: 'rp-dot' }), h('b', {}, 'REPLAY'), h('span', { class: 'muted' }, label),
+      h('button', { class: 'ctrl', onclick: onSkip }, 'Skip', h('kbd', {}, 'Space / A')),
+    );
+  }
+
+  /** Team introductions before the first ball. */
+  showIntro(m: CricketMatch, onSkip: (() => void) | null): void {
+    const cfg = m.cfg;
+    const n = cfg.rules.playersPerSide;
+    const side = (t: 0 | 1) => {
+      const team = cfg.teams[t]!;
+      const order = (cfg.battingOrders?.[t] ?? team.players.map((_, i) => i)).slice(0, n);
+      const best = (k: 'batting' | 'bowling') => order.map((i) => team.players[i]!).reduce((a, p) => (p.attrs[k] > a.attrs[k] ? p : a));
+      return h('div', { class: 'intro-team', style: `--team:${team.colors.primary};--team2:${team.colors.secondary}` },
+        h('div', { class: 'it-head' }, h('span', { class: 'it-short' }, team.shortName), h('div', {}, h('div', { class: 'it-name' }, team.name), h('div', { class: 'muted' }, team.city))),
+        h('ol', { class: 'it-xi' }, ...order.map((i) => {
+          const p = team.players[i]!;
+          return h('li', {}, h('span', {}, p.name), h('span', { class: 'muted' }, p.role));
+        })),
+        h('div', { class: 'it-watch' }, h('span', { class: 'muted' }, 'Players to watch: '), `${best('batting').name} · ${best('bowling').name}`));
+    };
+    const bat = cfg.teams[m.inn.battingTeam]!;
+    this.intro.innerHTML = '';
+    this.intro.append(
+      h('div', { class: 'intro-top' }, h('div', { class: 'it-title' }, `${cfg.teams[0]!.name} v ${cfg.teams[1]!.name}`),
+        h('div', { class: 'muted' }, `${cfg.rules.format} · ${cfg.rules.overs} overs a side · ${cfg.conditions.name} pitch · ${bat.name} bat first`)),
+      h('div', { class: 'intro-teams' }, side(0), h('div', { class: 'it-vs' }, 'v'), side(1)),
+    );
+    if (onSkip) this.intro.append(h('button', { class: 'ctrl intro-skip', onclick: onSkip }, 'Skip intro', h('kbd', {}, 'Space / A')));
+    this.intro.style.display = '';
+    this.el.classList.add('cinematic', 'intro-on');
+  }
+
+  hideIntro(): void {
+    this.intro.style.display = 'none';
+    this.el.classList.remove('cinematic', 'intro-on');
+  }
+
+  get introShown(): boolean {
+    return this.intro.style.display !== 'none';
   }
 
   showFeedback(text: string, cls: string, now: number): void {
@@ -381,6 +463,9 @@ export class Hud {
     }
     if (this.trackData && this.trackBox.querySelector('.tb-result') === null) this.renderTracking(now, null);
     this.toast.style.display = now < this.toastUntil ? '' : 'none';
+    if (now > this.captionUntil) this.caption.style.display = 'none';
+    if (now > this.cardUntil) this.infoCard.style.display = 'none';
+    if (now > this.milestoneUntil) this.milestone.style.display = 'none';
     const inn = m.inn;
     const key = `${m.inningsIndex}|${inn.log.length}|${inn.runs}|${inn.wickets}|${m.phase}|${inn.currentBowler}|${inn.striker}`;
     if (key === this.lastKey) return;

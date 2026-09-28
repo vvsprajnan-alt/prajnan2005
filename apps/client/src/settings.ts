@@ -12,6 +12,10 @@ export interface Settings {
   showPitchGuide: boolean;
   fielding: FieldingControl;
   playerName: string;
+  /** Automatic replays of boundaries, wickets and drops. */
+  replays: 'key' | 'off';
+  /** Commentary captions. */
+  captions: boolean;
 }
 
 export interface QualityPreset {
@@ -36,7 +40,7 @@ export const ASSIST_LEVEL: Record<Assist, number> = { beginner: 1, standard: 0.5
 const KEY = 'crease-clash-settings-v1';
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { quality: 'medium', timeOfDay: 'night', assist: 'beginner', autoRun: false, sound: true, showPitchGuide: true, fielding: 'assisted', playerName: '' };
+  const defaults: Settings = { quality: 'medium', timeOfDay: 'night', assist: 'beginner', autoRun: false, sound: true, showPitchGuide: true, fielding: 'assisted', playerName: '', replays: 'key', captions: true };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...defaults, ...JSON.parse(raw) };

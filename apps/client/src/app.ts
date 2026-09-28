@@ -17,6 +17,7 @@ import { World } from './render/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
 import { fieldEditor } from './ui/fieldEditor';
+import { CentreTab, matchCentre } from './ui/matchCentre';
 import { NetClient, loadSession, saveSession } from './net/client';
 import { NetDriver } from './game/driver';
 import { QUICK_CHAT, QueueMode, RoomState, Seat, ServerMsg } from '@crease/net';
@@ -95,6 +96,7 @@ export class App {
     cfg.conditions = PITCH_PRESETS[setup.pitch] ?? PITCH_PRESETS.balanced!;
     cfg.battingFirst = humanBatsFirst ? 0 : 1;
     cfg.battingOrders = [setup.myOrder, null];
+    cfg.introSeconds = practice ? 0 : 12;
     this.clearScreens();
     this.session = new GameSession(cfg, 0, this.world, this.input, this.sfx, this.settings, {
       onInningsBreak: (m) => this.inningsBreak(m),
@@ -288,6 +290,10 @@ export class App {
         field('Bowling pitch guide', sel('showPitchGuide', [['true', 'On'], ['false', 'Off']])),
         field('Sound', sel('sound', [['true', 'On'], ['false', 'Off']])),
       ),
+      h('div', { class: 'row', style: 'margin-top:12px' },
+        field('Replays', sel('replays', [['key', 'Key moments (boundaries, wickets, drops)'], ['off', 'Off (I: instant replay)']])),
+        field('Commentary captions', sel('captions', [['true', 'On'], ['false', 'Off']])),
+      ),
       h('p', { class: 'muted', style: 'font-size:13px' }, 'Graphics and time-of-day changes reload the game.'),
       h('div', { class: 'row', style: 'margin-top:12px' },
         h('button', { class: 'btn', onclick: () => {
@@ -338,9 +344,12 @@ export class App {
       <tr><td>Catch (timing press, Manual)</td><td>L</td><td>B</td><td>Catch</td></tr>
       <tr><td>Switch to the fielder nearest the ball / back to auto</td><td>Q / E</td><td>LB / RB</td><td>Switch / Auto</td></tr>
       </tbody></table>
-      <p class="muted">Assisted: control jumps to the fielder chasing the ball, who runs there himself until you steer; catches are automatic; if you don't pick a throw quickly he chooses. Manual: you run, time the catch press as the ball arrives (the white ring shows where it will land), and choose every throw. Run the ball in yourself to break the stumps.</p>
+      <p class="muted">Assisted: control jumps to the fielder chasing the ball, who runs there automatically until you steer; catches are automatic; if you don't pick a throw quickly the fielder chooses. Manual: you run, time the catch press as the ball arrives (the white ring shows where it will land), and choose every throw. Run the ball in yourself to break the stumps.</p>
       <h3>General</h3>
-      <table class="card"><tbody><tr><td>Pause</td><td>Esc / P</td><td>Start</td><td>II button</td></tr></tbody></table>`;
+      <table class="card"><tbody><tr><td>Pause (Match Centre: scorecard, charts, commentary)</td><td>Esc / P</td><td>Start</td><td>II button</td></tr>
+      <tr><td>Instant replay of the last ball (between balls)</td><td>I</td><td>—</td><td>Replay button</td></tr>
+      <tr><td>Skip a replay or the team intros</td><td>Space</td><td>A</td><td>Skip</td></tr></tbody></table>
+      <p class="muted">Boundaries, wickets and dropped catches are replayed automatically (turn this off in Settings).</p>`;
     this.show(h('div', { class: 'menu-card' }, this.header('Controls'), h('div', { html }),
       h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: back }, 'Back'))));
   }
@@ -629,12 +638,15 @@ export class App {
 
   private onlineResults(m: CricketMatch): void {
     const potm = m.playerOfMatch;
-    this.show(h('div', { class: 'menu-card' }, this.header(m.result ?? 'Match complete'),
-      potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name)) : null,
-      h('div', { html: m.innings.map((i) => this.scorecardHtml(m, i)).join('') }),
-      h('div', { class: 'row', style: 'margin-top:18px' },
+    this.show(matchCentre(m, {
+      title: m.result ?? 'Match complete',
+      sub: potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name)) : null,
+      scorecardHtml: (i) => this.scorecardHtml(m, i),
+      actions: [
         h('button', { class: 'btn', onclick: () => { this.startAttract(); this.roomScreen(); } }, 'Back to the room'),
-        h('button', { class: 'btn secondary', onclick: () => { this.leaveOnline(); this.mainMenu(); } }, 'Leave'))), true);
+        h('button', { class: 'btn secondary', onclick: () => { this.leaveOnline(); this.mainMenu(); } }, 'Leave'),
+      ],
+    }), true);
   }
 
   private openFieldEditor(): void {
@@ -659,7 +671,7 @@ export class App {
     this.show(h('div', { class: 'menu-card', style: 'max-width:520px' }, this.header('Paused'),
       h('div', { class: 'menu-grid' },
         this.tile('Resume', '', resume, true),
-        this.tile('Scorecard', '', () => this.scorecardOverlay(s.match, () => this.pauseMenu())),
+        this.tile('Match Centre', 'Scorecard, charts, commentary', () => this.matchCentreOverlay(s.match, () => this.pauseMenu())),
         this.tile('Controls', '', () => this.controlsScreen(() => this.pauseMenu())),
         this.tile('Quit to menu', '', () => { if (s.driver.networked) this.leaveOnline(); this.mainMenu(); }))), true);
   }
@@ -676,9 +688,13 @@ export class App {
       <table class="card" style="margin-top:8px"><thead><tr><th>Bowler</th><th>O</th><th>M</th><th>R</th><th>W</th><th>Econ</th></tr></thead><tbody>${wRows}</tbody></table>`;
   }
 
-  private scorecardOverlay(m: CricketMatch, back: () => void): void {
-    this.show(h('div', { class: 'menu-card' }, this.header('Scorecard'), h('div', { html: m.innings.map((i) => this.scorecardHtml(m, i)).join('') }),
-      h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: back }, 'Back'))), true);
+  private matchCentreOverlay(m: CricketMatch, back: () => void, tab: CentreTab = 'scorecard'): void {
+    this.show(matchCentre(m, {
+      title: 'Match Centre',
+      tab,
+      scorecardHtml: (i) => this.scorecardHtml(m, i),
+      actions: [h('button', { class: 'btn secondary', onclick: back }, 'Back')],
+    }), true);
   }
 
   private inningsBreak(m: CricketMatch): void {
@@ -706,17 +722,21 @@ export class App {
       h('div', { html: this.scorecardHtml(m, first) }),
       h('div', { class: 'row', style: 'margin-top:18px' },
         h('button', { class: 'btn', onclick: () => { this.clearScreens(); this.session?.continueMatch(); } }, 'Start the chase'),
+        h('button', { class: 'btn secondary', onclick: () => this.matchCentreOverlay(m, () => this.inningsBreak(m), 'wagon') }, 'Match Centre'),
         h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Quit'))), true);
   }
 
   private results(m: CricketMatch, setup: MatchSetup): void {
     const potm = m.playerOfMatch;
     const potmTeam = potm ? m.cfg.teams[potm.team]! : null;
-    this.show(h('div', { class: 'menu-card' }, this.header(m.result ?? 'Match complete'),
-      potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name), ` (${potmTeam?.name})`) : null,
-      h('div', { html: m.innings.map((i) => this.scorecardHtml(m, i)).join('') }),
-      h('div', { class: 'row', style: 'margin-top:18px' },
+    this.show(matchCentre(m, {
+      title: m.result ?? 'Match complete',
+      sub: potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name), ` (${potmTeam?.name})`) : null,
+      scorecardHtml: (i) => this.scorecardHtml(m, i),
+      actions: [
         h('button', { class: 'btn', onclick: () => this.toss() }, 'Rematch'),
-        h('button', { class: 'btn secondary', onclick: () => { this.setup = setup; this.mainMenu(); } }, 'Main menu'))), true);
+        h('button', { class: 'btn secondary', onclick: () => { this.setup = setup; this.mainMenu(); } }, 'Main menu'),
+      ],
+    }), true);
   }
 }

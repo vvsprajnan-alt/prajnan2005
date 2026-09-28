@@ -1,4 +1,4 @@
-import { BallRecord, InningsState, PlayerDef, STROKES, Stroke, VARIATION_LABEL, Variation, oversString } from '@crease/sim';
+import { BallRecord, InningsState, PlayerDef, STROKES, Stroke, TeamDef, VARIATION_LABEL, Variation } from '@crease/sim';
 
 /**
  * Broadcast-style text commentary. Pure and deterministic: the phrasing for a
@@ -57,7 +57,7 @@ function strokeLabel(stroke: string | undefined): string {
 function deliveryPhrase(rec: BallRecord): string {
   const o = rec.outcome;
   const v = o.variation && o.variation in VARIATION_LABEL ? VARIATION_LABEL[o.variation as Variation].toLowerCase() : 'delivery';
-  const len = o.pitch ? (o.pitch.length < 1.8 ? 'yorker-length' : o.pitch.length < 4.5 ? 'full' : o.pitch.length < 8 ? 'good-length' : 'short') : 'full-toss';
+  const len = o.pitch && !(o.pitch.full && o.pitch.length < 0.5) ? (o.pitch.length < 1.8 ? 'yorker-length' : o.pitch.length < 4.5 ? 'full' : o.pitch.length < 8 ? 'good-length' : 'short') : 'full-toss';
   const speed = o.speedKmh ? `${o.speedKmh} km/h ` : '';
   return v === 'stock delivery' || v === 'stock' ? `${speed}${len} ball` : `${speed}${len} ${v}`;
 }
@@ -74,7 +74,8 @@ export function commentary(c: CommentaryInput): Commentary {
   const where = o.shotAngle !== undefined ? region(o.shotAngle) : '';
   const perfect = shot?.timing === 'perfect';
   const del = deliveryPhrase(rec);
-  const overStr = oversString(c.inn.log.slice(0, c.index + 1).filter((l) => l.outcome.extra !== 'wide' && l.outcome.extra !== 'noBall').length, c.ballsPerOver);
+  // Extras that are re-bowled carry the number of the ball still to come ("0.1" for a first-ball wide).
+  const overStr = `${rec.over}.${rec.ballInOver}`;
   let text: string;
   let headline: string | undefined;
 
@@ -85,12 +86,12 @@ export function commentary(c: CommentaryInput): Commentary {
       case 'bowled':
         text = shot?.outcome === 'edge'
           ? pick([`OUT! Dragged on! The inside edge crashes into the stumps.`, `OUT! Played on - a sorry end for ${bat}.`], seed)
-          : pick([`OUT! Clean bowled! The ${del} goes straight through the gate.`, `OUT! Timber! ${bat} is beaten and the stumps are shattered.`, `OUT! Bowled him! Knocked back the middle stump.`], seed);
+          : pick([`OUT! Clean bowled! The ${del} goes straight through the gate.`, `OUT! Timber! ${bat} is beaten and the stumps are shattered.`, `OUT! Bowled! Knocked back the middle stump.`], seed);
         break;
       case 'caught':
         text = shot?.outcome === 'edge'
           ? pick([`OUT! Edged and taken by ${f}! The ${del} found the outside edge.`, `OUT! Nicked off - ${f} makes no mistake.`], seed)
-          : pick([`OUT! Caught by ${f}! The ${stroke} goes straight to him.`, `OUT! Holed out! ${f} takes it cleanly ${where}.`, `OUT! ${bat} goes for the big one and ${f} pouches it.`], seed);
+          : pick([`OUT! Caught by ${f}! The ${stroke} goes straight down the fielder's throat.`, `OUT! Holed out! ${f} takes it cleanly ${where}.`, `OUT! ${bat} goes for the big one and ${f} pouches it.`], seed);
         break;
       case 'lbw':
         text = pick([`OUT! Trapped in front! Struck on the pad, and the finger goes up.`, `OUT! LBW - ${bat} misses the ${del} and is pinned on the crease.`], seed);
@@ -114,7 +115,7 @@ export function commentary(c: CommentaryInput): Commentary {
     else if (shot?.outcome === 'edge') text = pick([`FOUR! Thick edge, and it flies ${where}.`, `FOUR! Not off the middle, but it goes ${where} all the same.`], seed);
     else text = pick([`FOUR! ${perfect ? 'Glorious timing. ' : ''}A ${stroke} ${where}.`, `FOUR! Pierces the gap ${where} and races to the boundary.`, `FOUR! ${bat} leans into the ${stroke} and the fielder doesn't bother chasing.`], seed);
   } else if (o.extra === 'wide') {
-    text = pick([`Wide. The ${del} strays too far from the batter.`, `Wide called - ${bowl} loses his line.`], seed);
+    text = pick([`Wide. The ${del} strays too far from the batter.`, `Wide called - ${bowl} misses the target.`], seed);
   } else if (o.extra === 'noBall') {
     text = pick([`No ball! ${bat} gets a free hit next.`, `No ball called - and that means a free hit.`], seed);
   } else if (o.extra === 'bye' || o.extra === 'legBye') {
@@ -163,4 +164,20 @@ export function milestoneFor(c: CommentaryInput): string | undefined {
   const t1 = team(upto);
   for (const m of [200, 150, 100, 50]) if (t0 < m && t1 >= m) return `${m} up for the batting side`;
   return undefined;
+}
+
+/** Commentary for ball `index` of an innings, looking up the players involved. */
+export function describeBall(teams: readonly TeamDef[], inn: InningsState, index: number, ballsPerOver: number): Commentary {
+  const rec = inn.log[index]!;
+  const bowlTeam = teams[inn.bowlingTeam]!;
+  const fielderIdx = rec.outcome.wicket?.fielder;
+  return commentary({
+    rec,
+    index,
+    inn,
+    bowler: bowlTeam.players[rec.bowler]!,
+    batter: teams[inn.battingTeam]!.players[rec.striker]!,
+    fielder: fielderIdx !== undefined ? bowlTeam.players[fielderIdx]?.name : undefined,
+    ballsPerOver,
+  });
 }

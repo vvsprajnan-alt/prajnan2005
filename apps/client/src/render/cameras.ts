@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type CamMode = 'batting' | 'bowling' | 'follow' | 'broadcast' | 'wicketSide' | 'tracking' | 'fielding';
+export type CamMode = 'batting' | 'bowling' | 'follow' | 'broadcast' | 'wicketSide' | 'tracking' | 'fielding' | 'intro' | 'replayEnd' | 'replaySide' | 'replayStumps';
 
 /**
  * Camera director: picks a framing for the moment and eases between them.
@@ -14,6 +14,9 @@ export class CameraDirector {
   private fov = 40;
   private shake = 0;
   private followFrom = new THREE.Vector3();
+  private cutNext = false;
+  /** Stumps framed by the `replayStumps` shot. */
+  focusEnd: 'S' | 'B' = 'S';
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(40, aspect, 0.1, 2000);
@@ -33,10 +36,15 @@ export class CameraDirector {
     this.followFrom.set(-dir.x * 26, 20, dir.z < 0.3 ? 34 : -34);
   }
 
+  /** Jump straight to the next framing (a cut rather than a camera move). */
+  cut(): void {
+    this.cutNext = true;
+  }
+
   /** Controlled fielder position, for the fielding camera. */
   fielder: THREE.Vector3 | null = null;
 
-  update(dt: number, ctx: { ball: THREE.Vector3; bowler: THREE.Vector3; offS: number; runUpT: number }): void {
+  update(dt: number, ctx: { ball: THREE.Vector3; bowler: THREE.Vector3; offS: number; runUpT: number; time?: number }): void {
     let pos: THREE.Vector3;
     let look: THREE.Vector3;
     let fov: number;
@@ -91,14 +99,50 @@ export class CameraDirector {
         fov = 35;
         ease = 3;
         break;
+      case 'intro': {
+        // Slow orbit of the ground for the team introductions.
+        const a = (ctx.time ?? 0) * 0.09 + 0.6;
+        pos = new THREE.Vector3(Math.sin(a) * 62, 20, Math.cos(a) * 62);
+        look = new THREE.Vector3(0, 1, 0);
+        fov = 42;
+        ease = 1.5;
+        break;
+      }
+      case 'replayEnd':
+        // Telephoto from behind the bowler's arm, framing the batter.
+        // High enough to look over the umpire and the bowler's follow-through.
+        pos = new THREE.Vector3(0.3 * ctx.offS, 6.5, -36);
+        look = new THREE.Vector3(0, 0.9, 8.8);
+        fov = 10;
+        ease = 6;
+        break;
+      case 'replaySide':
+        // Side-on at the striker's end (from the leg side).
+        pos = new THREE.Vector3(-17 * ctx.offS, 1.4, 7.5);
+        look = new THREE.Vector3(0, 0.7, 8.2);
+        fov = 32;
+        ease = 6;
+        break;
+      case 'replayStumps': {
+        const z = this.focusEnd === 'S' ? 10.06 : -10.06;
+        pos = new THREE.Vector3(5.5, 1.1, z + (this.focusEnd === 'S' ? -2.2 : 2.2));
+        look = new THREE.Vector3(0, 0.45, z);
+        fov = 30;
+        ease = 6;
+        break;
+      }
       default:
         pos = new THREE.Vector3(0, 10, -44);
         look = new THREE.Vector3(0, 0.5, 5);
         fov = 32;
         ease = 2;
     }
-    const k = 1 - Math.exp(-ease * dt);
-    const lookK = this.mode === 'follow' ? 1 - Math.exp(-9 * dt) : k;
+    let k = 1 - Math.exp(-ease * dt);
+    let lookK = this.mode === 'follow' ? 1 - Math.exp(-9 * dt) : k;
+    if (this.cutNext) {
+      k = lookK = 1;
+      this.cutNext = false;
+    }
     this.pos.lerp(pos, k);
     this.look.lerp(look, lookK);
     this.fov += (fov - this.fov) * k;

@@ -31,6 +31,7 @@ describe('commentary', () => {
 
   it('covers extras and dot balls', () => {
     expect(line({ extra: 'wide' }).text).toMatch(/[Ww]ide/);
+    expect(line({ extra: 'wide' }).over).toBe('0.1');
     expect(line({ extra: 'noBall' }).text).toMatch(/free hit/);
     expect(line({ shot: { stroke: 'defence', timing: 'good', outcome: 'hit', lofted: false } }).text).toMatch(/defence|Blocked|Dead bat/);
     expect(line({}).text).toMatch(/Left alone|No shot/);

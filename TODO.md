@@ -73,9 +73,19 @@
 - [x] Public matchmaking: 1v1 and 2v2 queues, countdown, AI fills a 2v2 after 30 s
 - [x] Tests: lobby with a fake clock; end-to-end drop and reconnect mid-match; browser checks for queueing, chat, reload-rejoin, invite link, auto-reconnect
 
+### Phase 7 - presentation
+- [x] Team introductions before the first ball (line-ups, players to watch, conditions, orbiting camera); skippable, online too
+- [x] Per-ball data in the sim: pitching point, speed, variation, shot; chart data (wagon wheel, pitch map, Manhattan, worm)
+- [x] Commentary captions for every ball (deterministic, names bowler, batter and fielder, region of the shot)
+- [x] Milestones: fifties, hundreds, hat-tricks, 3 and 5 wickets, team 50/100/150/200
+- [x] Broadcast cards: end of over, new batter, new bowler
+- [x] Replays: automatic for boundaries, wickets and drops; instant replay (I / ⟲); slow motion, broadcast cameras (behind the arm, side-on, follow, stumps close-up); skippable; setting
+- [x] Match Centre (pause, innings break, results): scorecard, wagon wheel by batter, pitch map by bowler, Manhattan, worm with target, phase splits, ball-by-ball commentary
+- [x] Tests: intro phase, recorded ball data, chart data, commentary and milestones, replay recording/planning, SVG charts
+
 ## Current task
 
-- Phase 6 review: try a real match with friends over the internet before Phase 7 (presentation).
+- Phase 7 review: play a few full matches and check the replays, captions and Match Centre before Phase 8 (art and audio).
 
 ## Known bugs / limitations
 
@@ -83,16 +93,17 @@
 - Drops are a little frequent (about 8 per AI T20).
 - Reviews cover LBW only (not caught-behind / edges).
 - The AI does not promote batters in its own order.
-- No replays yet.
+- Replays are not available on a gamepad as an instant-replay button (keyboard I or the on-screen ⟲); automatic replays and skipping work on every device.
+- Commentary is text only (no voice).
 - Fielding steering is camera-relative; the fielding camera can swing when the ball passes the fielder.
 - The crowd is instanced boxes; audio is synthesized ambience only.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
-- Single client bundle (~650 KB, ~180 KB gzip).
+- Single client bundle (~735 KB, ~206 KB gzip).
 - Online: sessions and rooms live in the server's memory (a server restart ends them); matchmaking has no skill rating yet.
 - Online: the local player's own input is shown when the server echoes it (one round trip); shot timing itself is compensated.
 - Online: pausing only opens the menu; the match keeps running for everyone.
 
 ## Next tasks
 
-1. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
-2. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
+1. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
+2. Phase 9: optimization - code-splitting, instancing/LOD, network bandwidth, mobile tuning

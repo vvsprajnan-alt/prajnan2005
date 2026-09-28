@@ -38,7 +38,9 @@ describe('presentation data', () => {
       expect(w[w.length - 1]!.runs).toBe(inn.runs);
       const shots = wagonShots(inn);
       expect(shots.reduce((a, s) => a + s.runs, 0)).toBe(inn.batters.reduce((a, b) => a + b.runs, 0));
+      expect(shots.every((s) => inn.batters.some((b) => b.player === s.player))).toBe(true);
       const pm = pitchMap(inn);
+      expect(pm.filter((p) => p.boundary).length).toBe(inn.log.filter((l) => l.outcome.boundary).length);
       expect(pm.length).toBeGreaterThan(inn.legalBalls * 0.8);
       expect(pm.every((p) => p.length > -3 && p.length < 16)).toBe(true);
     }

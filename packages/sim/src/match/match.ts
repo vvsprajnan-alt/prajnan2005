@@ -189,6 +189,8 @@ export class CricketMatch {
   private bouncerCounted = false;
   /** Number of super overs played (pairs). */
   superOvers = 0;
+  /** Fielding control per team (initialised from the config, changed by admin commands). */
+  fieldingModes!: [FieldingControlMode, FieldingControlMode];
   private teamFields: [TeamField, TeamField] = [
     { auto: true, pace: null, spin: null },
     { auto: true, pace: null, spin: null },
@@ -197,6 +199,7 @@ export class CricketMatch {
   constructor(cfg: MatchConfig) {
     this.cfg = cfg;
     this.rng = new Rng(cfg.seed);
+    this.fieldingModes = [cfg.fieldingControl?.[0] ?? 'auto', cfg.fieldingControl?.[1] ?? 'auto'];
     const batting = cfg.battingFirst;
     this.innings.push(newInnings(batting, this.pickBowler(null, 1 - batting), null, cfg.rules, { order: this.orderFor(batting) }));
     this.resetReviews();
@@ -318,7 +321,7 @@ export class CricketMatch {
       this.strikerDef.batHand,
       v3(0.9 * side, 0, BOWLER_CREASE_Z + 0.6),
     );
-    const ctl = this.cfg.fieldingControl?.[inn.bowlingTeam as 0 | 1] ?? 'auto';
+    const ctl = this.fieldingModes[inn.bowlingTeam as 0 | 1];
     this.fielding.human = ctl === 'auto' ? null : newHumanFielding(ctl);
   }
 
@@ -502,6 +505,18 @@ export class CricketMatch {
       case 'field.throw':
       case 'field.catch':
         return bowling && this.fieldingCommand(c);
+      case 'admin.fieldingControl': {
+        if (!src.admin) return false;
+        if ((c.team !== 0 && c.team !== 1) || !['auto', 'assisted', 'manual'].includes(c.mode)) return false;
+        this.fieldingModes[c.team] = c.mode;
+        // Takes effect immediately if that side is fielding now.
+        if (c.team === inn.bowlingTeam) {
+          if (c.mode === 'auto') this.fielding.human = null;
+          else if (!this.fielding.human) this.fielding.human = newHumanFielding(c.mode);
+          else this.fielding.human.mode = c.mode;
+        }
+        return true;
+      }
       case 'batter.select': {
         if (!batting || !(this.phase === 'dead' || this.phase === 'preDelivery' || this.phase === 'review')) return false;
         if (!Number.isInteger(c.player)) return false;

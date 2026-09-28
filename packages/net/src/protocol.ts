@@ -9,7 +9,7 @@ import {
   makeRules,
 } from '@crease/sim';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 /** Server ticks per network batch (120 Hz sim -> 20 batches per second). */
 export const TICKS_PER_BATCH = 6;
 /** Send a state hash every N ticks so clients can detect drift. */
@@ -42,7 +42,32 @@ export interface RoomState {
   players: RoomPlayer[];
   config: RoomConfig;
   status: 'lobby' | 'playing' | 'finished';
+  /** Created by matchmaking rather than by a player. */
+  public: boolean;
+  /** Seconds until an automatic start (matchmaking), if counting down. */
+  startsIn?: number;
 }
+
+export type QueueMode = '1v1' | '2v2';
+
+/**
+ * Quick-chat phrases (no free text, so nothing to moderate). Index is sent on
+ * the wire; `team` phrases default to team-only.
+ */
+export const QUICK_CHAT: { text: string; team?: boolean }[] = [
+  { text: 'Nice shot!' },
+  { text: 'Well bowled!' },
+  { text: 'Great catch!' },
+  { text: 'Unlucky!' },
+  { text: 'Good game!' },
+  { text: 'Sorry!' },
+  { text: 'YES! Run!', team: true },
+  { text: 'NO! Stay!', team: true },
+  { text: 'WAIT...', team: true },
+  { text: "Let's attack", team: true },
+  { text: 'Keep it tight', team: true },
+  { text: 'Bowl it full', team: true },
+];
 
 /** Everything a client needs to build the identical match. */
 export interface NetMatchConfig {
@@ -71,11 +96,14 @@ export function buildMatchConfig(n: NetMatchConfig): MatchConfig {
   return cfg;
 }
 
-/** One replicated command: [tick, team, role, command]. */
+/** One replicated command: [tick, team, role ('admin' for server commands), command]. */
 export type WireCommand = [number, 0 | 1, string | null, Command];
 
 export type ClientMsg =
   | { t: 'hello'; name: string; version: number; token?: string }
+  | { t: 'queue'; mode: QueueMode }
+  | { t: 'unqueue' }
+  | { t: 'chat'; id: number; teamOnly?: boolean }
   | { t: 'create' }
   | { t: 'join'; code: string }
   | { t: 'leave' }
@@ -88,7 +116,15 @@ export type ClientMsg =
   | { t: 'ping'; c: number };
 
 export type ServerMsg =
-  | { t: 'welcome'; id: string; version: number; token: string }
+  /** `resumed`: the token matched an existing session (same id, same seat). */
+  | { t: 'welcome'; id: string; version: number; token: string; resumed: boolean; room: string | null }
+  | { t: 'queue'; mode: QueueMode | null; size: number }
+  | { t: 'matchFound'; code: string }
+  /** Which seats currently have a connected human (roles follow this). */
+  | { t: 'humans'; humans: [boolean[], boolean[]] }
+  | { t: 'chat'; from: string; name: string; id: number; teamOnly: boolean; team: 0 | 1 | null }
+  /** This connection was replaced by a newer one with the same session. */
+  | { t: 'replaced' }
   | { t: 'error'; code: string; message: string }
   | { t: 'room'; room: RoomState }
   | { t: 'left' }

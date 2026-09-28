@@ -4,14 +4,15 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { decodeClient, encode } from '@crease/net';
-import { Lobby } from './lobby';
+import { Lobby, LobbyOptions } from './lobby';
 
 /**
  * Crease Clash server: serves the built client and hosts multiplayer rooms
  * over WebSocket at /ws. Usage: PORT=8787 npm start -w @crease/server
  */
-export function startServer(port: number, opts: { staticDir?: string; timeScale?: number } = {}) {
-  const lobby = new Lobby({ timeScale: opts.timeScale });
+export function startServer(port: number, opts: { staticDir?: string; timeScale?: number; lobby?: LobbyOptions } = {}) {
+  const lobby = new Lobby({ timeScale: opts.timeScale, ...opts.lobby });
+  const housekeeping = setInterval(() => lobby.tick(), 500);
   const staticDir = opts.staticDir && existsSync(opts.staticDir) ? resolve(opts.staticDir) : null;
   const types: Record<string, string> = {
     '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
@@ -37,9 +38,12 @@ export function startServer(port: number, opts: { staticDir?: string; timeScale?
 
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 32 * 1024 });
   wss.on('connection', (ws) => {
-    const conn = lobby.newConn((msg) => {
-      if (ws.readyState === ws.OPEN) ws.send(encode(msg));
-    });
+    const conn = lobby.newConn(
+      (msg) => {
+        if (ws.readyState === ws.OPEN) ws.send(encode(msg));
+      },
+      () => ws.close(4000, 'replaced'),
+    );
     // Simple token bucket: ~120 messages/s sustained.
     let tokens = 200;
     let lastRefill = Date.now();
@@ -74,6 +78,7 @@ export function startServer(port: number, opts: { staticDir?: string; timeScale?
         lobby,
         close: () =>
           new Promise<void>((done) => {
+            clearInterval(housekeeping);
             for (const r of lobby.rooms.values()) r.match?.stop();
             for (const c of wss.clients) c.terminate();
             wss.close();

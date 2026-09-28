@@ -22,7 +22,8 @@ export class Mirror {
   receive(to: number, cmds: WireCommand[], hash?: [number, number]): void {
     for (const [tick, team, role, cmd] of cmds) {
       const list = this.pending.get(tick) ?? [];
-      list.push({ src: { team, role: (role ?? undefined) as AppliedCommand['src']['role'] }, cmd });
+      const src: AppliedCommand['src'] = role === 'admin' ? { team, admin: true } : { team, role: (role ?? undefined) as AppliedCommand['src']['role'] };
+      list.push({ src, cmd });
       this.pending.set(tick, list);
     }
     if (hash) this.hashes.set(hash[0], hash[1]);

@@ -48,8 +48,10 @@ export function roleMap(m: CricketMatch, team: 0 | 1, humans: boolean[]): RoleMa
 }
 
 /** Role a command needs, or 'any' if any human on the side may send it. */
-export function roleFor(cmd: Command): Role | 'any' {
+export function roleFor(cmd: Command): Role | 'any' | 'server' {
   switch (cmd.type) {
+    case 'admin.fieldingControl':
+      return 'server';
     case 'bat.shot':
     case 'bat.charge':
       return 'striker';
@@ -75,6 +77,7 @@ export function roleFor(cmd: Command): Role | 'any' {
  */
 export function authorize(m: CricketMatch, team: 0 | 1, slot: number, humans: boolean[], cmd: Command): Role | 'any' | null {
   const need = roleFor(cmd);
+  if (need === 'server') return null;
   if (need === 'any') return 'any';
   const map = roleMap(m, team, humans);
   return map[need] === slot ? need : null;

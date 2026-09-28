@@ -1,6 +1,7 @@
 import { BowlIntent } from '../bowling/delivery';
 import { FieldKind, FieldSetting } from '../fielding/fieldSettings';
 import { BallTracking } from '../rules/tracking';
+import { FieldingControlMode } from './fielding';
 import { ContactResult, ShotInput, Stroke } from '../batting/shots';
 import { BallState } from '../physics/ball';
 import { DismissalKind } from '../rules/scorecard';
@@ -45,12 +46,19 @@ export type Command =
   /** Throw to the striker's end (S), bowler's end (B) or let the fielder choose. */
   | { type: 'field.throw'; end: 'S' | 'B' | 'auto' }
   /** Timing press for a catch (manual fielding). */
-  | { type: 'field.catch'; at?: number };
+  | { type: 'field.catch'; at?: number }
+  /**
+   * Server-only: change how a side's fielding is controlled (e.g. the AI takes
+   * over when every human on that side has disconnected). Never accepted from clients.
+   */
+  | { type: 'admin.fieldingControl'; team: 0 | 1; mode: FieldingControlMode };
 
 /** Who issues a command. In multiplayer the server stamps this from the connection. */
 export interface CommandSource {
   team: 0 | 1;
   role?: 'striker' | 'nonStriker' | 'bowler' | 'fielder';
+  /** Set only by the server for its own administrative commands. */
+  admin?: boolean;
 }
 
 export type MatchEvent =

@@ -84,7 +84,7 @@ export class ServerMatch {
   tickOnce(): void {
     this.host.step();
     const tick = this.tick;
-    for (const a of this.host.lastApplied) this.batch.push([tick, a.src.team, a.src.role ?? null, a.cmd]);
+    for (const a of this.host.lastApplied) this.batch.push([tick, a.src.team, a.src.admin ? 'admin' : a.src.role ?? null, a.cmd]);
     if (tick % HASH_EVERY === 0) this.hash = [tick, stateHash(this.host.match)];
   }
 
@@ -124,13 +124,37 @@ export class ServerMatch {
     return { t: 'state', tick: this.tick, data: serializeMatch(this.host.match) };
   }
 
-  /** A player left for good: the AI takes over their seat. */
-  dropHuman(playerId: string): void {
+  /**
+   * A seated player disconnected (present=false) or came back. While they are
+   * away their partner takes their roles, or the AI if nobody is left on that
+   * side (including fielding control); control returns when they reconnect.
+   */
+  setPresent(playerId: string, present: boolean): void {
     const seat = this.seats.get(playerId);
-    if (!seat) return;
-    this.humans[seat.team][seat.slot] = false;
-    this.seats.delete(playerId);
+    if (!seat || this.humans[seat.team][seat.slot] === present) return;
+    const hadHumans = this.humans[seat.team].some(Boolean);
+    this.humans[seat.team][seat.slot] = present;
+    const hasHumans = this.humans[seat.team].some(Boolean);
     this.host.opts.humanTeams = this.humanTeams();
+    if (hadHumans !== hasHumans) {
+      const mode = hasHumans ? this.net.fielding[seat.team] : 'auto';
+      this.host.submit({ team: seat.team, admin: true }, { type: 'admin.fieldingControl', team: seat.team, mode });
+    }
+    this.broadcast({ t: 'humans', humans: this.currentHumans() });
+  }
+
+  /** A player left for good: the seat is handed to the AI permanently. */
+  dropHuman(playerId: string): void {
+    this.setPresent(playerId, false);
+    this.seats.delete(playerId);
+  }
+
+  currentHumans(): [boolean[], boolean[]] {
+    return [[...this.humans[0]], [...this.humans[1]]];
+  }
+
+  seatOf(playerId: string): Seat | null {
+    return this.seats.get(playerId) ?? null;
   }
 
   humansFor(team: 0 | 1): boolean[] {

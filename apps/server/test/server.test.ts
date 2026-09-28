@@ -14,11 +14,13 @@ class Bot {
   mirror: Mirror | null = null;
   seat: { team: 0 | 1; slot: 0 | 1 } | null = null;
   room = '';
+  token = '';
+  id = '';
   private sentStart = -1;
   private sentRelease = -1;
   private sentShot = -1;
 
-  async open(name: string): Promise<void> {
+  async open(name: string, token?: string): Promise<void> {
     this.ws = new WebSocket(`ws://localhost:${srv.port}/ws`);
     await new Promise((r) => this.ws.once('open', r));
     this.ws.on('message', (d) => {
@@ -26,6 +28,10 @@ class Bot {
       if (!m) return;
       this.inbox.push(m);
       if (m.t === 'room') this.room = m.room.code;
+      if (m.t === 'welcome') {
+        this.token = m.token;
+        this.id = m.id;
+      }
       if (m.t === 'start') {
         this.mirror = new Mirror(buildMatchConfig(m.match));
         this.seat = m.you;
@@ -36,7 +42,7 @@ class Bot {
       }
       if (m.t === 'state') this.mirror?.restore(m.tick, m.data);
     });
-    this.send({ t: 'hello', name, version: PROTOCOL_VERSION });
+    this.send({ t: 'hello', name, version: PROTOCOL_VERSION, token });
     await this.wait((m) => m.t === 'welcome');
   }
 
@@ -172,7 +178,57 @@ describe('multiplayer server', () => {
 
     for (const bot of [a, b, c]) bot.close();
     await new Promise((r) => setTimeout(r, 200));
-    expect(srv.lobby.rooms.has(a.room)).toBe(false);
+    // The room survives for a grace period so players can reconnect.
+    expect(srv.lobby.rooms.get(a.room)?.connectedCount).toBe(0);
+  }, 30000);
+
+  it('survives a player dropping mid-match and reconnecting to the same seat', async () => {
+    const a = new Bot();
+    const b = new Bot();
+    await a.open('Asha');
+    await b.open('Ben');
+    a.send({ t: 'create' });
+    await a.wait((m) => m.t === 'room');
+    b.send({ t: 'join', code: a.room });
+    await b.wait((m) => m.t === 'room');
+    a.send({ t: 'seat', seat: { team: 0, slot: 0 } });
+    b.send({ t: 'seat', seat: { team: 1, slot: 0 } });
+    await new Promise((r) => setTimeout(r, 100));
+    a.send({ t: 'ready', ready: true });
+    b.send({ t: 'ready', ready: true });
+    await new Promise((r) => setTimeout(r, 100));
+    a.send({ t: 'start' });
+    await a.wait((m) => m.t === 'start');
+    await b.wait((m) => m.t === 'start');
+    const server = srv.lobby.rooms.get(a.room)!.match!.host.match;
+    const waitBalls = async (n: number) => {
+      const t0 = Date.now();
+      while (server.inn.log.length < n && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 50));
+    };
+    await waitBalls(2);
+    // Ben drops: AI takes over his side (a server-only command goes through replication).
+    const token = b.token;
+    const id = b.id;
+    b.close();
+    await a.wait((m) => m.t === 'humans' && !m.humans[1][0]);
+    await waitBalls(4);
+    expect(server.inn.log.length).toBeGreaterThanOrEqual(4);
+    // Ben comes back with his token: same id, same seat, full state.
+    const b2 = new Bot();
+    await b2.open('Ben', token);
+    expect(b2.id).toBe(id);
+    await b2.wait((m) => m.t === 'start');
+    await a.wait((m) => m.t === 'humans' && !!m.humans[1][0]);
+    await waitBalls(6);
+    await new Promise((r) => setTimeout(r, 300));
+    for (const bot of [a, b2]) {
+      expect(bot.mirror!.desynced).toBe(false);
+      expect(bot.mirror!.rejected).toBe(0);
+      expect(bot.mirror!.match.inn.log.slice(0, 6).map((l) => l.symbol)).toEqual(server.inn.log.slice(0, 6).map((l) => l.symbol));
+    }
+    expect(b2.seat).toEqual({ team: 1, slot: 0 });
+    a.close();
+    b2.close();
   }, 30000);
 
   it('plays 2v2: only the player holding a role is obeyed, and everyone stays in sync', async () => {

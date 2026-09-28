@@ -84,6 +84,8 @@ export const LENGTHS = {
   good: 6.0,
   back: 8.0,
   short: 10.5,
+  /** Pitched short enough to reach head height (counts towards the bouncer limit). */
+  bouncer: 11.8,
 } as const;
 
 export interface DeliveryPlan {
@@ -98,6 +100,19 @@ export interface DeliveryPlan {
   noBall: boolean;
   /** Release timing error (s): negative early, positive late. */
   releaseError: number;
+  /** The older ball is reversing (swinging the "wrong" way). */
+  reverse: boolean;
+}
+
+/**
+ * How the ball's age changes movement. Conventional swing fades as the ball
+ * wears; from around the 12th over a scuffed ball can reverse for pace bowlers.
+ */
+export function ballAgeEffect(overs: number, style: BowlStyle): { conventional: number; reverse: number; seam: number } {
+  const conventional = Math.max(0.25, 1 - overs / 20);
+  const pace = style === 'fast' ? 1 : style === 'medium' ? 0.55 : 0;
+  const reverse = overs >= 12 ? Math.min(0.75, ((overs - 12) / 8) * 0.75) * pace : 0;
+  return { conventional, reverse, seam: Math.max(0.4, 1 - overs / 25) };
 }
 
 export const RUNUP_TIME: Record<BowlStyle, number> = { fast: 1.5, medium: 1.3, offspin: 0.95, legspin: 0.95 };
@@ -131,7 +146,7 @@ export function planDelivery(
   cond: PitchConditions,
   rng: Rng,
   assist = 1,
-  opts: { preview?: boolean } = {},
+  opts: { preview?: boolean; ballAge?: number } = {},
 ): DeliveryPlan {
   const skill = a01(bowler.attrs.bowling);
   const armSide = bowler.bowlArm === 'R' ? 1 : -1;
@@ -145,7 +160,12 @@ export function planDelivery(
   let length = intent.length;
   const offS = batHand === 'R' ? 1 : -1; // world x sign of batter's off side
   const isSpin = bowler.bowlStyle === 'offspin' || bowler.bowlStyle === 'legspin';
-  const swingPower = (bowler.bowlStyle === 'fast' ? 2.2 : 2.6) * (0.5 + 0.5 * skill);
+  const age = ballAgeEffect(opts.ballAge ?? 0, bowler.bowlStyle);
+  seam *= age.seam;
+  // Net swing: conventional minus reverse (reverse swings the other way).
+  const swingNet = age.conventional - age.reverse;
+  const swingPower = (bowler.bowlStyle === 'fast' ? 2.2 : 2.6) * (0.5 + 0.5 * skill) * swingNet;
+  const reverse = swingNet < 0 && (intent.variation === 'outswing' || intent.variation === 'inswing');
   // Spinners impart rotation mostly about the direction of travel (z).
   const spinRate = 140 + 60 * a01(bowler.attrs.spin);
 
@@ -238,6 +258,7 @@ export function planDelivery(
     predictedBounce: sol.landing,
     noBall,
     releaseError,
+    reverse,
   };
 }
 

@@ -195,7 +195,7 @@ export class GameSession {
     const pick = (v: Variation) => {
       this.intent = { ...this.intent, variation: v };
       if (v === 'yorker') this.intent.length = LENGTHS.yorker;
-      else if (v === 'bouncer') this.intent.length = LENGTHS.short;
+      else if (v === 'bouncer') this.intent.length = LENGTHS.bouncer;
       else if (this.intent.length < 2 || this.intent.length > 9.5) this.intent.length = style === 'fast' || style === 'medium' ? LENGTHS.good : LENGTHS.full + 0.5;
       this.sfx.ui();
     };
@@ -416,7 +416,7 @@ export class GameSession {
       hud.setVariations(m.phase === 'preDelivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => {
         this.intent = { ...this.intent, variation: v };
         if (v === 'yorker') this.intent.length = LENGTHS.yorker;
-        if (v === 'bouncer') this.intent.length = LENGTHS.short;
+        if (v === 'bouncer') this.intent.length = LENGTHS.bouncer;
       });
       const w = timingWindows(m.bowlerDef, assist);
       hud.setMeter(m.phase === 'runUp', m.runUpTime, m.runUpDuration, 0.03 + 0.02 * assist, w.good);

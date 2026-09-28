@@ -19,7 +19,7 @@ describe('deliveries', () => {
 
   it('a bouncer arrives higher than a yorker', () => {
     const y = planDelivery(fast, 'R', { variation: 'yorker', line: 0, length: LENGTHS.yorker }, 0, cond, new Rng(2), 1);
-    const b = planDelivery(fast, 'R', { variation: 'bouncer', line: 0, length: LENGTHS.short }, 0, cond, new Rng(2), 1);
+    const b = planDelivery(fast, 'R', { variation: 'bouncer', line: 0, length: LENGTHS.bouncer }, 0, cond, new Rng(2), 1);
     const ty = atZ(predictTrajectory(y.ball, cond, 1.5, DT), STRIKER_STUMPS_Z - 1);
     const tb = atZ(predictTrajectory(b.ball, cond, 1.5, DT), STRIKER_STUMPS_Z - 1);
     expect(ty.pos.y).toBeLessThan(0.4);

@@ -67,7 +67,9 @@ export interface InningsState {
   bowlers: BowlerCard[];
   striker: number; // index into batters
   nonStriker: number;
-  nextBatter: number; // next player index in batting order
+  /** Batting order (player indices); `nextBatter` indexes into it. */
+  order: number[];
+  nextBatter: number; // index into `order` of the next batter in
   currentBowler: number; // player index (bowling team)
   lastOverBowler: number; // -1 if none
   freeHit: boolean;
@@ -78,9 +80,30 @@ export interface InningsState {
   log: BallRecord[];
   target: number | null;
   complete: boolean;
+  /** Overs available in this innings (a super over is 1). */
+  overs: number;
+  /** Wickets that end the innings (a super over is 2). */
+  wicketLimit: number;
+  superOver: boolean;
+  /** Short-pitched deliveries (above shoulder height) so far this over. */
+  bouncersThisOver: number;
 }
 
-export function newInnings(battingTeam: number, openingBowler: number, target: number | null): InningsState {
+export interface InningsOptions {
+  overs?: number;
+  wicketLimit?: number;
+  order?: number[];
+  superOver?: boolean;
+}
+
+export function newInnings(
+  battingTeam: number,
+  openingBowler: number,
+  target: number | null,
+  rules?: MatchRules,
+  opts: InningsOptions = {},
+): InningsState {
+  const order = opts.order ?? Array.from({ length: rules?.playersPerSide ?? 11 }, (_, i) => i);
   return {
     battingTeam,
     bowlingTeam: 1 - battingTeam,
@@ -88,10 +111,11 @@ export function newInnings(battingTeam: number, openingBowler: number, target: n
     wickets: 0,
     legalBalls: 0,
     extras: { wides: 0, noBalls: 0, byes: 0, legByes: 0 },
-    batters: [newBatter(0), newBatter(1)],
+    batters: [newBatter(order[0]!), newBatter(order[1]!)],
     bowlers: [newBowler(openingBowler)],
     striker: 0,
     nonStriker: 1,
+    order,
     nextBatter: 2,
     currentBowler: openingBowler,
     lastOverBowler: -1,
@@ -103,6 +127,10 @@ export function newInnings(battingTeam: number, openingBowler: number, target: n
     log: [],
     target,
     complete: false,
+    overs: opts.overs ?? rules?.overs ?? 20,
+    wicketLimit: opts.wicketLimit ?? (rules ? rules.playersPerSide - 1 : 10),
+    superOver: opts.superOver ?? false,
+    bouncersThisOver: 0,
   };
 }
 
@@ -123,7 +151,7 @@ export const runRate = (runs: number, legalBalls: number, bpo = 6): number => (l
 
 export function requiredRate(inn: InningsState, rules: MatchRules): number | null {
   if (inn.target === null) return null;
-  const ballsLeft = rules.overs * rules.ballsPerOver - inn.legalBalls;
+  const ballsLeft = inn.overs * rules.ballsPerOver - inn.legalBalls;
   const need = inn.target - inn.runs;
   if (ballsLeft <= 0) return null;
   return (need * rules.ballsPerOver) / ballsLeft;
@@ -226,10 +254,10 @@ export function applyBall(inn: InningsState, o: BallOutcome, rules: MatchRules, 
     if (wicket.kind !== 'runOut') bowler.wickets++;
     inn.fallOfWickets.push({ runs: inn.runs, wicket: inn.wickets, balls: inn.legalBalls, player: card.player });
     inn.partnership = { runs: 0, balls: 0 };
-    const allOut = inn.wickets >= rules.playersPerSide - 1;
-    if (!allOut) {
+    const allOut = inn.wickets >= inn.wicketLimit;
+    if (!allOut && inn.nextBatter < inn.order.length) {
       const nb = inn.batters.length;
-      inn.batters.push(newBatter(inn.nextBatter));
+      inn.batters.push(newBatter(inn.order[inn.nextBatter]!));
       inn.nextBatter++;
       // New batter takes the dismissed batter's end (caught: new batter on strike).
       if (wicket.kind === 'caught') {
@@ -261,8 +289,8 @@ export function applyBall(inn: InningsState, o: BallOutcome, rules: MatchRules, 
   else if (legal) inn.freeHit = false;
 
   const overComplete = legal && inn.legalBalls % rules.ballsPerOver === 0;
-  const allOut = inn.wickets >= rules.playersPerSide - 1;
-  const oversDone = inn.legalBalls >= rules.overs * rules.ballsPerOver;
+  const allOut = inn.wickets >= inn.wicketLimit;
+  const oversDone = inn.legalBalls >= inn.overs * rules.ballsPerOver;
   const chased = inn.target !== null && inn.runs >= inn.target;
   const inningsComplete = allOut || oversDone || chased;
 
@@ -282,6 +310,7 @@ export function applyBall(inn: InningsState, o: BallOutcome, rules: MatchRules, 
 export function startOver(inn: InningsState, bowler: number): void {
   inn.thisOver = [];
   inn.overRuns = 0;
+  inn.bouncersThisOver = 0;
   inn.currentBowler = bowler;
   bowlerCard(inn, bowler);
 }
@@ -292,3 +321,26 @@ export function canBowl(inn: InningsState, player: number, rules: MatchRules): b
   const c = inn.bowlers.find((b) => b.player === player);
   return !c || c.balls < rules.maxOversPerBowler * rules.ballsPerOver;
 }
+
+/**
+ * Swap the batter who has just come in (and not yet faced) for another player
+ * who has not batted. Returns false if not allowed.
+ */
+export function substituteNewBatter(inn: InningsState, player: number): boolean {
+  if (inn.complete) return false;
+  const idx = inn.batters.length - 1;
+  const card = inn.batters[idx]!;
+  const atCrease = idx === inn.striker || idx === inn.nonStriker;
+  if (!atCrease || card.out || card.balls > 0 || card.runs > 0) return false;
+  if (inn.batters.some((b) => b.player === player)) return false;
+  const pos = inn.order.indexOf(player);
+  const cur = inn.order.indexOf(card.player);
+  if (pos < 0 || cur < 0 || pos < inn.nextBatter) return false;
+  inn.order[pos] = card.player;
+  inn.order[cur] = player;
+  card.player = player;
+  return true;
+}
+
+/** Players still to bat, in order. */
+export const yetToBat = (inn: InningsState): number[] => inn.order.slice(inn.nextBatter);

@@ -357,8 +357,10 @@ export class FieldingUnit {
         }
         return out;
       }
+      // Receiving a throw at the stumps: take it anywhere up to head height.
       const reach = isThrowTarget ? 1.3 : 0.85;
-      if (ball.pos.y < 1.0 && d < reach) {
+      const reachH = isThrowTarget ? 2.2 : 1.0;
+      if (ball.pos.y < reachH && d < reach) {
         const speed = length(ball.vel);
         const fumbleP = isThrowTarget ? 0.03 : clamp((1 - a01(f.def.attrs.fielding)) * 0.16 + Math.max(0, speed - 22) * 0.01, 0.01, 0.35);
         if (ctx.rng.next() < fumbleP) {

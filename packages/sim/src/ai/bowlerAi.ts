@@ -64,7 +64,7 @@ export class BowlerAI {
       const roll = r.next();
       if (roll < (death ? 0.3 : 0.1)) variation = 'yorker';
       else if (roll < (death ? 0.42 : 0.2)) variation = 'slower';
-      else if (roll < (death ? 0.5 : 0.3)) variation = 'bouncer';
+      else if (roll < (death ? 0.5 : 0.3) && inn.bouncersThisOver < m.cfg.rules.bouncersPerOver) variation = 'bouncer';
       else if (roll < 0.5) variation = r.chance(0.6) ? 'outswing' : 'inswing';
       else if (roll < 0.6) variation = r.chance(0.5) ? 'offcutter' : 'legcutter';
       else variation = 'stock';
@@ -80,7 +80,7 @@ export class BowlerAI {
         line = r.range(-0.05, 0.15);
         break;
       case 'bouncer':
-        length = LENGTHS.short + r.range(-0.5, 1.2);
+        length = LENGTHS.bouncer + r.range(-0.7, 0.5);
         line = r.range(-0.1, 0.2);
         break;
       default:

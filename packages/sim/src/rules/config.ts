@@ -16,6 +16,12 @@ export interface MatchRules {
   /** Maximum fielders outside the 30-yard circle during / after the powerplay. */
   maxOutsidePowerplay: number;
   maxOutside: number;
+  /** Short-pitched balls above shoulder height allowed per over; the next is a no-ball. */
+  bouncersPerOver: number;
+  /** Unsuccessful player reviews allowed per team per innings (0 = no reviews). */
+  reviewsPerInnings: number;
+  /** Decide ties with a super over (repeated if tied again, up to 3 times). */
+  superOver: boolean;
   /** Seconds of presentation pause between balls. */
   betweenBallsDelay: number;
 }
@@ -34,6 +40,9 @@ export function makeRules(overs: number, overrides: Partial<MatchRules> = {}): M
     powerplayOvers: Math.max(1, Math.round(overs * 0.3)),
     maxOutsidePowerplay: 2,
     maxOutside: 5,
+    bouncersPerOver: 1,
+    reviewsPerInnings: 2,
+    superOver: true,
     betweenBallsDelay: 2.2,
     ...overrides,
   };

@@ -167,6 +167,12 @@ export class Running {
     return 0;
   }
 
+  /** Both batters are past halfway on the run in progress (it counts for overthrow boundaries). */
+  crossedInProgress(): boolean {
+    if (!this.inRun || this.returning) return false;
+    return this.runners.every((r) => Math.abs(r.pos.z - endZ(r.from)) > 9.6);
+  }
+
   /** Runner whose wicket is in danger if the stumps at `e` are broken now. */
   runnerForEnd(e: End): Runner | null {
     const candidates = this.runners.filter((r) => r.to === e);

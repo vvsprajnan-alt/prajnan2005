@@ -1,5 +1,6 @@
 import { BowlIntent } from '../bowling/delivery';
 import { FieldKind, FieldSetting } from '../fielding/fieldSettings';
+import { BallTracking } from '../rules/tracking';
 import { ContactResult, ShotInput, Stroke } from '../batting/shots';
 import { BallState } from '../physics/ball';
 import { DismissalKind } from '../rules/scorecard';
@@ -11,6 +12,7 @@ export type MatchPhase =
   | 'preDelivery' // bowler setting up
   | 'runUp'
   | 'inPlay' // ball released until dead
+  | 'review' // ball dead, decision may be reviewed (DRS-style)
   | 'dead' // pause between balls
   | 'inningsBreak'
   | 'complete';
@@ -29,7 +31,11 @@ export type Command =
   | { type: 'bowler.select'; player: number }
   /** Set the field for a bowler type: a preset id, custom spots, or back to automatic. */
   | { type: 'field.set'; kind: FieldKind; preset?: string; field?: FieldSetting; auto?: boolean }
-  | { type: 'match.continue' };
+  | { type: 'match.continue' }
+  /** Ask for a ball-tracking review of the on-field LBW decision. */
+  | { type: 'review' }
+  /** Send in a different batter (only the one who has just arrived and not yet faced). */
+  | { type: 'batter.select'; player: number };
 
 /** Who issues a command. In multiplayer the server stamps this from the connection. */
 export interface CommandSource {
@@ -39,11 +45,18 @@ export interface CommandSource {
 
 export type MatchEvent =
   | { type: 'runUpStart' }
-  | { type: 'release'; speedKmh: number; variation: string; noBall: boolean; releaseError: number }
+  | { type: 'release'; speedKmh: number; variation: string; noBall: boolean; releaseError: number; reverse: boolean }
   | { type: 'bounce'; pos: Vec3; onPitch: boolean }
   | { type: 'shot'; result: ContactResult }
   | { type: 'swing'; stroke: Stroke; family: ShotInput['family'] }
-  | { type: 'padHit'; lbw: boolean; reason: string }
+  | { type: 'padHit'; lbw: boolean; reason: string; appeal: boolean }
+  | { type: 'reviewAvailable'; team: number; onFieldOut: boolean }
+  | { type: 'reviewStarted'; team: number; tracking: BallTracking; onFieldOut: boolean }
+  | { type: 'reviewResult'; team: number; out: boolean; overturned: boolean; umpiresCall: boolean; tracking: BallTracking; reviewsLeft: number }
+  | { type: 'bouncer'; count: number; noBall: boolean }
+  | { type: 'overthrow' }
+  | { type: 'newBatter'; player: number }
+  | { type: 'superOver'; index: number }
   | { type: 'wide' }
   | { type: 'noBall'; reason: string }
   | { type: 'stumpsHit'; end: 'striker' | 'bowler' }

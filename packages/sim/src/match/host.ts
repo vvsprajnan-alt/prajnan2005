@@ -1,6 +1,8 @@
 import { BatterAI, runAdvice } from '../ai/batterAi';
 import { BowlerAI } from '../ai/bowlerAi';
 import { AI_SKILL } from '../ai/difficulty';
+import { aiWantsReview } from '../ai/review';
+import { Rng } from '../math/rng';
 import { CricketMatch, MatchConfig } from './match';
 import { Command, CommandSource, MatchEvent } from './types';
 
@@ -25,6 +27,8 @@ export class MatchHost {
   private batAi: [BatterAI, BatterAI];
   private bowlAi: [BowlerAI, BowlerAI];
   private queue: { src: CommandSource; cmd: Command }[] = [];
+  private reviewRng: Rng;
+  private reviewDecided = false;
   opts: HostOptions;
 
   constructor(cfg: MatchConfig, opts: HostOptions) {
@@ -32,6 +36,7 @@ export class MatchHost {
     this.opts = opts;
     this.batAi = [new BatterAI(cfg.seed + 1), new BatterAI(cfg.seed + 2)];
     this.bowlAi = [new BowlerAI(cfg.seed + 3), new BowlerAI(cfg.seed + 4)];
+    this.reviewRng = new Rng(cfg.seed ^ 0x2545f491);
   }
 
   isHuman(team: 0 | 1): boolean {
@@ -62,6 +67,14 @@ export class MatchHost {
     for (const c of batAi.think(m)) m.command({ team: bat, role: 'striker' }, c);
     if (!this.isHuman(bowl)) for (const c of this.bowlAi[bowl].think(m)) m.command({ team: bowl, role: 'bowler' }, c);
     if (m.phase === 'inningsBreak' && this.opts.humanTeams.length === 0) m.command({ team: 0 }, { type: 'match.continue' });
+    // AI sides decide on reviews after a moment's thought.
+    if (m.phase === 'review' && m.pendingReview) {
+      const team = m.pendingReview.team;
+      if (!this.reviewDecided && !this.isHuman(team) && m.phaseTime > 1.2) {
+        this.reviewDecided = true;
+        if (aiWantsReview(m, this.reviewRng)) m.command({ team }, { type: 'review' });
+      }
+    } else this.reviewDecided = false;
     m.step();
     return m.drainEvents();
   }

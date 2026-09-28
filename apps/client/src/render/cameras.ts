@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type CamMode = 'batting' | 'bowling' | 'follow' | 'broadcast' | 'wicketSide';
+export type CamMode = 'batting' | 'bowling' | 'follow' | 'broadcast' | 'wicketSide' | 'tracking';
 
 /**
  * Camera director: picks a framing for the moment and eases between them.
@@ -60,6 +60,13 @@ export class CameraDirector {
         ease = 4;
         break;
       }
+      case 'tracking':
+        // Ball-tracking view: high behind the bowler's stumps, down the line of the pitch.
+        pos = new THREE.Vector3(0.7 * ctx.offS, 2.0, -1.0);
+        look = new THREE.Vector3(0, 0.3, 9.3);
+        fov = 19;
+        ease = 3;
+        break;
       case 'wicketSide':
         pos = new THREE.Vector3(14 * ctx.offS, 2.2, 10);
         look = new THREE.Vector3(0, 0.6, 9.5);

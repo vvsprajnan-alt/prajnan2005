@@ -178,6 +178,8 @@ export class CricketMatch {
   /** A throw has been made this ball (for overthrows). */
   private thrown = false;
   private throwMinDist = Infinity;
+  /** Sampled path of the delivery until it is played (for ball tracking). */
+  private deliveryPath: Vec3[] = [];
   private bouncerCounted = false;
   /** Number of super overs played (pairs). */
   superOvers = 0;
@@ -340,6 +342,7 @@ export class CricketMatch {
     this.pendingReview = null;
     this.thrown = false;
     this.bouncerCounted = false;
+    this.deliveryPath = [];
     const side = deliverySide(bowler.bowlArm, this.intent.side);
     this.ball = makeBall(v3(0.32 * side, 1.0, BOWLER_STUMPS_Z - 12), v3());
     const inn = this.inn;
@@ -658,6 +661,7 @@ export class CricketMatch {
           if (!this.batContact && !this.passedBatter) this.emit({ type: 'bounce', pos: e.pos, onPitch: e.onPitch });
         }
       }
+      if (!this.batContact && !this.padContact && this.tick % 2 === 0) this.deliveryPath.push({ ...p1 });
       this.deliveryChecks(p0, p1, t0);
       if (this.phase !== 'inPlay') return;
       // A charging batter stops once the ball has been played or has gone past.
@@ -834,7 +838,7 @@ export class CricketMatch {
     this.padContact = true;
     const canAppeal = this.cfg.rules.lbw && !this.noBall && !this.inn.freeHit;
     if (canAppeal) {
-      const tracking = trackLbw(ball, pos, this.firstBounce, this.offS, !!this.swing, this.cfg.conditions);
+      const tracking = trackLbw(ball, pos, this.firstBounce, this.offS, !!this.swing, this.cfg.conditions, this.deliveryPath);
       const onFieldOut = umpireDecision(tracking, this.rng);
       this.lbwAppeal = { tracking, onFieldOut };
       this.lbwNote = onFieldOut ? '' : 'LBW appeal turned down';

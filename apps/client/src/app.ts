@@ -22,6 +22,8 @@ const GAME_NAME = 'CREASE CLASH';
 
 interface MatchSetup {
   myTeam: string;
+  /** Batting order for my team (player indices), or null for squad order. */
+  myOrder: number[] | null;
   oppTeam: string;
   overs: number;
   difficulty: Difficulty;
@@ -38,7 +40,7 @@ export class App {
   private screens: HTMLElement;
   private hudRoot: HTMLElement;
   private last = performance.now();
-  private setup: MatchSetup = { myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
+  private setup: MatchSetup = { myOrder: null, myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
 
   constructor(root: HTMLElement) {
     this.sfx.enabled = this.settings.sound;
@@ -89,6 +91,7 @@ export class App {
     cfg.difficulty = setup.difficulty;
     cfg.conditions = PITCH_PRESETS[setup.pitch] ?? PITCH_PRESETS.balanced!;
     cfg.battingFirst = humanBatsFirst ? 0 : 1;
+    cfg.battingOrders = [setup.myOrder, null];
     this.clearScreens();
     this.session = new GameSession(cfg, 0, this.world, this.input, this.sfx, this.settings, {
       onInningsBreak: (m) => this.inningsBreak(m),
@@ -157,7 +160,7 @@ export class App {
     const card = h('div', { class: 'menu-card' },
       this.header('Quick Match'),
       h('div', { class: 'row' },
-        field('Your team', this.teamSelect('my', s.myTeam, (v) => (s.myTeam = v))),
+        field('Your team', this.teamSelect('my', s.myTeam, (v) => { s.myTeam = v; s.myOrder = null; })),
         field('Opponent', this.teamSelect('opp', s.oppTeam, (v) => (s.oppTeam = v))),
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
@@ -167,10 +170,42 @@ export class App {
       ),
       h('div', { class: 'row', style: 'margin-top:22px' },
         h('button', { class: 'btn', onclick: () => (s.myTeam === s.oppTeam ? alert('Pick two different teams') : this.toss()) }, 'To the toss'),
+        h('button', { class: 'btn secondary', onclick: () => this.battingOrderScreen() }, 'Batting order'),
         h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'),
       ),
     );
     this.show(card);
+  }
+
+  /** Reorder the batting line-up with up/down buttons. */
+  private battingOrderScreen(): void {
+    const s = this.setup;
+    const team = TEAMS.find((t) => t.id === s.myTeam)!;
+    const order = s.myOrder ? [...s.myOrder] : team.players.map((_, i) => i);
+    const list = h('div', { class: 'order-list' });
+    const render = () => {
+      list.innerHTML = '';
+      order.forEach((p, i) => {
+        const d = team.players[p]!;
+        const move = (dir: number) => {
+          const j = i + dir;
+          if (j < 0 || j >= order.length) return;
+          [order[i], order[j]] = [order[j]!, order[i]!];
+          render();
+        };
+        list.append(h('div', { class: 'order-row' },
+          h('span', { class: 'order-no' }, String(i + 1)),
+          h('span', { class: 'order-name' }, h('b', {}, d.name), ' ', h('span', { class: 'muted' }, `${d.role} · BAT ${d.attrs.batting} · PWR ${d.attrs.power}`)),
+          h('button', { class: 'ctrl', 'aria-label': `Move ${d.name} up`, onclick: () => move(-1) }, '▲'),
+          h('button', { class: 'ctrl', 'aria-label': `Move ${d.name} down`, onclick: () => move(1) }, '▼')));
+      });
+    };
+    render();
+    this.show(h('div', { class: 'menu-card' }, this.header(`${team.name} · batting order`), list,
+      h('div', { class: 'row', style: 'margin-top:16px' },
+        h('button', { class: 'btn', onclick: () => { s.myOrder = [...order]; this.quickMatch(); } }, 'Save'),
+        h('button', { class: 'btn secondary', onclick: () => { s.myOrder = null; this.quickMatch(); } }, 'Reset'),
+        h('button', { class: 'btn secondary', onclick: () => this.quickMatch() }, 'Cancel'))));
   }
 
   private toss(): void {
@@ -284,8 +319,10 @@ export class App {
       <tr><td>Over / round the wicket</td><td>T</td><td>R3</td><td>Over / Round</td></tr>
       <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field</td></tr>
       <tr><td>Choose the bowler (start of an over)</td><td>H</td><td>—</td><td>Bowler</td></tr>
+      <tr><td>Review an LBW decision (when offered)</td><td>U</td><td>Y</td><td>Review</td></tr>
       <tr><td>Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
       </tbody></table>
+      <p class="muted">One bouncer (above shoulder height) is allowed per over; the second is a no-ball. From about the 12th over a pace bowler's swing deliveries can reverse. LBW decisions can be reviewed with ball tracking: you keep the review if it is overturned or umpire's call. Tied matches go to a Super Over.</p>
       <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. On Beginner and Standard assistance a dashed line previews the delivery's path including swing and turn. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
       <h3>General</h3>
       <table class="card"><tbody><tr><td>Pause</td><td>Esc / P</td><td>Start</td><td>II button</td></tr></tbody></table>`;
@@ -326,7 +363,7 @@ export class App {
     const bRows = inn.batters.map((b) => `<tr><td>${esc(bat.players[b.player]!.name)}<div class="muted" style="font-size:12px">${esc(b.out ? b.dismissal ?? '' : 'not out')}</div></td><td><b>${b.runs}</b></td><td>${b.balls}</td><td>${b.fours}</td><td>${b.sixes}</td><td>${b.balls ? ((b.runs * 100) / b.balls).toFixed(0) : '-'}</td></tr>`).join('');
     const wRows = inn.bowlers.map((b) => `<tr><td>${esc(bowl.players[b.player]!.name)}</td><td>${oversString(b.balls)}</td><td>${b.maidens}</td><td>${b.runs}</td><td><b>${b.wickets}</b></td><td>${b.balls ? ((b.runs * 6) / b.balls).toFixed(2) : '-'}</td></tr>`).join('');
     const ex = inn.extras;
-    return `<div class="section-title">${esc(bat.name)} · ${inn.runs}/${inn.wickets} (${oversString(inn.legalBalls)} ov)</div>
+    return `<div class="section-title">${inn.superOver ? 'Super Over · ' : ''}${esc(bat.name)} · ${inn.runs}/${inn.wickets} (${oversString(inn.legalBalls)} ov)</div>
       <table class="card"><thead><tr><th>Batter</th><th>R</th><th>B</th><th>4s</th><th>6s</th><th>SR</th></tr></thead><tbody>${bRows}
       <tr><td class="muted">Extras (w ${ex.wides}, nb ${ex.noBalls}, b ${ex.byes}, lb ${ex.legByes})</td><td>${ex.wides + ex.noBalls + ex.byes + ex.legByes}</td><td colspan="4"></td></tr></tbody></table>
       <table class="card" style="margin-top:8px"><thead><tr><th>Bowler</th><th>O</th><th>M</th><th>R</th><th>W</th><th>Econ</th></tr></thead><tbody>${wRows}</tbody></table>`;
@@ -338,6 +375,24 @@ export class App {
   }
 
   private inningsBreak(m: CricketMatch): void {
+    if (m.nextIsSuperOver) {
+      const b = m.inn;
+      this.show(h('div', { class: 'menu-card' }, this.header(`Scores level on ${b.runs}! It's a Super Over`),
+        h('p', {}, `${m.cfg.teams[b.battingTeam]!.name} bat first: one over, two wickets. Then ${m.cfg.teams[b.bowlingTeam]!.name} chase.`),
+        h('div', { class: 'row', style: 'margin-top:18px' },
+          h('button', { class: 'btn', onclick: () => { this.clearScreens(); this.session?.continueMatch(); } }, 'Play the Super Over'),
+          h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Quit'))), true);
+      return;
+    }
+    if (m.inn.superOver) {
+      const first = m.inn;
+      const chasing = m.cfg.teams[first.bowlingTeam]!;
+      this.show(h('div', { class: 'menu-card' }, this.header(`Super Over · ${chasing.name} need ${first.runs + 1} from 6 balls`),
+        h('div', { html: this.scorecardHtml(m, first) }),
+        h('div', { class: 'row', style: 'margin-top:18px' },
+          h('button', { class: 'btn', onclick: () => { this.clearScreens(); this.session?.continueMatch(); } }, 'Start the chase'))), true);
+      return;
+    }
     const first = m.innings[0]!;
     const chasing = m.cfg.teams[first.bowlingTeam]!;
     this.show(h('div', { class: 'menu-card' }, this.header(`Innings break · ${chasing.name} need ${first.runs + 1} to win`),

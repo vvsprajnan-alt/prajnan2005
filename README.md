@@ -7,9 +7,10 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 2 complete. Single player against the AI is playable in the browser: batting with
+**Status:** Phase 3 complete. Single player against the AI is playable in the browser: batting with
 footwork and charging, bowling from over or round the wicket with a delivery-path guide, bowler selection,
-field placement under T20 fielding restrictions, physics, fielding, running, full scoring and a result.
+field placement under T20 fielding restrictions, LBW reviews with ball tracking, the one-bouncer rule,
+super overs, batting orders, physics, fielding, running, full scoring and a result.
 Online 2v2 comes in Phases 5-6.
 See [TODO.md](TODO.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -56,6 +57,7 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Over / round the wicket | T | R3 | Over / Round |
 | Set the field | G | Back / Select | Field |
 | Choose the bowler (start of an over) | H | - | Bowler |
+| Review an LBW decision (when offered) | U | Y | Review |
 | Run in, then release | Space (twice) | A (twice) | Bowl, then Release |
 | Pause | Esc or P | Start | II |
 
@@ -82,6 +84,13 @@ balls to set the field: pick a preset or drag fielders on the map. T20 restricti
 engine - 2 fielders outside the 30-yard circle in the powerplay, 5 after it, no more than 2 behind square on the
 leg side - and illegal positions are pulled inside automatically. "Auto" lets the AI captain set fields by
 phase and situation.
+
+**Rules.** LBW decisions are made by an on-field umpire who can get close calls wrong. Each side has two
+reviews per innings: the ball-tracking graphic shows where the ball pitched, where it hit the pad and whether it
+would have hit the stumps. A review is kept if the decision is overturned or it's umpire's call. One bouncer is
+allowed per over (the second is a no-ball and a free hit), overthrows that reach the rope add the runs already
+run, and a tied match goes to a Super Over. Set your batting order from the Quick Match screen and choose who
+goes in after each wicket. Late in an innings pace bowlers can find reverse swing with the old ball.
 
 ## Architecture
 
@@ -142,8 +151,9 @@ antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under flo
 
 ## Testing
 
-`npm test` runs ~60 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~75 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
-wicket, delivery previews and AI captaincy over a full T20.
+wicket, delivery previews, AI captaincy over a full T20, LBW tracking and umpire's call, reviews, the bouncer
+rule, super overs, batting orders and reverse swing.

@@ -264,6 +264,31 @@ export class Cricketer {
       case 'swing':
         this.batSwing(t, extra.stroke ?? 'straightDrive', extra.shotAngle ?? 0);
         break;
+      case 'signal-out':
+        // Finger raised straight up.
+        this.apply({ rShoulder: [-3.05 * smooth(t / 0.4), 0, -0.05], rElbow: [0, 0, 0], lShoulder: [0, 0, 0.1] });
+        break;
+      case 'signal-six':
+        this.apply({ rShoulder: [-3.0 * smooth(t / 0.4), 0, -0.15], lShoulder: [-3.0 * smooth(t / 0.4), 0, 0.15] });
+        break;
+      case 'signal-four': {
+        // Arm across the body, waving.
+        const k = smooth(t / 0.3);
+        this.apply({ rShoulder: [-1.5 * k, 0, -0.2 + 0.9 * Math.sin(t * 9) * k], lShoulder: [0, 0, 0.1] });
+        break;
+      }
+      case 'signal-wide':
+        this.apply({ rShoulder: [0, 0, -1.5 * smooth(t / 0.4)], lShoulder: [0, 0, 1.5 * smooth(t / 0.4)] });
+        break;
+      case 'signal-noBall':
+        this.apply({ rShoulder: [0, 0, -1.5 * smooth(t / 0.4)], lShoulder: [0, 0, 0.1] });
+        break;
+      case 'signal-bye':
+        this.apply({ rShoulder: [-2.9 * smooth(t / 0.4), 0, -0.1], rElbow: [0, 0, 0] });
+        break;
+      case 'signal-notOut':
+        this.apply({ lShoulder: [0, 0, 0.1], rShoulder: [0, 0, -0.1], head: [0, 0.5 * Math.sin(t * 8) * (t < 0.8 ? 1 : 0), 0] });
+        break;
       case 'umpire':
         this.apply({ lShoulder: [0, 0, 0.1], rShoulder: [0, 0, -0.1], lean: 0.08 });
         break;

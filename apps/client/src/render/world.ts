@@ -5,6 +5,9 @@ import { BallView } from './ballView';
 import { CameraDirector } from './cameras';
 import { Cricketer, UMPIRE_KIT, kitFor } from './players';
 import { Stadium, animateStumps, buildStadium } from './stadium';
+import { TrackingView } from './tracking';
+
+export type UmpireSignal = 'out' | 'four' | 'six' | 'wide' | 'noBall' | 'bye' | 'notOut';
 
 /**
  * Owns the three.js renderer and scene, and turns simulation snapshots into
@@ -27,6 +30,8 @@ export class World {
   private stumpsBrokenAt: { S: number | null; B: number | null } = { S: null, B: null };
   private preview: THREE.InstancedMesh;
   private cue: THREE.Mesh;
+  readonly tracking = new TrackingView();
+  private signal: { kind: UmpireSignal; at: number } | null = null;
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     const q = QUALITY[settings.quality];
@@ -64,6 +69,7 @@ export class World {
     this.cue.renderOrder = 10;
     this.cue.visible = false;
     this.scene.add(this.cue);
+    this.scene.add(this.tracking.group);
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -130,6 +136,11 @@ export class World {
     for (const r of [...this.batters, this.bowler, ...this.fielders]) this.scene.add(r.root);
   }
 
+  /** The bowler's-end umpire signals a decision. */
+  umpireSignal(kind: UmpireSignal, time: number): void {
+    this.signal = { kind, at: time };
+  }
+
   onStumpsBroken(end: 'S' | 'B', time: number): void {
     this.stumpsBrokenAt[end] = time;
   }
@@ -146,6 +157,8 @@ export class World {
     const offS = s.strikerHand === 'R' ? 1 : -1;
     // Batters.
     const [st, ns] = this.batters;
+    // Ball-tracking graphics are drawn without the batter in the way.
+    if (st) st.root.visible = this.cams.mode !== 'tracking';
     if (st) {
       st.setMirror(offS as 1 | -1);
       const stance = s.striker.anim === 'stance' || s.striker.anim === 'swing';
@@ -179,7 +192,8 @@ export class World {
     // Stand wide of the bowler's approach so the bowling camera has a clear view.
     const armSide = s.bowler.pos.x >= 0 ? 1 : -1;
     this.umpires[0]!.setTransform(-1.5 * armSide, -12.2, 0);
-    this.umpires[0]!.pose('umpire', 0, dt);
+    const sig = this.signal && time - this.signal.at < 2.6 ? this.signal : null;
+    this.umpires[0]!.pose(sig ? `signal-${sig.kind}` : 'umpire', sig ? time - sig.at : 0, dt);
     this.umpires[1]!.setTransform(-24 * offS, 10.5, offS > 0 ? Math.PI / 2 : -Math.PI / 2);
     this.umpires[1]!.pose('umpire', 0, dt);
 
@@ -193,6 +207,8 @@ export class World {
     const bp = new THREE.Vector3(s.ball.pos.x, s.ball.pos.y, s.ball.pos.z);
     const fast = Math.hypot(s.ball.vel.x, s.ball.vel.y, s.ball.vel.z) > 12 && !s.ball.held;
     this.ball.update(bp, s.ball.visible, fast, this.cams.camera.position.distanceTo(bp), time);
+
+    this.tracking.update(time);
 
     // Crowd and camera.
     this.excitement *= Math.exp(-0.5 * dt);

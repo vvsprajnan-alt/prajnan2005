@@ -1,4 +1,5 @@
 import {
+  BallTracking,
   CricketMatch,
   InningsState,
   TimingWindows,
@@ -35,6 +36,11 @@ export class Hud {
   private timing = h('div', { class: 'timing-bar' });
   private picker = h('div', { class: 'picker' });
   private timingUntil = 0;
+  private reviewBox = h('div', { class: 'review-box' });
+  private trackBox = h('div', { class: 'track-box' });
+  private reviewDeadline = 0;
+  private trackStart = 0;
+  private trackData: BallTracking | null = null;
   private dpad: HTMLElement;
   private bannerUntil = 0;
   private feedbackUntil = 0;
@@ -46,7 +52,9 @@ export class Hud {
   constructor(parent: HTMLElement, private input: Input, onPause: () => void) {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.dpad, pause);
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.dpad, pause);
+    this.reviewBox.style.display = 'none';
+    this.trackBox.style.display = 'none';
     this.picker.style.display = 'none';
     parent.append(this.el);
   }
@@ -135,6 +143,75 @@ export class Hud {
     }
     this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done', h('kbd', {}, 'H / Space'))));
     this.picker.style.display = '';
+  }
+
+  /** Pick the incoming batter (after a wicket). */
+  showBatterPicker(m: CricketMatch, current: number, onPick: (player: number) => void, onClose: () => void): void {
+    const inn = m.inn;
+    const team = m.battingTeam;
+    this.picker.innerHTML = '';
+    this.picker.append(h('h3', {}, 'Who goes in next?'));
+    const options = [current, ...inn.order.slice(inn.nextBatter)];
+    for (const p of options) {
+      const def = team.players[p]!;
+      this.picker.append(
+        h('button', { class: `opt${p === current ? ' on' : ''}`, onclick: () => onPick(p) },
+          h('span', {}, h('b', {}, def.name), ' ', h('span', { class: 'muted' }, `${def.role} · ${def.batHand}HB`)),
+          h('span', { class: 'muted' }, `BAT ${def.attrs.batting} · PWR ${def.attrs.power}`),
+          h('span', { class: 'pill' }, p === current ? 'Next in' : 'Promote')),
+      );
+    }
+    this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done')));
+    this.picker.style.display = '';
+  }
+
+  /** "Review?" prompt with a countdown. */
+  showReviewPrompt(onFieldOut: boolean, reviewsLeft: number, now: number, window: number, onReview: () => void): void {
+    this.reviewDeadline = now + window;
+    this.reviewBox.innerHTML = '';
+    this.reviewBox.append(
+      h('div', { class: 'rb-title' }, onFieldOut ? 'Given OUT - LBW' : 'LBW appeal: NOT OUT'),
+      h('div', { class: 'rb-sub' }, `Reviews left: ${reviewsLeft}`),
+      h('button', { class: 'btn', onclick: onReview }, 'Review', h('kbd', { style: 'margin-left:8px' }, 'U / Y')),
+      h('div', { class: 'bar' }, h('i', { class: 'rb-timer', style: 'width:100%' })),
+    );
+    this.reviewBox.style.display = '';
+  }
+
+  hideReviewPrompt(): void {
+    this.reviewBox.style.display = 'none';
+    this.reviewDeadline = 0;
+  }
+
+  /** Ball-tracking panel shown during a review; rows are revealed as the graphic draws. */
+  showTracking(t: BallTracking, now: number, by: string): void {
+    this.trackData = t;
+    this.trackStart = now;
+    this.trackBox.dataset.by = by;
+    this.trackBox.style.display = '';
+    this.renderTracking(now, null);
+  }
+
+  hideTracking(): void {
+    this.trackBox.style.display = 'none';
+    this.trackData = null;
+  }
+
+  showTrackingResult(text: string, sub: string, now: number): void {
+    this.renderTracking(now, { text, sub });
+  }
+
+  private renderTracking(now: number, result: { text: string; sub: string } | null): void {
+    const t = this.trackData;
+    if (!t) return;
+    const el = now - this.trackStart;
+    const label: Record<string, string> = { inLine: 'IN LINE', outsideLeg: 'OUTSIDE LEG', outsideOff: 'OUTSIDE OFF', umpiresCall: "UMPIRE'S CALL", hitting: 'HITTING', missing: 'MISSING', fullToss: 'FULL TOSS' };
+    const cls = (z: string) => (z === 'hitting' || z === 'inLine' ? 'red' : z === 'umpiresCall' ? 'amber' : 'green');
+    const row = (name: string, zone: string | undefined, at: number) =>
+      `<div class="tb-row"><span>${name}</span>${el >= at && zone ? `<b class="${cls(zone)}">${label[zone]}</b>` : '<b class="pending">…</b>'}</div>`;
+    this.trackBox.innerHTML = `<div class="tb-head">BALL TRACKING <span class="muted">· ${esc(this.trackBox.dataset.by ?? '')}</span></div>
+      ${row('PITCHING', t.pitch?.zone ?? 'fullToss', 1.3)}${row('IMPACT', t.impact.zone, 1.8)}${row('WICKETS', t.wickets.zone, 3.0)}
+      ${result ? `<div class="tb-result ${result.text === 'OUT' ? 'out' : 'notout'}">${esc(result.text)}</div><div class="tb-sub">${esc(result.sub)}</div>` : ''}`;
   }
 
   hidePicker(): void {
@@ -235,6 +312,12 @@ export class Hud {
     if (now > this.bannerUntil) this.banner.innerHTML = '';
     if (now > this.feedbackUntil) this.feedback.textContent = '';
     this.timing.style.display = now < this.timingUntil ? '' : 'none';
+    if (this.reviewDeadline) {
+      const bar = this.reviewBox.querySelector('.rb-timer') as HTMLElement | null;
+      if (bar) bar.style.width = `${Math.max(0, ((this.reviewDeadline - now) / 6) * 100)}%`;
+      if (now > this.reviewDeadline) this.hideReviewPrompt();
+    }
+    if (this.trackData && this.trackBox.querySelector('.tb-result') === null) this.renderTracking(now, null);
     this.toast.style.display = now < this.toastUntil ? '' : 'none';
     const inn = m.inn;
     const key = `${m.inningsIndex}|${inn.log.length}|${inn.runs}|${inn.wickets}|${m.phase}|${inn.currentBowler}|${inn.striker}`;
@@ -252,17 +335,17 @@ export class Hud {
     let info = `<span>RR <b>${rr}</b></span>`;
     if (inn.target !== null) {
       const need = Math.max(0, inn.target - inn.runs);
-      const left = rules.overs * rules.ballsPerOver - inn.legalBalls;
+      const left = inn.overs * rules.ballsPerOver - inn.legalBalls;
       const rrr = requiredRate(inn, rules);
       info = `<span>Need <b>${need}</b> off <b>${left}</b></span><span>RRR <b>${rrr !== null ? rrr.toFixed(2) : '-'}</b> · RR ${rr}</span>`;
     } else {
-      info += `<span>${esc(rules.format)} · ${rules.overs} ov</span>`;
+      info += `<span>${inn.superOver ? 'Super Over' : esc(rules.format)} · ${inn.overs} ov</span>`;
     }
     this.scorebug.style.setProperty('--team', bat.colors.primary);
     this.scorebug.innerHTML = `<div class="team">${esc(bat.shortName)}</div>
       <div class="score">${inn.runs}-${inn.wickets}<small>${oversString(inn.legalBalls, rules.ballsPerOver)}</small></div>
       <div class="info">${info}</div>${inn.freeHit ? '<div class="freehit">FREE HIT</div>' : ''}${
-        inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver ? '<div class="pp">POWERPLAY</div>' : ''}`;
+        inn.superOver ? '<div class="pp so">SUPER OVER</div>' : inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver ? '<div class="pp">POWERPLAY</div>' : ''}`;
 
     const card = (i: number) => inn.batters[i]!;
     const s = card(inn.striker);

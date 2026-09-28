@@ -19,6 +19,7 @@ export type Action =
   | 'side' // bowling: toggle over / round the wicket
   | 'field' // bowling: open the field editor
   | 'bowlers' // bowling: choose the bowler for this over
+  | 'review' // ask for a ball-tracking review
   | `var${number}`;
 
 const KEYMAP: Record<string, Action> = {
@@ -42,6 +43,7 @@ const KEYMAP: Record<string, Action> = {
   KeyT: 'side',
   KeyG: 'field',
   KeyH: 'bowlers',
+  KeyU: 'review',
 };
 
 // Standard gamepad mapping. LT/RT (6/7) are held modifiers for footwork, not actions.

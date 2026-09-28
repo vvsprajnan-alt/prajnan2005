@@ -67,6 +67,21 @@ While `inPlay`, every 1/120 s tick:
 - A charging batter who misses is out of ground; the keeper's normal "break the wicket at the end in danger"
   logic plus the stumping rule in `onStumpsBroken` does the rest.
 
+### Decisions and reviews
+
+- On a pad hit, `rules/tracking.ts` projects the unobstructed path (`trackLbw`) and classifies pitching,
+  impact and wickets; "umpire's call" is used when less than half the ball is hitting or in line.
+- `umpireDecision` makes the on-field call (right most of the time when clear, a coin flip when marginal).
+- When the ball is dead and a decision is challengeable, the match enters the `review` phase and defers
+  `applyBall` until the review window closes or a review is resolved (`finalizeBall`). An overturned
+  decision rewrites the outcome as of the moment of impact (nothing after it counts).
+
+### Innings structure
+
+- Every `InningsState` carries its own `overs`, `wicketLimit`, `order` and `superOver` flag, so a super over
+  is just a 1-over, 2-wicket innings pair appended to the match. Pairs are (0,1), (2,3)...; a tie in a pair
+  opens another pair when super overs are enabled.
+
 ### Determinism
 
 - Fixed timestep, no wall-clock time, a seeded `Rng` for every random decision; AI uses its own seeded RNGs so

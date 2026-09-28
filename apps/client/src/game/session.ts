@@ -7,6 +7,7 @@ import {
   MatchConfig,
   MatchEvent,
   MatchHost,
+  REVIEW_WINDOW,
   Rng,
   STRIKER_STUMPS_Z,
   STROKES,
@@ -61,7 +62,8 @@ export class GameSession {
   private followUntil = 0;
   private cutUntil = 0;
   private lastCall: string | null = null;
-  private breakShown = false;
+  private breakShownFor = -1;
+  private trackUntil = 0;
   private completeShown = false;
   private disposed = false;
   private screenKey = '';
@@ -149,6 +151,11 @@ export class GameSession {
     for (const a of actions) {
       if (a === 'pause') {
         this.cb.onPause();
+        return;
+      }
+      // Review: U, or the "run" button (Y) while a decision can be challenged.
+      if ((a === 'review' || (a === 'run' && m.phase === 'review')) && m.pendingReview?.team === this.humanTeam) {
+        this.requestReview();
         return;
       }
     }
@@ -246,6 +253,26 @@ export class GameSession {
     }
   }
 
+  private requestReview(): void {
+    this.send({ type: 'review' });
+    this.hud.hideReviewPrompt();
+  }
+
+  private openBatterPicker(): void {
+    const m = this.match;
+    const inn = m.inn;
+    const current = inn.batters[inn.batters.length - 1]!.player;
+    this.hud.showBatterPicker(
+      m,
+      current,
+      (p) => {
+        if (p !== current) this.send({ type: 'batter.select', player: p });
+        this.hud.hidePicker();
+      },
+      () => this.hud.hidePicker(),
+    );
+  }
+
   private openPicker(): void {
     this.hud.showPicker(
       this.match,
@@ -270,9 +297,10 @@ export class GameSession {
     const now = this.time;
     const hud = this.hud;
     const humanBatting = this.mode() === 'batting';
+    const world = this.world;
     switch (e.type) {
       case 'release':
-        hud.setSpeed(e.speedKmh, VARIATION_LABEL[e.variation as Variation] ?? e.variation);
+        hud.setSpeed(e.speedKmh, `${VARIATION_LABEL[e.variation as Variation] ?? e.variation}${e.reverse ? ' · reversing' : ''}`);
         this.world.ball.resetTrail();
         break;
       case 'bounce':
@@ -300,14 +328,51 @@ export class GameSession {
       }
       case 'padHit':
         this.sfx.bounce();
-        if (e.lbw) hud.showBanner('HOWZAT!', 'Given out LBW', 'out', now, 1.6);
-        else hud.showToast(`Appeal: not out - ${e.reason}`, now);
+        if (!e.appeal) break;
+        hud.showBanner('HOWZAT!', e.lbw ? 'Given out LBW' : 'Not out', e.lbw ? 'out' : '', now, 1.6);
+        world.umpireSignal(e.lbw ? 'out' : 'notOut', now + 0.5);
+        break;
+      case 'reviewAvailable': {
+        const mine = e.team === this.humanTeam;
+        if (mine) hud.showReviewPrompt(e.onFieldOut, m.reviewsLeft[e.team], now, REVIEW_WINDOW, () => this.requestReview());
+        else if (this.humanTeam !== null) hud.showToast(`${m.cfg.teams[e.team]!.name} are thinking about a review...`, now);
+        break;
+      }
+      case 'reviewStarted':
+        hud.hideReviewPrompt();
+        world.tracking.show(e.tracking, now);
+        world.cams.mode = 'tracking';
+        this.trackUntil = Infinity;
+        hud.showTracking(e.tracking, now, `${m.cfg.teams[e.team]!.shortName} review`);
+        this.sfx.cheer(0.3);
+        break;
+      case 'reviewResult': {
+        const sub = e.overturned ? 'Decision overturned' : e.umpiresCall ? "Umpire's call - review retained" : `Decision stands - review lost (${e.reviewsLeft} left)`;
+        hud.showTrackingResult(e.out ? 'OUT' : 'NOT OUT', sub, now);
+        world.umpireSignal(e.out ? 'out' : 'notOut', now);
+        this.trackUntil = now + 2.8;
+        this.world.cheer(e.overturned ? 0.8 : 0.3);
+        break;
+      }
+      case 'bouncer':
+        if (!e.noBall && this.mode() === 'bowling') hud.showToast(`Bouncer ${e.count}/${m.cfg.rules.bouncersPerOver} this over`, now);
+        break;
+      case 'overthrow':
+        hud.showToast('Overthrow!', now);
+        break;
+      case 'superOver':
+        hud.showBanner('SUPER OVER', 'One over, two wickets. Winner takes it.', 'six', now, 3);
+        break;
+      case 'newBatter':
+        hud.showToast(`${m.battingTeam.players[e.player]!.name} is promoted`, now);
         break;
       case 'wide':
         hud.showBanner('WIDE', '', '', now, 1.4);
+        world.umpireSignal('wide', now);
         break;
       case 'noBall':
         hud.showBanner('NO BALL', `${e.reason} · Free hit next ball`, '', now, 1.8);
+        world.umpireSignal('noBall', now);
         break;
       case 'stumpsHit':
         this.world.onStumpsBroken(e.end === 'striker' ? 'S' : 'B', now);
@@ -327,6 +392,7 @@ export class GameSession {
         break;
       case 'boundary':
         hud.showBanner(e.runs === 6 ? 'SIX!' : 'FOUR!', '', e.runs === 6 ? 'six' : 'four', now, 2.6);
+        world.umpireSignal(e.runs === 6 ? 'six' : 'four', now + 0.4);
         this.world.cheer(1);
         this.sfx.cheer(e.runs === 6 ? 1 : 0.7);
         this.world.cams.kick(0.15);
@@ -334,14 +400,19 @@ export class GameSession {
       case 'wicket': {
         const name = m.battingTeam.players[e.batter]?.name ?? '';
         hud.showBanner('OUT!', `${name} ${e.text}`, 'out', now, 3);
+        if (e.kind !== 'lbw') world.umpireSignal('out', now + 0.3);
+        if (this.mode() === 'batting' && !m.inn.complete) setTimeout(() => !this.disposed && this.openBatterPicker(), 900);
         this.world.cheer(1);
         this.sfx.cheer(0.9);
         break;
       }
-      case 'ballDead':
+      case 'ballDead': {
         if (!/^(FOUR|SIX|OUT)/.test(e.summary)) hud.showToast(e.summary, now);
+        const last = m.inn.log[m.inn.log.length - 1]?.outcome;
+        if (last && (last.extra === 'bye' || last.extra === 'legBye')) world.umpireSignal('bye', now + 0.3);
         this.followUntil = Math.min(this.followUntil, now + 1.4);
         break;
+      }
       case 'overComplete':
         setTimeout(() => !this.disposed && hud.showToast(`End of over ${e.over}`, this.time), 1200);
         break;
@@ -364,7 +435,16 @@ export class GameSession {
     const mode = this.mode();
     const now = this.time;
     // Camera choice.
-    if (m.phase === 'preDelivery' || m.phase === 'runUp') {
+    const reviewing = (m.phase === 'review' && m.pendingReview?.reviewing) || now < this.trackUntil;
+    if (!reviewing && this.world.cams.mode === 'tracking') {
+      this.world.tracking.hide();
+      this.hud.hideTracking();
+      this.trackUntil = 0;
+      this.world.cams.mode = this.preBallCam();
+    }
+    if (reviewing) {
+      this.world.cams.mode = 'tracking';
+    } else if (m.phase === 'preDelivery' || m.phase === 'runUp') {
       this.world.cams.mode = this.preBallCam();
       this.followUntil = 0;
       this.lastCall = null;
@@ -376,7 +456,7 @@ export class GameSession {
         this.world.cams.startFollow(new THREE.Vector3(v.x, v.y, v.z));
         this.world.cams.mode = 'follow';
       }
-    } else if (m.phase === 'dead' && now > this.followUntil) {
+    } else if ((m.phase === 'dead' || m.phase === 'review') && now > this.followUntil) {
       this.world.cams.mode = this.preBallCam();
     } else if (m.phase === 'inPlay' && !m.batContact && this.world.cams.mode === 'follow') {
       this.world.cams.mode = this.preBallCam();
@@ -406,7 +486,9 @@ export class GameSession {
         this.pickerFor = key;
         this.openPicker();
       }
-    } else if (this.hud.pickerOpen && m.phase !== 'preDelivery') this.hud.hidePicker();
+    } else if (this.hud.pickerOpen && ((mode === 'bowling' && m.phase !== 'preDelivery') || (mode === 'batting' && (m.phase === 'runUp' || m.phase === 'inPlay')))) {
+      this.hud.hidePicker();
+    }
 
     // HUD.
     const hud = this.hud;
@@ -439,12 +521,10 @@ export class GameSession {
     }
     hud.setHint(hint);
 
-    if (m.phase === 'inningsBreak' && !this.breakShown) {
-      this.breakShown = true;
+    if (m.phase === 'inningsBreak' && this.breakShownFor !== m.innings.length) {
+      this.breakShownFor = m.innings.length;
+      this.hud.hideReviewPrompt();
       this.cb.onInningsBreak(m);
-    }
-    if (m.phase === 'preDelivery' && this.breakShown && m.inningsIndex === 1) {
-      // second innings started
     }
     if (m.phase === 'complete' && !this.completeShown) {
       this.completeShown = true;

@@ -16,6 +16,8 @@ export interface BallTracking {
   wickets: { pos: Vec3; zone: WicketsZone };
   /** Projected path from impact to the stumps (for drawing). */
   projection: Vec3[];
+  /** The actual path from release to impact (for drawing). */
+  approach: Vec3[];
   /** Impact distance in front of the stumps (m). */
   distance: number;
   shotOffered: boolean;
@@ -41,6 +43,7 @@ export function trackLbw(
   offS: number,
   shotOffered: boolean,
   cond: PitchConditions,
+  approach: Vec3[] = [],
 ): BallTracking {
   const side = (x: number) => x * offS; // + = off side
   let pitch: BallTracking['pitch'] = null;
@@ -92,6 +95,7 @@ export function trackLbw(
     impact: { pos: { ...impact }, zone: impactZone },
     wickets: { pos: at, zone: wicketsZone },
     projection,
+    approach: [...approach, { ...impact }],
     distance,
     shotOffered,
     verdict,

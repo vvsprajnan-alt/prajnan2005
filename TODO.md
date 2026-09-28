@@ -30,15 +30,29 @@
 - [x] Balance pass: catch reaction-time model, keeper cannot take balls in front of the bat, fewer mistimed pop-ups, safer AI running. Full AI T20s finish around 130-170 with 6-10 wickets
 - [x] POWERPLAY tag on the scorebug
 
+### Phase 3 - rules and physics polish
+- [x] LBW ball tracking: pitching / impact / wickets zones and the projected path, with umpire's call (less than half the ball hitting, or in line)
+- [x] Imperfect on-field umpire decisions; player reviews (2 per innings, 1 in a super over), kept when overturned or umpire's call
+- [x] Review phase in the sim (scoring waits for the review); AI sides decide when to review
+- [x] Ball-tracking graphic and camera, review prompt with countdown, tracking panel and verdict
+- [x] One bouncer per over (above shoulder height at the crease); the second is a no-ball; a proper bouncer length
+- [x] Overthrow boundaries score the runs completed (+ a crossed run) plus four
+- [x] Super over for ties (repeats up to three times), with its own innings break screens and scorebug tag
+- [x] Batting order: set it before the match; choose who comes in after each wicket (promote a batter)
+- [x] Ball age: conventional swing fades, reverse swing for pace bowlers from about the 12th over, seam fades
+- [x] Umpire signals: out, four, six, wide, no-ball, bye, not out
+- [x] Fixes: throws from behind the stumps were treated as missed on release (spurious chases/overthrows); throws can be taken up to head height at the stumps
+
 ## Current task
 
-- Phase 2 review: feedback on footwork / charge feel, the field editor and the bowling guide before Phase 3.
+- Phase 3 review: feedback on reviews / ball tracking and super overs before Phase 4 (human-controlled fielding).
 
 ## Known bugs / limitations
 
 - Players are simple primitive models; animation is procedural and approximate.
-- The human cannot choose the batting order yet.
 - Drops are a little frequent (about 8 per AI T20).
+- Reviews cover LBW only (not caught-behind / edges).
+- The AI does not promote batters in its own order.
 - No replays yet; human-controlled fielding is not implemented (all fielders are AI).
 - The crowd is instanced boxes; audio is synthesized ambience only.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
@@ -46,9 +60,8 @@
 
 ## Next tasks
 
-1. Phase 3: physics and rules polish - ball-tracking LBW view, umpire's call, one-bouncer-per-over rule, overthrows presentation, super over for ties, batting order
-2. Phase 4: human-controlled fielding (auto-switch to the most relevant fielder, manual switch, catch/throw inputs)
-3. Phase 5: Node.js authoritative server running `MatchHost`, WebSocket protocol, snapshot/event sync, latency compensation for shot/release timing
-4. Phase 6: private rooms (codes, invites, ready check, seats), reconnect and AI takeover, quick-chat
-5. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
-6. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
+1. Phase 4: human-controlled fielding (auto-switch to the most relevant fielder, manual switch, catch/throw inputs)
+2. Phase 5: Node.js authoritative server running `MatchHost`, WebSocket protocol, snapshot/event sync, latency compensation for shot/release timing
+3. Phase 6: private rooms (codes, invites, ready check, seats), reconnect and AI takeover, quick-chat
+4. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
+5. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export type CamMode = 'batting' | 'bowling' | 'follow' | 'broadcast' | 'wicketSide' | 'tracking';
+export type CamMode = 'batting' | 'bowling' | 'follow' | 'broadcast' | 'wicketSide' | 'tracking' | 'fielding';
 
 /**
  * Camera director: picks a framing for the moment and eases between them.
@@ -33,6 +33,9 @@ export class CameraDirector {
     this.followFrom.set(-dir.x * 26, 20, dir.z < 0.3 ? 34 : -34);
   }
 
+  /** Controlled fielder position, for the fielding camera. */
+  fielder: THREE.Vector3 | null = null;
+
   update(dt: number, ctx: { ball: THREE.Vector3; bowler: THREE.Vector3; offS: number; runUpT: number }): void {
     let pos: THREE.Vector3;
     let look: THREE.Vector3;
@@ -58,6 +61,21 @@ export class CameraDirector {
         const d = pos.distanceTo(look);
         fov = THREE.MathUtils.clamp(900 / d, 22, 55);
         ease = 4;
+        break;
+      }
+      case 'fielding': {
+        // Behind the controlled fielder (away from the pitch), looking at him and the ball.
+        const f = this.fielder ?? ctx.ball;
+        const out = new THREE.Vector3(f.x, 0, f.z);
+        if (out.lengthSq() < 4) out.set(0, 0, -1);
+        out.normalize();
+        const mid = f.clone().lerp(ctx.ball, 0.5);
+        const spread = Math.min(40, f.distanceTo(ctx.ball));
+        pos = new THREE.Vector3(f.x, 0, f.z).addScaledVector(out, 11 + spread * 0.5);
+        pos.y = 8 + spread * 0.35;
+        look = new THREE.Vector3(mid.x, 0.5, mid.z);
+        fov = 50;
+        ease = 3.5;
         break;
       }
       case 'tracking':

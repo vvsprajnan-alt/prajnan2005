@@ -43,9 +43,17 @@
 - [x] Umpire signals: out, four, six, wide, no-ball, bye, not out
 - [x] Fixes: throws from behind the stumps were treated as missed on release (spurious chases/overthrows); throws can be taken up to head height at the stumps
 
+### Phase 4 - human fielding and smarter captaincy
+- [x] Fielding control modes: Auto, Assisted (default) and Manual
+- [x] Auto-switch to the fielder chasing the ball on each new situation (hit, deflection, missed throw); manual switch to the nearest fielder and back to auto
+- [x] Steering (camera-relative), dives (burst + reach, then recovery), timed catch press in Manual, choosing the throw end, running the ball in to break the stumps
+- [x] Fielding camera, controlled-fielder ring, landing marker for catches, context controls and hints, Settings option
+- [x] Commands validated in the sim (`field.move/switch/dive/throw/catch`), so a second bowling-side player can field in 2v2
+- [x] Wagon wheel (shot angles on every scoring shot) and an AI captain that moves a boundary fielder into a batter's favourite area
+
 ## Current task
 
-- Phase 3 review: feedback on reviews / ball tracking and super overs before Phase 4 (human-controlled fielding).
+- Phase 4 review: feedback on fielding feel (camera, steering speed, catch timing) before Phase 5 (the multiplayer server).
 
 ## Known bugs / limitations
 
@@ -53,15 +61,15 @@
 - Drops are a little frequent (about 8 per AI T20).
 - Reviews cover LBW only (not caught-behind / edges).
 - The AI does not promote batters in its own order.
-- No replays yet; human-controlled fielding is not implemented (all fielders are AI).
+- No replays yet.
+- Fielding steering is camera-relative; the fielding camera can swing when the ball passes the fielder.
 - The crowd is instanced boxes; audio is synthesized ambience only.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
 - Single client bundle (~630 KB, ~175 KB gzip).
 
 ## Next tasks
 
-1. Phase 4: human-controlled fielding (auto-switch to the most relevant fielder, manual switch, catch/throw inputs)
-2. Phase 5: Node.js authoritative server running `MatchHost`, WebSocket protocol, snapshot/event sync, latency compensation for shot/release timing
-3. Phase 6: private rooms (codes, invites, ready check, seats), reconnect and AI takeover, quick-chat
-4. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
-5. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
+1. Phase 5: Node.js authoritative server running `MatchHost`, WebSocket protocol, snapshot/event sync, latency compensation for shot/release timing
+2. Phase 6: private rooms (codes, invites, ready check, seats), reconnect and AI takeover, quick-chat
+3. Phase 7: presentation - team intros, replays, wagon wheel, pitch map, commentary captions
+4. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio

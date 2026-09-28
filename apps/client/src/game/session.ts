@@ -83,6 +83,7 @@ export class GameSession {
     const assist = ASSIST_LEVEL[settings.assist];
     cfg.assist = [humanTeam === 0 ? assist : 0, humanTeam === 1 ? assist : 0];
     cfg.autoContinueAfter = humanTeam === null ? 4 : null;
+    if (humanTeam !== null) cfg.fieldingControl = humanTeam === 0 ? [settings.fielding, 'auto'] : ['auto', settings.fielding];
     this.host = new MatchHost(cfg, { humanTeams: humanTeam === null ? [] : [humanTeam], autoRunForHumans: settings.autoRun });
     this.hud = new Hud(hudParent, input, () => cb.onPause());
     if (humanTeam === null) this.hud.el.style.display = 'none';
@@ -191,7 +192,45 @@ export class GameSession {
     }
   }
 
+  private lastMove = { x: 0, z: 0 };
+
+  /** Is the human currently controlling a fielder? */
+  private fieldingActive(m: CricketMatch): boolean {
+    const h = m.fielding.human;
+    return this.mode() === 'bowling' && m.phase === 'inPlay' && !!h && h.controlled >= 0 && (m.batContact || m.passedBatter || m.padContact);
+  }
+
+  private fieldingInput(actions: Action[], m: CricketMatch): void {
+    // Screen-relative stick -> world direction using the camera's heading.
+    const d = this.input.dir();
+    const cam = this.world.cams.camera;
+    const fwd = new THREE.Vector3();
+    cam.getWorldDirection(fwd);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, 1);
+    fwd.normalize();
+    const x = -fwd.z * d.x + fwd.x * d.y;
+    const z = fwd.x * d.x + fwd.z * d.y;
+    if (Math.abs(x - this.lastMove.x) > 0.04 || Math.abs(z - this.lastMove.z) > 0.04) {
+      this.lastMove = { x, z };
+      this.send({ type: 'field.move', x, z }, 'fielder');
+    }
+    const holding = m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled;
+    for (const a of actions) {
+      if (a === 'primary') this.send(holding ? { type: 'field.throw', end: 'S' } : { type: 'field.dive' }, 'fielder');
+      else if (a === 'lofted' && holding) this.send({ type: 'field.throw', end: 'B' }, 'fielder');
+      else if (a === 'defend') this.send({ type: 'field.catch' }, 'fielder');
+      else if (a === 'sweep') this.send({ type: 'field.switch', to: 'nearest' }, 'fielder');
+      else if (a === 'reverseSweep') this.send({ type: 'field.switch', to: 'auto' }, 'fielder');
+    }
+  }
+
   private bowlingInput(actions: Action[], m: CricketMatch): void {
+    if (this.fieldingActive(m)) {
+      this.fieldingInput(actions, m);
+      return;
+    }
+    if (this.lastMove.x || this.lastMove.z) this.lastMove = { x: 0, z: 0 };
     const bowlerIdx = m.inn.currentBowler;
     const style = m.bowlerDef.bowlStyle;
     if (bowlerIdx !== this.intentBowler) {
@@ -450,6 +489,8 @@ export class GameSession {
       this.lastCall = null;
     } else if (now < this.cutUntil) {
       // keep the dramatic cut
+    } else if (this.fieldingActive(m) && this.settings.fielding !== 'auto') {
+      this.world.cams.mode = 'fielding';
     } else if (m.phase === 'inPlay' && (m.batContact || (m.passedBatter && m.running.inRun))) {
       if (this.world.cams.mode !== 'follow') {
         const v = m.ball.vel;
@@ -493,7 +534,8 @@ export class GameSession {
     // HUD.
     const hud = this.hud;
     hud.update(m, now, mode);
-    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over' });
+    const fielding = this.fieldingActive(m) ? (m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled ? 'holding' : 'chasing') : null;
+    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding });
     if (mode === 'bowling') {
       hud.setVariations(m.phase === 'preDelivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => {
         this.intent = { ...this.intent, variation: v };
@@ -515,6 +557,10 @@ export class GameSession {
       if (m.phase === 'preDelivery' || m.phase === 'runUp' || (m.phase === 'inPlay' && !m.swing && !m.batContact && !m.passedBatter))
         hint = pad ? 'Stick: aim · A ground · X lofted · B defend · RT/LT front/back foot · D-pad ▲ charge' : 'Aim WASD · Space ground · K lofted · L defend · hold Shift/V front/back foot · F charge';
       else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'Y run · RT stay · LT back' : 'R/Y run · N stay · B back';
+    } else if (mode === 'bowling' && fielding) {
+      hint = fielding === 'holding'
+        ? pad ? 'A: throw to keeper · X: throw to bowler · stick: run it in' : 'Space: throw to keeper · K: throw to bowler · WASD: run it in'
+        : pad ? 'Stick: run · A: dive · B: catch · LB: switch · RB: auto' : 'WASD: run · Space: dive · L: catch · Q: switch fielder · E: auto';
     } else if (mode === 'bowling') {
       if (m.phase === 'preDelivery') hint = pad ? 'Stick: marker · D-pad: variation · R3: over/round · Back: field · A: run in' : 'WASD: marker · 1-8: variation · T: over/round · G: field · H: bowler · Space: run in';
       else if (m.phase === 'runUp') hint = pad ? 'Press A in the green zone' : 'Press Space in the green zone to release';

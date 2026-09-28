@@ -7,10 +7,11 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 3 complete. Single player against the AI is playable in the browser: batting with
+**Status:** Phase 4 complete. Single player against the AI is playable in the browser: batting with
 footwork and charging, bowling from over or round the wicket with a delivery-path guide, bowler selection,
 field placement under T20 fielding restrictions, LBW reviews with ball tracking, the one-bouncer rule,
-super overs, batting orders, physics, fielding, running, full scoring and a result.
+super overs, batting orders, human-controlled fielding (assisted or manual), physics, AI fielding, running,
+full scoring and a result.
 Online 2v2 comes in Phases 5-6.
 See [TODO.md](TODO.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -58,6 +59,9 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Set the field | G | Back / Select | Field |
 | Choose the bowler (start of an over) | H | - | Bowler |
 | Review an LBW decision (when offered) | U | Y | Review |
+| Fielding: run / dive / catch | WASD / Space / L | Stick / A / B | Pad / Dive / Catch |
+| Fielding: throw to keeper / bowler | Space / K (holding) | A / X | Throw buttons |
+| Fielding: switch fielder / auto | Q / E | LB / RB | Switch / Auto |
 | Run in, then release | Space (twice) | A (twice) | Bowl, then Release |
 | Pause | Esc or P | Start | II |
 
@@ -84,6 +88,12 @@ balls to set the field: pick a preset or drag fielders on the map. T20 restricti
 engine - 2 fielders outside the 30-yard circle in the powerplay, 5 after it, no more than 2 behind square on the
 leg side - and illegal positions are pulled inside automatically. "Auto" lets the AI captain set fields by
 phase and situation.
+
+**Fielding.** When your side bowls you control a fielder once the ball is hit (Settings -> Fielding). On
+Assisted, control jumps to the fielder chasing it, who runs there himself until you steer; catches are automatic
+and he picks a throw if you don't choose one quickly. On Manual you run, press Catch as the ball arrives (a white
+ring shows where it will come down) and choose every throw. Dive for balls just out of reach, switch to the
+fielder nearest the ball with Q, and run the ball in to break the stumps yourself.
 
 **Rules.** LBW decisions are made by an on-field umpire who can get close calls wrong. Each side has two
 reviews per innings: the ball-tracking graphic shows where the ball pitched, where it hit the pad and whether it
@@ -151,9 +161,9 @@ antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under flo
 
 ## Testing
 
-`npm test` runs ~75 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~85 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
 wicket, delivery previews, AI captaincy over a full T20, LBW tracking and umpire's call, reviews, the bouncer
-rule, super overs, batting orders and reverse swing.
+rule, super overs, batting orders, reverse swing, human fielding control and adaptive AI fields.

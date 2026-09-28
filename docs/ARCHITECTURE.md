@@ -82,6 +82,17 @@ While `inPlay`, every 1/120 s tick:
   is just a 1-over, 2-wicket innings pair appended to the match. Pairs are (0,1), (2,3)...; a tie in a pair
   opens another pair when super overs are enabled.
 
+### Human fielding
+
+- `FieldingUnit.human` holds one side's control state (`newHumanFielding(mode)`); the AI keeps running every
+  other fielder, and in Assisted mode also the controlled one whenever the stick is idle.
+- Control switches to the planned chaser only on *event* re-plans (hit, deflection, missed throw), never on
+  the periodic 0.4 s re-plan, so steering isn't yanked away mid-run.
+- Catch probability for the controlled fielder uses the same model plus dive reach and, in Manual, the timing
+  of the last `field.catch` press. Throw choice waits for `field.throw` (short in Assisted, long in Manual).
+- Because all of this is command-driven (`field.move/switch/dive/throw/catch`), the server can accept it from
+  the bowling side's second player in 2v2.
+
 ### Determinism
 
 - Fixed timestep, no wall-clock time, a seeded `Rng` for every random decision; AI uses its own seeded RNGs so

@@ -277,6 +277,7 @@ export class App {
       h('div', { class: 'row', style: 'margin-top:12px' },
         field('Assistance', sel('assist', [['beginner', 'Beginner (wide timing, full guide)'], ['standard', 'Standard'], ['pro', 'Pro (no guide during run-up)']])),
         field('Running', sel('autoRun', [['false', 'Manual calls'], ['true', 'Automatic']])),
+        field('Fielding', sel('fielding', [['assisted', 'Assisted (recommended)'], ['manual', 'Manual'], ['auto', 'Automatic (AI fields)']])),
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
         field('Bowling pitch guide', sel('showPitchGuide', [['true', 'On'], ['false', 'Off']])),
@@ -324,6 +325,15 @@ export class App {
       </tbody></table>
       <p class="muted">One bouncer (above shoulder height) is allowed per over; the second is a no-ball. From about the 12th over a pace bowler's swing deliveries can reverse. LBW decisions can be reviewed with ball tracking: you keep the review if it is overturned or umpire's call. Tied matches go to a Super Over.</p>
       <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. On Beginner and Standard assistance a dashed line previews the delivery's path including swing and turn. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
+      <h3>Fielding (when your side is bowling)</h3>
+      <table class="card"><tbody>
+      <tr><td>Run with the highlighted fielder</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
+      <tr><td>Dive (not holding) / throw to the keeper (holding)</td><td>Space</td><td>A</td><td>Dive / Throw: keeper</td></tr>
+      <tr><td>Throw to the bowler's end</td><td>K</td><td>X</td><td>Throw: bowler</td></tr>
+      <tr><td>Catch (timing press, Manual)</td><td>L</td><td>B</td><td>Catch</td></tr>
+      <tr><td>Switch to the fielder nearest the ball / back to auto</td><td>Q / E</td><td>LB / RB</td><td>Switch / Auto</td></tr>
+      </tbody></table>
+      <p class="muted">Assisted: control jumps to the fielder chasing the ball, who runs there himself until you steer; catches are automatic; if you don't pick a throw quickly he chooses. Manual: you run, time the catch press as the ball arrives (the white ring shows where it will land), and choose every throw. Run the ball in yourself to break the stumps.</p>
       <h3>General</h3>
       <table class="card"><tbody><tr><td>Pause</td><td>Esc / P</td><td>Start</td><td>II button</td></tr></tbody></table>`;
     this.show(h('div', { class: 'menu-card' }, this.header('Controls'), h('div', { html }),

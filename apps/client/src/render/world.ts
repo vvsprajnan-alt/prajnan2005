@@ -31,6 +31,8 @@ export class World {
   private preview: THREE.InstancedMesh;
   private cue: THREE.Mesh;
   readonly tracking = new TrackingView();
+  private controlRing: THREE.Mesh;
+  private landingMark: THREE.Mesh;
   private signal: { kind: UmpireSignal; at: number } | null = null;
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
@@ -70,6 +72,20 @@ export class World {
     this.cue.visible = false;
     this.scene.add(this.cue);
     this.scene.add(this.tracking.group);
+    // Human fielding: ring under the controlled fielder and where a catch will come down.
+    this.controlRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.75, 32),
+      new THREE.MeshBasicMaterial({ color: '#ffb627', transparent: true, opacity: 0.9, depthWrite: false }),
+    );
+    this.controlRing.rotation.x = -Math.PI / 2;
+    this.controlRing.visible = false;
+    this.landingMark = new THREE.Mesh(
+      new THREE.RingGeometry(0.35, 0.5, 32),
+      new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85, depthWrite: false }),
+    );
+    this.landingMark.rotation.x = -Math.PI / 2;
+    this.landingMark.visible = false;
+    this.scene.add(this.controlRing, this.landingMark);
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -209,6 +225,19 @@ export class World {
     this.ball.update(bp, s.ball.visible, fast, this.cams.camera.position.distanceTo(bp), time);
 
     this.tracking.update(time);
+    // Human fielding markers.
+    const c = s.control;
+    this.controlRing.visible = !!c;
+    this.landingMark.visible = !!c?.landing;
+    this.cams.fielder = c ? new THREE.Vector3(c.pos.x, 0, c.pos.z) : null;
+    if (c) {
+      this.controlRing.position.set(c.pos.x, 0.03, c.pos.z);
+      (this.controlRing.material as THREE.MeshBasicMaterial).color.set(c.holding ? '#7bd88f' : '#ffb627');
+      if (c.landing) {
+        this.landingMark.position.set(c.landing.x, 0.03, c.landing.z);
+        this.landingMark.scale.setScalar(1 + 0.25 * Math.sin(time * 10));
+      }
+    }
 
     // Crowd and camera.
     this.excitement *= Math.exp(-0.5 * dt);

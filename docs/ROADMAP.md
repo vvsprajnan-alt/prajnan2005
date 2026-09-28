@@ -5,8 +5,8 @@
 | 1 | Project structure and smallest playable cricket loop | **Done** |
 | 2 | Batting and bowling depth: footwork, charging, advanced shots, over/round the wicket, bowler/field selection with T20 restrictions, delivery path preview, timing bar, AI captaincy | **Done** |
 | 3 | Physics and rules polish: ball-tracking LBW, umpire's call and reviews, bouncer limit, overthrows, super over, batting order, reverse swing, umpire signals | **Done** |
-| 4 | Human-controlled fielding with auto/manual switching; smarter AI captaincy | Next |
-| 5 | Authoritative Node.js server, WebSocket protocol, snapshot/event sync, latency compensation | |
+| 4 | Human-controlled fielding with auto/manual switching; smarter AI captaincy | **Done** |
+| 5 | Authoritative Node.js server, WebSocket protocol, snapshot/event sync, latency compensation | Next |
 | 6 | Private rooms: codes, invites, ready check, seats, reconnect and AI takeover, quick-chat | |
 | 7 | Presentation: team intros, replays, wagon wheel, pitch map, commentary captions | |
 | 8 | Art and audio: skinned characters and animation, crowd, stadium detail, sound design | |

@@ -275,8 +275,8 @@ export class Hud {
   }
 
   /** Context-sensitive on-screen buttons (also the touch controls). */
-  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string } = {}): void {
-    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}`;
+  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null } = {}): void {
+    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -296,6 +296,12 @@ export class Hud {
         row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
         row(fwBtn, btn('Charge', 'F', 'D-pad ▲', 'charge'), btn('Sweep', 'Q', 'LB', 'sweep'), btn('Rev Sweep', 'E', 'RB', 'reverseSweep')),
         row(btn('Defend', 'L', 'B', 'defend'), btn('Lofted', 'K', 'X', 'lofted', 'big'), btn('Ground', 'Space', 'A', 'primary', 'big')),
+      );
+    } else if (mode === 'bowling' && extra.fielding) {
+      const holding = extra.fielding === 'holding';
+      this.controls.append(
+        row(btn('Switch', 'Q', 'LB', 'sweep'), btn('Auto', 'E', 'RB', 'reverseSweep'), btn('Catch', 'L', 'B', 'defend')),
+        row(btn(holding ? 'Throw: bowler' : '—', 'K', 'X', 'lofted'), btn(holding ? 'Throw: keeper' : 'Dive', 'Space', 'A', 'primary', 'big')),
       );
     } else if (mode === 'bowling') {
       const label = phase === 'runUp' ? 'Release' : 'Bowl';

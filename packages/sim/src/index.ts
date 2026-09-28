@@ -19,3 +19,4 @@ export * from './match/host';
 export * from './ai/difficulty';
 export * from './ai/bowlerAi';
 export * from './ai/batterAi';
+export * from './ai/captain';

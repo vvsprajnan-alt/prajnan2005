@@ -152,7 +152,9 @@ export class FieldingUnit {
         const catchable = airborneCatch && s.bounces === ctx.bouncesAtContact;
         const reachH = catchable ? 2.45 : 0.95;
         if (s.pos.y > reachH) continue;
-        const need = f.react + Math.max(0, distXZ(f.pos, s.pos) - 0.7) / spd;
+        // Judging a catch takes longer than running to a ground ball, and the keeper stays behind the bat.
+        if (f.role === 'keeper' && catchable && s.pos.z < STRIKER_STUMPS_Z - 0.3 && s.pos.y < 1.6) continue;
+        const need = f.react + (catchable ? 0.35 : 0) + Math.max(0, distXZ(f.pos, s.pos) - 0.7) / (catchable ? spd * 0.9 : spd);
         if (need <= s.t) {
           if (!best || s.t < best.t) {
             if (best) second = best;
@@ -325,14 +327,23 @@ export class FieldingUnit {
       const d = distXZ(f.pos, ball.pos);
       const airborneCatch = ctx.batContact && ball.bounces === ctx.bouncesAtContact && ball.pos.y > 0.1 && !ball.rolling;
       const isThrowTarget = this.throwEnd !== null && this.guards[this.throwEnd] === f.idx;
+      // The keeper works behind the stumps (skiers aside): nothing in front of the bat.
+      const keeperCanReach = f.role !== 'keeper' || ball.pos.z > STRIKER_STUMPS_Z - 0.3 || ball.pos.y > 1.6;
       // Go for the catch at the ball's closest approach (or when it is right there).
       const closest = d >= prevD || d < 0.45;
-      if (airborneCatch && closest && ball.pos.y < 2.5 && d < (f.catching || f.role === 'keeper' ? 1.9 : 1.1)) {
+      const reachC = f.role === 'keeper' ? 1.5 : f.catching ? 1.7 : 1.0;
+      if (airborneCatch && keeperCanReach && closest && ball.pos.y < 2.5 && d < reachC) {
         const dive = d > 1.0;
         const speed = length(ball.vel);
-        let p = 0.42 + 0.55 * a01(f.def.attrs.catching) - Math.max(0, speed - 16) * 0.012 - (dive ? 0.3 : 0) - (ball.pos.y > 2.1 ? 0.12 : 0);
+        const onTheRun = f.speed > 5 ? 0.12 : 0;
+        let p = 0.42 + 0.55 * a01(f.def.attrs.catching) - Math.max(0, speed - 16) * 0.012 - (dive ? 0.3 : 0) - (ball.pos.y > 2.1 ? 0.12 : 0) - onTheRun;
         if (f.role === 'keeper') p += 0.06;
-        p = clamp(p, 0.04, 0.97);
+        // Reaction: close catches off the bat leave little time to get the hands there.
+        const needT = 0.14 + d * 0.26 - 0.06 * a01(f.def.attrs.reaction);
+        if (ctx.sinceContact < needT) p *= (ctx.sinceContact / needT) ** 1.5;
+        p = clamp(p, 0.02, 0.97);
+        // Not a real chance: it just flies past.
+        if (p < 0.15) continue;
         f.anim = dive ? 'dive' : 'catch';
         f.animT = 0.6;
         if (ctx.rng.next() < p) {

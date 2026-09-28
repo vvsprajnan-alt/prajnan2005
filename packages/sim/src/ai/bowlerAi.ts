@@ -11,6 +11,7 @@ import { AI_SKILL } from './difficulty';
 export class BowlerAI {
   private plannedError = 0;
   private aimed = false;
+  private reacted = false;
   private lastTick = -1;
   /** Separate stream so AI "thinking" never perturbs the match RNG. */
   private rng: Rng;
@@ -32,9 +33,19 @@ export class BowlerAI {
         out.push({ type: 'bowl.start' });
       }
     } else if (m.phase === 'runUp') {
+      // Batter coming down the pitch: good bowlers drag it shorter and wider.
+      if (m.charged && !this.reacted) {
+        this.reacted = true;
+        const p = { easy: 0.15, normal: 0.4, hard: 0.65, expert: 0.85 }[m.cfg.difficulty];
+        if (this.rng.next() < p) {
+          const i = m.intent;
+          out.push({ type: 'bowl.aim', intent: { ...i, length: Math.min(11, i.length + 2.5), line: i.line + 0.45 } });
+        }
+      }
       if (m.runUpTime >= m.runUpDuration + this.plannedError) out.push({ type: 'bowl.release' });
     } else {
       this.aimed = false;
+      this.reacted = false;
     }
     this.lastTick = m.tick;
     return out;
@@ -75,6 +86,9 @@ export class BowlerAI {
       default:
         length = isSpin ? r.range(3.2, 5.2) : r.range(5.0, 7.5);
     }
-    return { variation, line, length };
+    // Right-armers often go round the wicket to left-handers (and vice versa).
+    const angleIn = m.strikerDef.batHand !== b.bowlArm && (b.bowlStyle !== 'legspin');
+    const side: 'over' | 'round' = angleIn && r.next() < 0.35 ? 'round' : 'over';
+    return { variation, line, length, side };
   }
 }

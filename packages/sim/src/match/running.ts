@@ -17,6 +17,10 @@ export interface Runner {
   delay: number;
   /** Lateral lane used while running, to stay off the pitch. */
   lane: number;
+  /** When set, the batter is advancing down the pitch to this z (charging the bowler). */
+  chargeTo: number | null;
+  /** Signed speed along z last step (for facing/animation). */
+  vz: number;
 }
 
 const ACCEL = 7.5;
@@ -48,8 +52,8 @@ export class Running {
 
   constructor(striker: { player: number; def: PlayerDef; pos: Vec3 }, nonStriker: { player: number; def: PlayerDef; pos: Vec3 }, offS: number) {
     this.runners = [
-      { who: 'striker', player: striker.player, def: striker.def, pos: { ...striker.pos }, from: 'S', to: 'S', speed: 0, delay: 0, lane: -1.4 * offS },
-      { who: 'nonStriker', player: nonStriker.player, def: nonStriker.def, pos: { ...nonStriker.pos }, from: 'B', to: 'B', speed: 0, delay: 0, lane: 1.4 * offS },
+      { who: 'striker', player: striker.player, def: striker.def, pos: { ...striker.pos }, from: 'S', to: 'S', speed: 0, delay: 0, lane: -1.4 * offS, chargeTo: null, vz: 0 },
+      { who: 'nonStriker', player: nonStriker.player, def: nonStriker.def, pos: { ...nonStriker.pos }, from: 'B', to: 'B', speed: 0, delay: 0, lane: 1.4 * offS, chargeTo: null, vz: 0 },
     ];
   }
 
@@ -85,10 +89,26 @@ export class Running {
     }
   }
 
+  /** Striker advances down the pitch by `dist` metres. */
+  charge(dist: number): void {
+    const s = this.striker;
+    if (s.chargeTo === null) s.chargeTo = s.pos.z - dist;
+  }
+
+  /** Stop advancing; the batter turns back towards the crease after `delay`. */
+  endCharge(delay: number): void {
+    const s = this.striker;
+    if (s.chargeTo === null) return;
+    s.chargeTo = null;
+    s.speed = 0;
+    s.delay = Math.max(s.delay, delay);
+  }
+
   private startRun(): void {
     this.inRun = true;
     this.wantRun = false;
     for (const r of this.runners) {
+      r.chargeTo = null;
       r.from = r.to;
       r.to = otherEnd(r.from);
       // Turning at the end of a completed run costs a moment.
@@ -98,10 +118,21 @@ export class Running {
 
   /** Advance runners. Returns the number of runs completed during this step. */
   update(dt: number): number {
-    if (!this.inRun && this.wantRun && this.runners.every((r) => inGroundAt(r, r.to))) this.startRun();
+    // A batter can set off from wherever they are (e.g. after charging down the pitch).
+    if (!this.inRun && this.wantRun) this.startRun();
     for (const r of this.runners) {
+      const z0 = r.pos.z;
       if (r.delay > 0) {
         r.delay -= dt;
+        r.vz = 0;
+        continue;
+      }
+      if (r.chargeTo !== null && !this.inRun) {
+        const d = r.chargeTo - r.pos.z;
+        r.speed = Math.min(4.8, r.speed + 10 * dt);
+        r.pos.z += Math.sign(d) * Math.min(Math.abs(d), r.speed * dt);
+        if (Math.abs(d) < 0.02) r.speed = 0;
+        r.vz = (r.pos.z - z0) / dt;
         continue;
       }
       const tz = endZ(r.to);
@@ -122,6 +153,7 @@ export class Running {
       const laneX = mid ? r.lane : r.lane * 0.6;
       const dx = laneX - r.pos.x;
       r.pos.x += Math.sign(dx) * Math.min(Math.abs(dx), 1.5 * dt);
+      r.vz = (r.pos.z - z0) / dt;
     }
     if (this.inRun && this.runners.every((r) => inGroundAt(r, r.to))) {
       this.inRun = false;
@@ -164,7 +196,11 @@ export class Running {
   }
 }
 
+/** Where the striker takes guard (z). */
+export const STANCE_Z = 9.55;
+
 export const runnerStart = {
-  striker: (offS: number): Vec3 => v3(-0.3 * offS, 0, 9.55),
-  nonStriker: (armSide: number): Vec3 => v3(-1.0 * armSide, 0, -9.35),
+  striker: (offS: number): Vec3 => v3(-0.3 * offS, 0, STANCE_Z),
+  /** `bowlerSide` is the world-x sign of the bowler's delivery side; the non-striker stands on the other side. */
+  nonStriker: (bowlerSide: number): Vec3 => v3(-1.0 * bowlerSide, 0, -9.35),
 };

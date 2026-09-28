@@ -14,7 +14,11 @@ export interface ShotInput {
   family: ShotFamily;
   aimX: number;
   aimY: number;
+  /** Forced footwork; 'auto' (default) picks from the stroke. */
+  footwork?: Footwork;
 }
+
+export type Footwork = 'auto' | 'front' | 'back';
 
 export type Stroke =
   | 'defence'
@@ -30,7 +34,9 @@ export type Stroke =
   | 'hook'
   | 'glance'
   | 'sweep'
-  | 'reverseSweep';
+  | 'reverseSweep'
+  | 'scoop'
+  | 'upperCut';
 
 interface StrokeSpec {
   label: string;
@@ -58,7 +64,33 @@ export const STROKES: Record<Stroke, StrokeSpec> = {
   glance: { label: 'Leg Glance', horizontalBat: false, angle: [-175, -115], natural: -145, offX: [-0.75, 0.1], h: [0.15, 1.2], batSpeed: 18 },
   sweep: { label: 'Sweep', horizontalBat: true, angle: [-170, -40], natural: -95, offX: [-0.5, 0.65], h: [0, 0.8], batSpeed: 27 },
   reverseSweep: { label: 'Reverse Sweep', horizontalBat: true, angle: [50, 165], natural: 100, offX: [-0.3, 0.85], h: [0, 0.8], batSpeed: 25 },
+  // Advanced: paddle over the keeper, using the bowler's pace.
+  scoop: { label: 'Scoop', horizontalBat: false, angle: [-180, 180], natural: 180, offX: [-0.3, 0.4], h: [0.05, 0.85], batSpeed: 12 },
+  // Advanced: slash a short, wide ball over the slips / third man.
+  upperCut: { label: 'Upper Cut', horizontalBat: true, angle: [110, 170], natural: 140, offX: [0.3, 1.4], h: [1.0, 1.9], batSpeed: 26 },
 };
+
+/** Strokes played off the back foot when footwork is automatic. */
+export const BACK_FOOT_STROKES: ReadonlySet<Stroke> = new Set<Stroke>(['punch', 'cut', 'lateCut', 'pull', 'hook', 'glance', 'upperCut']);
+
+/** Whether the stroke is played off the back foot given the chosen footwork. */
+export function isBackFoot(stroke: Stroke, footwork: Footwork = 'auto'): boolean {
+  if (footwork === 'front') return false;
+  if (footwork === 'back') return true;
+  return BACK_FOOT_STROKES.has(stroke);
+}
+
+/**
+ * How well forced footwork suits the length: getting forward to a full ball or
+ * back to a short one is rewarded, the opposite is punished. Auto is neutral.
+ */
+export function footworkFit(footwork: Footwork | undefined, ball: BallAtBat): number {
+  if (!footwork || footwork === 'auto') return 1;
+  const short = isShortBall(ball);
+  const full = ball.bounceDist === null || ball.bounceDist < 4.5;
+  if (footwork === 'front') return short ? 0.55 : 1.1;
+  return full ? 0.55 : short ? 1.1 : 0.95;
+}
 
 /** Seconds from pressing the shot to bat-ball contact. */
 export const SWING_TIME: Record<ShotFamily, number> = {
@@ -121,6 +153,7 @@ export function chooseStroke(input: ShotInput, hand: BatHand, ball: BallAtBat): 
   const offX = ball.pos.x * offSign(hand);
   const lofted = input.family === 'lofted';
   const a = aimAngle(input, hand);
+  if (lofted && Math.abs(a ?? 0) >= 155 && !short) return 'scoop';
   if (a === null) {
     if (short) return offX > 0.35 ? 'cut' : lofted && ball.pos.y > 1.2 ? 'hook' : 'pull';
     if (offX > 0.35) return 'coverDrive';
@@ -130,7 +163,7 @@ export function chooseStroke(input: ShotInput, hand: BatHand, ball: BallAtBat): 
   if (a >= -25 && a <= 25) return 'straightDrive';
   if (a > 25 && a <= 70) return short ? 'punch' : 'coverDrive';
   if (a > 70 && a <= 125) return short ? 'cut' : 'squareDrive';
-  if (a > 125) return 'lateCut';
+  if (a > 125) return lofted && short ? 'upperCut' : 'lateCut';
   if (a < -25 && a >= -70) return short ? 'pull' : 'onDrive';
   if (a < -70 && a >= -125) {
     if (short) return lofted && ball.pos.y > 1.2 ? 'hook' : 'pull';
@@ -151,6 +184,11 @@ export function strokeSuitability(stroke: Stroke, hand: BatHand, ball: BallAtBat
   if (stroke === 'sweep' || stroke === 'reverseSweep') {
     const speed = length(ball.vel);
     f *= fit(speed, 0, 26, 12);
+  }
+  if (stroke === 'scoop') {
+    // Needs pace on the ball to work.
+    const speed = length(ball.vel);
+    f *= fit(speed, 28, 60, 10);
   }
   return f;
 }
@@ -206,6 +244,8 @@ export interface ContactParams {
    * the seam or a misread produce edges and play-and-misses.
    */
   readError?: { x: number; y: number };
+  /** Multiplier from forced footwork (see footworkFit). */
+  footworkFit?: number;
 }
 
 /**
@@ -220,7 +260,7 @@ export function resolveContact(p: ContactParams): ContactResult {
   const timing = gradeTiming(err, w);
   const spec = STROKES[stroke];
   const lofted = input.family === 'lofted';
-  const suit = strokeSuitability(stroke, hand, ball);
+  const suit = Math.min(1, strokeSuitability(stroke, hand, ball) * (p.footworkFit ?? 1));
   const inSpeed = length(ball.vel);
   const base: Omit<ContactResult, 'outcome'> = { timing, timingError: err, stroke, lofted, quality: 0, suitability: suit };
 
@@ -271,7 +311,7 @@ export function resolveContact(p: ContactParams): ContactResult {
 
   // Clean(ish) contact.
   const aim = aimAngle(input, hand);
-  let angle = clamp(aim ?? spec.natural, spec.angle[0], spec.angle[1]);
+  let angle = stroke === 'scoop' ? (aim !== null && aim < 0 ? -172 : 172) : clamp(aim ?? spec.natural, spec.angle[0], spec.angle[1]);
   const errNorm = clamp(err / w.ok, -1.3, 1.3);
   const devScale = spec.horizontalBat ? 38 : 28;
   angle += errNorm * devScale; // early -> leg side, late -> off side
@@ -287,6 +327,10 @@ export function resolveContact(p: ContactParams): ContactResult {
     speed = 3 + 5 * q + rng.range(0, 1.5);
     elev = rng.range(-8, 2);
     spin = -10;
+  } else if (stroke === 'scoop') {
+    speed = 6 + inSpeed * 0.55 * q;
+    elev = 28 + (1 - q) * 25 + rng.gauss() * 3;
+    spin = 20;
   } else {
     speed = spec.batSpeed * (0.7 + 0.35 * power) * (0.3 + 0.7 * q) + 0.15 * inSpeed * q;
     if (lofted) {
@@ -294,7 +338,7 @@ export function resolveContact(p: ContactParams): ContactResult {
       elev = (stroke === 'hook' ? 30 : 25) + (1 - q) * 24 + rng.gauss() * 3;
       spin = 70;
     } else {
-      elev = 3 + rng.gauss() * 2 + (rng.next() < (1 - q) * 0.6 ? rng.range(6, 18) : 0);
+      elev = 3 + rng.gauss() * 2 + (rng.next() < (1 - q) * 0.35 ? rng.range(5, 14) : 0);
       if (spec.horizontalBat && ball.pos.y > 1.0) elev += 4;
       spin = -35;
     }

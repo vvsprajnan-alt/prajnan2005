@@ -11,6 +11,11 @@ export interface MatchRules {
   noBallRuns: number;
   freeHitAfterNoBall: boolean;
   lbw: boolean;
+  /** Overs at the start of an innings with tighter fielding restrictions. */
+  powerplayOvers: number;
+  /** Maximum fielders outside the 30-yard circle during / after the powerplay. */
+  maxOutsidePowerplay: number;
+  maxOutside: number;
   /** Seconds of presentation pause between balls. */
   betweenBallsDelay: number;
 }
@@ -26,9 +31,17 @@ export function makeRules(overs: number, overrides: Partial<MatchRules> = {}): M
     noBallRuns: 1,
     freeHitAfterNoBall: true,
     lbw: true,
+    powerplayOvers: Math.max(1, Math.round(overs * 0.3)),
+    maxOutsidePowerplay: 2,
+    maxOutside: 5,
     betweenBallsDelay: 2.2,
     ...overrides,
   };
+}
+
+/** Maximum fielders allowed outside the circle for a given over index (0-based). */
+export function maxOutsideForOver(rules: MatchRules, over: number): number {
+  return over < rules.powerplayOvers ? rules.maxOutsidePowerplay : rules.maxOutside;
 }
 
 export const FORMATS = {

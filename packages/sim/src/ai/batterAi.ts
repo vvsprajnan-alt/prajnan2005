@@ -1,5 +1,4 @@
-import { SWING_TIME, ShotFamily, ShotInput, aimAngle, chooseStroke, strokeSuitability } from '../batting/shots';
-import { STRIKER_CREASE_Z } from '../constants';
+import { Footwork, SWING_TIME, ShotFamily, ShotInput, aimAngle, chooseStroke, isShortBall, strokeSuitability } from '../batting/shots';
 import { a01, offSign, runSpeed, throwSpeed } from '../data/players';
 import { Rng } from '../math/rng';
 import { DEG, distXZ, lengthXZ, v3 } from '../math/vec3';
@@ -73,6 +72,7 @@ export class BatterAI {
   private decidedFor = -1;
   private nextRunCheck = 0;
   private lastPhase = '';
+  private chargeDecidedFor = -1;
   /** Whether this AI also makes the running calls. */
   controlsRunning = true;
   controlsBatting = true;
@@ -84,6 +84,17 @@ export class BatterAI {
   think(m: CricketMatch): Command[] {
     const out: Command[] = [];
     const skill = AI_SKILL[m.cfg.difficulty];
+    // Against spin, sometimes use the feet during the run-up.
+    if (this.controlsBatting && m.phase === 'runUp') {
+      const id = m.inn.log.length * 100 + m.innings.length;
+      if (this.chargeDecidedFor !== id && m.runUpTime > m.runUpDuration * 0.5) {
+        this.chargeDecidedFor = id;
+        const st = m.bowlerDef.bowlStyle;
+        const spin = st === 'offspin' || st === 'legspin';
+        const p = spin ? 0.02 + 0.1 * aggression(m) : 0.003;
+        if (this.rng.next() < p) out.push({ type: 'bat.charge' });
+      }
+    }
     if (m.phase !== 'inPlay') {
       if (this.lastPhase === 'inPlay') this.planned = null;
       this.lastPhase = m.phase;
@@ -130,7 +141,7 @@ export class BatterAI {
   }
 
   private decide(m: CricketMatch): PlannedShot | null {
-    const read = m.predictAtPlane(STRIKER_CREASE_Z - 0.25);
+    const read = m.predictAtPlane(m.frontPlane);
     if (!read) return null;
     const batter = m.strikerDef;
     const hand = batter.batHand;
@@ -148,7 +159,7 @@ export class BatterAI {
     const goodLength = read.bounceDist !== null && read.bounceDist > 4.5 && read.bounceDist < 7.5;
     let family: ShotFamily;
     if (onStumps && goodLength && r.next() > agg + 0.25) family = 'defend';
-    else if (r.next() < agg * 0.75) family = 'lofted';
+    else if (r.next() < agg * 0.55 && !(onStumps && goodLength)) family = 'lofted';
     else family = 'ground';
     const slow = Math.hypot(read.vel.x, read.vel.z) < 25;
     if (slow && read.pos.y < 0.6 && family !== 'defend' && r.next() < 0.12) family = r.next() < 0.75 ? 'sweep' : 'reverseSweep';
@@ -171,9 +182,14 @@ export class BatterAI {
       }
     }
     if (bestScore < 0.35 && family !== 'defend') best = { family: 'defend', aimX: 0, aimY: 0 };
+    // Better players pick their footwork deliberately.
+    if (skill.gapSense >= 0.8 && r.next() < 0.7) {
+      const fw: Footwork = isShortBall(read) ? 'back' : read.bounceDist !== null && read.bounceDist < 4.5 ? 'front' : 'auto';
+      best = { ...best, footwork: fw };
+    }
 
     const stroke = chooseStroke(best, hand, read);
-    const plane = CricketMatch.planeFor(stroke);
+    const plane = m.planeFor(stroke, best.footwork);
     const tPlane = m.timeToPlane(plane);
     if (tPlane === null) return null;
     const timingSd = skill.batTiming * (1.25 - 0.5 * a01(batter.attrs.timing));

@@ -15,19 +15,24 @@ import {
   STROKES,
   SWING_TIME,
   ShotInput,
+  Footwork,
+  Stroke,
   bounceDistance,
   chooseStroke,
+  footworkFit,
+  isBackFoot,
   resolveContact,
 } from '../batting/shots';
-import { BowlIntent, DeliveryPlan, RUNUP_TIME, defaultIntent, planDelivery } from '../bowling/delivery';
+import { BowlIntent, DeliveryPlan, RUNUP_TIME, defaultIntent, deliverySide, planDelivery } from '../bowling/delivery';
+import { chooseBowler, chooseField } from '../ai/captain';
 import { PlayerDef, offSign } from '../data/players';
 import { TeamDef, bowlingOptions, keeperIndex } from '../data/teams';
-import { PACE_FIELD, SPIN_FIELD } from '../fielding/fieldSettings';
+import { FieldKind, FieldSetting, fieldPreset, legalizeField, sanitizeField } from '../fielding/fieldSettings';
 import { Rng } from '../math/rng';
 import { Vec3, lengthXZ, lerp, v3 } from '../math/vec3';
 import { BallState, cloneBall, makeBall, predictTrajectory, segmentHitsStumps, stepBall } from '../physics/ball';
 import { PITCH_PRESETS, PitchConditions } from '../physics/surface';
-import { MatchRules, makeRules } from '../rules/config';
+import { MatchRules, makeRules, maxOutsideForOver } from '../rules/config';
 import {
   BallOutcome,
   DismissalKind,
@@ -39,7 +44,7 @@ import {
   startOver,
 } from '../rules/scorecard';
 import { FieldContext, FieldEvent, FieldingUnit } from './fielding';
-import { End, Running, inGroundAt, runnerStart } from './running';
+import { End, Running, STANCE_Z, inGroundAt, runnerStart } from './running';
 import {
   ActorSnapshot,
   Command,
@@ -83,10 +88,20 @@ interface Wicket {
   fielder?: number;
 }
 
-const FRONT_PLANE = STRIKER_CREASE_Z - 0.25;
-const BACK_PLANE = STRIKER_CREASE_Z + 0.3;
-const PAD_PLANE = STRIKER_CREASE_Z + 0.45;
-const BACK_FOOT: ReadonlySet<string> = new Set(['punch', 'cut', 'lateCut', 'pull', 'hook', 'glance']);
+// Contact planes relative to where the batter stands (z). At the crease these
+// are just in front of (front foot) and just behind (back foot) the popping crease.
+const FRONT_OFFSET = STRIKER_CREASE_Z - 0.25 - STANCE_Z;
+const BACK_OFFSET = STRIKER_CREASE_Z + 0.3 - STANCE_Z;
+const PAD_OFFSET = STRIKER_CREASE_Z + 0.45 - STANCE_Z;
+/** How far a batter charges down the pitch. */
+export const CHARGE_DISTANCE = 1.9;
+
+/** Per-team field choice: automatic (AI captain) or a chosen setting per bowler type. */
+interface TeamField {
+  auto: boolean;
+  pace: FieldSetting | null;
+  spin: FieldSetting | null;
+}
 
 export class CricketMatch {
   readonly cfg: MatchConfig;
@@ -129,6 +144,16 @@ export class CricketMatch {
   running!: Running;
   private stumpsDown = { S: false, B: false };
   private lbwNote = '';
+  /** Fielder indices that have touched the ball this delivery. */
+  private touchers = new Set<number>();
+  /** The batter committed to advancing down the pitch this ball. */
+  charged = false;
+  /** Field in use for the current ball (after restrictions). */
+  activeField!: FieldSetting;
+  private teamFields: [TeamField, TeamField] = [
+    { auto: true, pace: null, spin: null },
+    { auto: true, pace: null, spin: null },
+  ];
 
   constructor(cfg: MatchConfig) {
     this.cfg = cfg;
@@ -188,21 +213,58 @@ export class CricketMatch {
 
   private pickBowler(inn: InningsState | null, bowlingTeam: number): number {
     const team = this.cfg.teams[bowlingTeam]!;
-    const opts = bowlingOptions(team);
-    if (!inn) return opts[0]!;
-    const legal = opts.filter((p) => canBowl(inn, p, this.cfg.rules));
-    const pool = legal.length ? legal : team.players.map((_, i) => i).filter((p) => p !== inn.lastOverBowler);
-    // Fewest balls bowled first, then best rating (already sorted by rating).
-    let best = pool[0]!;
-    let bestBalls = Infinity;
-    for (const p of pool) {
-      const balls = inn.bowlers.find((b) => b.player === p)?.balls ?? 0;
-      if (balls < bestBalls) {
-        bestBalls = balls;
-        best = p;
-      }
+    if (!inn) {
+      // Open with the best pace bowler.
+      const opts = bowlingOptions(team);
+      return opts.find((p) => team.players[p]!.bowlStyle === 'fast') ?? opts[0]!;
     }
-    return best;
+    return chooseBowler(team, inn, this.cfg.rules);
+  }
+
+  /** Bowlers the bowling side may pick for the next over. */
+  eligibleBowlers(): number[] {
+    const inn = this.inn;
+    return this.bowlingTeam.players.map((_, i) => i).filter((p) => canBowl(inn, p, this.cfg.rules));
+  }
+
+  get fieldKind(): FieldKind {
+    const st = this.bowlerDef.bowlStyle;
+    return st === 'offspin' || st === 'legspin' ? 'spin' : 'pace';
+  }
+
+  /** Max fielders allowed outside the circle right now. */
+  get maxOutside(): number {
+    return maxOutsideForOver(this.cfg.rules, Math.floor(this.inn.legalBalls / this.cfg.rules.ballsPerOver));
+  }
+
+  /** Whether the bowling side's field is chosen automatically. */
+  fieldIsAuto(team: 0 | 1): boolean {
+    return this.teamFields[team].auto;
+  }
+
+  /** The field the bowling side wants (before restrictions are enforced). */
+  private desiredField(): FieldSetting {
+    const tf = this.teamFields[this.inn.bowlingTeam as 0 | 1];
+    const kind = this.fieldKind;
+    const chosen = kind === 'pace' ? tf.pace : tf.spin;
+    if (!tf.auto && chosen) return chosen;
+    return chooseField(kind, this.inn, this.cfg.rules);
+  }
+
+  private buildFielding(): void {
+    const inn = this.inn;
+    const bowler = this.bowlerDef;
+    const side = deliverySide(bowler.bowlArm, this.intent.side);
+    this.activeField = legalizeField(this.desiredField(), this.maxOutside);
+    const bowlTeam = this.bowlingTeam;
+    this.fielding = new FieldingUnit(
+      bowlTeam.players,
+      inn.currentBowler,
+      keeperIndex(bowlTeam),
+      this.activeField,
+      this.strikerDef.batHand,
+      v3(0.9 * side, 0, BOWLER_CREASE_Z + 0.6),
+    );
   }
 
   /** Prepare actors and ball for the next delivery. */
@@ -228,27 +290,20 @@ export class CricketMatch {
     this.contactTime = -Infinity;
     this.stumpsDown = { S: false, B: false };
     this.lbwNote = '';
-    const armSide = bowler.bowlArm === 'R' ? 1 : -1;
-    this.ball = makeBall(v3(0.32 * armSide, 1.0, BOWLER_STUMPS_Z - 12), v3());
+    this.touchers.clear();
+    this.charged = false;
+    const side = deliverySide(bowler.bowlArm, this.intent.side);
+    this.ball = makeBall(v3(0.32 * side, 1.0, BOWLER_STUMPS_Z - 12), v3());
     const inn = this.inn;
     const bat = this.battingTeam;
     const sp = inn.batters[inn.striker]!.player;
     const np = inn.batters[inn.nonStriker]!.player;
     this.running = new Running(
       { player: sp, def: bat.players[sp]!, pos: runnerStart.striker(this.offS) },
-      { player: np, def: bat.players[np]!, pos: runnerStart.nonStriker(armSide) },
+      { player: np, def: bat.players[np]!, pos: runnerStart.nonStriker(side) },
       this.offS,
     );
-    const isSpin = bowler.bowlStyle === 'offspin' || bowler.bowlStyle === 'legspin';
-    const bowlTeam = this.bowlingTeam;
-    this.fielding = new FieldingUnit(
-      bowlTeam.players,
-      inn.currentBowler,
-      keeperIndex(bowlTeam),
-      isSpin ? SPIN_FIELD : PACE_FIELD,
-      this.strikerDef.batHand,
-      v3(0.9 * armSide, 0, BOWLER_CREASE_Z + 0.6),
-    );
+    this.buildFielding();
   }
 
   private isIntentFor(p: PlayerDef): boolean {
@@ -262,9 +317,30 @@ export class CricketMatch {
 
   runUpStart(): Vec3 {
     const bowler = this.bowlerDef;
-    const armSide = bowler.bowlArm === 'R' ? 1 : -1;
+    const side = deliverySide(bowler.bowlArm, this.intent.side);
     const len = bowler.bowlStyle === 'fast' ? 20 : bowler.bowlStyle === 'medium' ? 14 : 6;
-    return v3(0.9 * armSide, 0, BOWLER_CREASE_Z - len);
+    return v3(0.9 * side, 0, BOWLER_CREASE_Z - len);
+  }
+
+  /** Where the striker will be standing when the ball arrives (accounts for a charge). */
+  batterZ(): number {
+    const s = this.running.striker;
+    return s.chargeTo ?? (this.charged ? s.pos.z : STANCE_Z);
+  }
+
+  /** Contact plane for a stroke and footwork, relative to the batter's position. */
+  planeFor(stroke: Stroke, footwork: Footwork = 'auto'): number {
+    return this.batterZ() + (isBackFoot(stroke, footwork) ? BACK_OFFSET : FRONT_OFFSET);
+  }
+
+  /** Front-foot contact plane (used to read the ball). */
+  get frontPlane(): number {
+    return this.batterZ() + FRONT_OFFSET;
+  }
+
+  /** Distance of a bounce point in front of where the batter is standing. */
+  private bounceFromBatter(bounceZ: number): number {
+    return bounceDistance(bounceZ) - (STANCE_Z - this.batterZ());
   }
 
   // ---------------------------------------------------------------- commands
@@ -285,7 +361,15 @@ export class CricketMatch {
         if (!Number.isFinite(i.line) || !Number.isFinite(i.length)) return false;
         const allowed = this.isIntentAllowed(i);
         if (!allowed) return false;
-        this.intent = { variation: i.variation, line: Math.max(-2, Math.min(2, i.line)), length: Math.max(-1, Math.min(14, i.length)) };
+        const side = this.phase === 'runUp' ? this.intent.side ?? 'over' : i.side === 'round' ? 'round' : 'over';
+        this.intent = { variation: i.variation, line: Math.max(-2, Math.min(2, i.line)), length: Math.max(-1, Math.min(14, i.length)), side };
+        if (this.phase === 'preDelivery') {
+          // Non-striker backs up on the opposite side to the bowler.
+          const ns = this.running.nonStriker;
+          ns.pos.x = runnerStart.nonStriker(deliverySide(this.bowlerDef.bowlArm, side)).x;
+          this.fielding.bowler.pos.x = 0.9 * deliverySide(this.bowlerDef.bowlArm, side);
+          this.fielding.bowler.home.x = this.fielding.bowler.pos.x;
+        }
         return true;
       }
       case 'bowl.start':
@@ -299,6 +383,29 @@ export class CricketMatch {
         return true;
       case 'bat.shot':
         return batting && this.startSwing(c.shot);
+      case 'bat.charge': {
+        if (!batting || this.charged) return false;
+        if (this.phase !== 'runUp' && !(this.phase === 'inPlay' && !this.swing && !this.batContact && this.ball.pos.z < -2)) return false;
+        this.charged = true;
+        this.running.charge(CHARGE_DISTANCE);
+        return true;
+      }
+      case 'field.set': {
+        if (!bowling || !(this.phase === 'preDelivery' || this.phase === 'dead' || this.phase === 'inningsBreak')) return false;
+        const tf = this.teamFields[src.team];
+        if (c.auto) {
+          tf.auto = true;
+        } else {
+          const kind: FieldKind = c.kind === 'spin' ? 'spin' : 'pace';
+          const f = c.preset ? fieldPreset(c.preset) : sanitizeField(c.field, kind);
+          if (!f || f.kind !== kind) return false;
+          tf.auto = false;
+          if (kind === 'pace') tf.pace = f;
+          else tf.spin = f;
+        }
+        if (this.phase === 'preDelivery') this.buildFielding();
+        return true;
+      }
       case 'run.call': {
         if (!batting || this.phase !== 'inPlay') return false;
         if (c.call !== 'run' && c.call !== 'wait' && c.call !== 'back') return false;
@@ -358,7 +465,7 @@ export class CricketMatch {
         const f = (planeZ - a.pos.z) / (b.pos.z - a.pos.z);
         const pos = lerp(a.pos, b.pos, f);
         const vel = v3((b.pos.x - a.pos.x) / DT, (b.pos.y - a.pos.y) / DT, (b.pos.z - a.pos.z) / DT);
-        return { pos, vel, bounceDist: bounceZ === null ? null : bounceDistance(bounceZ) };
+        return { pos, vel, bounceDist: bounceZ === null ? null : this.bounceFromBatter(bounceZ) };
       }
     }
     return null;
@@ -375,23 +482,22 @@ export class CricketMatch {
     return null;
   }
 
-  static planeFor(stroke: string): number {
-    return BACK_FOOT.has(stroke) ? BACK_PLANE : FRONT_PLANE;
-  }
 
   private startSwing(shot: ShotInput): boolean {
     if (this.phase !== 'inPlay' || this.swing || this.batContact || this.padContact || this.passedBatter) return false;
     if (!['defend', 'ground', 'lofted', 'sweep', 'reverseSweep'].includes(shot.family)) return false;
     const aimX = Math.max(-1, Math.min(1, Number(shot.aimX) || 0));
     const aimY = Math.max(-1, Math.min(1, Number(shot.aimY) || 0));
-    const input: ShotInput = { family: shot.family, aimX, aimY };
-    if (this.ball.pos.z > FRONT_PLANE) return false;
+    const footwork: Footwork = shot.footwork === 'front' || shot.footwork === 'back' ? shot.footwork : 'auto';
+    const input: ShotInput = { family: shot.family, aimX, aimY, footwork };
+    const front = this.frontPlane;
+    if (this.ball.pos.z > front) return false;
     // The batter commits to a stroke based on how they read the ball.
-    const read = this.predictAtPlane(FRONT_PLANE);
+    const read = this.predictAtPlane(front);
     if (!read) return false;
     const stroke = chooseStroke(input, this.strikerDef.batHand, read);
-    const planeZ = CricketMatch.planeFor(stroke);
-    const readAtPlane = planeZ === FRONT_PLANE ? read : this.predictAtPlane(planeZ) ?? read;
+    const planeZ = this.planeFor(stroke, footwork);
+    const readAtPlane = planeZ === front ? read : this.predictAtPlane(planeZ) ?? read;
     this.swing = {
       input,
       stroke,
@@ -417,6 +523,7 @@ export class CricketMatch {
         break;
       case 'runUp':
         this.runUpTime += DT;
+        if (this.charged) this.running.update(DT); // batter advancing while the bowler runs in
         // Nobody pressed release: auto-release late (legal, but inaccurate).
         if (this.runUpTime >= this.runUpDuration + 0.1) this.release(0.1);
         break;
@@ -474,6 +581,11 @@ export class CricketMatch {
       }
       this.deliveryChecks(p0, p1, t0);
       if (this.phase !== 'inPlay') return;
+      // A charging batter stops once the ball has been played or has gone past.
+      const st = this.running.striker;
+      if (st.chargeTo !== null && (this.batContact || this.padContact || this.touched || this.swing?.resolved || this.ball.pos.z > st.pos.z + 0.3)) {
+        this.running.endCharge(this.batContact ? 0.1 : 0.2);
+      }
       // Thrown ball hitting the stumps directly.
       if (f.throwEnd !== null) {
         for (const end of ['S', 'B'] as End[]) {
@@ -537,7 +649,7 @@ export class CricketMatch {
         const atBat: BallAtBat = {
           pos,
           vel: { ...ball.vel },
-          bounceDist: this.firstBounce ? bounceDistance(this.firstBounce.z) : null,
+          bounceDist: this.firstBounce ? this.bounceFromBatter(this.firstBounce.z) : null,
         };
         const res = resolveContact({
           batter: this.strikerDef,
@@ -549,6 +661,7 @@ export class CricketMatch {
           assist: this.cfg.assist[this.inn.battingTeam],
           rng: this.rng,
           readError: { x: sw.read.x - pos.x, y: sw.read.y - pos.y },
+          footworkFit: footworkFit(sw.input.footwork, atBat),
         });
         this.contact = res;
         this.emit({ type: 'shot', result: res });
@@ -572,7 +685,7 @@ export class CricketMatch {
 
     // Pads (and LBW).
     if (!this.batContact && !this.padContact && !this.passedBatter) {
-      const fr = crossed(PAD_PLANE);
+      const fr = crossed(this.batterZ() + PAD_OFFSET);
       if (fr !== null) {
         const pos = lerp(p0, p1, fr);
         const stroke = this.swing?.stroke;
@@ -627,6 +740,7 @@ export class CricketMatch {
     else if (this.firstBounce && this.firstBounce.x * offS < -half) reason = 'Pitched outside leg';
     else if (pos.x * offS < -half) reason = 'Impact outside leg';
     else if (pos.x * offS > half && played) reason = 'Impact outside off';
+    else if (STRIKER_STUMPS_Z - pos.z > 3) reason = 'Too far down the pitch';
     else {
       // Would it have gone on to hit the stumps?
       const ghost = cloneBall(ball);
@@ -657,6 +771,7 @@ export class CricketMatch {
     switch (e.type) {
       case 'catch':
         this.touched = true;
+        this.touchers.add(f.idx);
         this.wicket = { kind: 'caught', who: 'striker', fielder: f.player };
         this.emit({ type: 'catchTaken', fielder: f.player, name: f.name });
         this.bumpCatch(this.inn.bowlingTeam, f.player);
@@ -664,10 +779,12 @@ export class CricketMatch {
         return;
       case 'drop':
         this.touched = true;
+        this.touchers.add(f.idx);
         this.emit({ type: 'dropped', fielder: f.player, name: f.name });
         return;
       case 'collect':
         this.touched = true;
+        this.touchers.add(f.idx);
         this.emit({ type: 'fielded', fielder: f.player });
         return;
       case 'throw':
@@ -689,17 +806,22 @@ export class CricketMatch {
     this.stumpsDown[end] = true;
     this.emit({ type: 'stumpsHit', end: end === 'S' ? 'striker' : 'bowler' });
     const fielder = this.fielding.fielders[fielderIdx];
+    // Stumping: the keeper alone takes the ball and breaks the wicket while the
+    // striker is out of ground and not attempting a run (possible off a wide, not a no-ball).
+    const s = this.running.striker;
+    const keeperOnly = this.touchers.size === 1 && this.touchers.has(0);
+    if (
+      end === 'S' && fielder?.role === 'keeper' && keeperOnly && !this.batContact && !this.running.inRun &&
+      !this.running.wantRun && !inGroundAt(s, 'S') && !this.noBall && !direct
+    ) {
+      this.wicket = { kind: 'stumped', who: 'striker', fielder: fielder.player };
+      this.ballDead();
+      return;
+    }
     const r = this.running.runnerForEnd(end);
     if (r && !inGroundAt(r, end)) {
       this.wicket = { kind: 'runOut', who: r.who, fielder: fielder?.player };
       if (fielder) this.bumpCatch(this.inn.bowlingTeam, fielder.player);
-      this.ballDead();
-      return;
-    }
-    // Stumping: keeper takes a missed delivery with the striker out of ground.
-    const s = this.running.striker;
-    if (end === 'S' && fielder?.role === 'keeper' && !this.batContact && !this.running.inRun && !inGroundAt(s, 'S') && !this.noBall) {
-      this.wicket = { kind: 'stumped', who: 'striker', fielder: fielder.player };
       this.ballDead();
     }
   }
@@ -891,7 +1013,7 @@ export class CricketMatch {
       const isStriker = i === 0;
       let anim = moving ? 'run' : isStriker ? 'stance' : 'backup';
       if (isStriker && this.swing && !moving && (this.phase === 'inPlay' || this.phase === 'dead') && this.time - this.swing.pressTime < 1.4) anim = 'swing';
-      const heading = moving ? (r.to === 'S' ? 0 : Math.PI) : isStriker ? Math.PI : 0;
+      const heading = moving ? (r.vz >= 0 ? 0 : Math.PI) : isStriker ? Math.PI : 0;
       return { pos: r.pos, heading, anim, t: isStriker && this.swing ? this.time - this.swing.contactTime : 0 };
     };
     const held = this.fielding.holder >= 0;
@@ -917,6 +1039,8 @@ export class CricketMatch {
         ? { speedKmh: this.delivery.speedKmh, variation: this.delivery.variation, aim: this.delivery.aim, bounce: this.firstBounce }
         : null,
       stumpsDown: { ...this.stumpsDown },
+      bowlSide: deliverySide(this.bowlerDef.bowlArm, this.intent.side),
+      charged: this.charged,
       score: {
         runs: inn.runs,
         wickets: inn.wickets,
@@ -941,6 +1065,9 @@ export interface MatchSnapshot {
   runUp: { t: number; duration: number };
   delivery: { speedKmh: number; variation: string; aim: { x: number; z: number }; bounce: Vec3 | null } | null;
   stumpsDown: { S: boolean; B: boolean };
+  /** World-x sign of the side the bowler delivers from. */
+  bowlSide: 1 | -1;
+  charged: boolean;
   score: { runs: number; wickets: number; overs: string };
 }
 

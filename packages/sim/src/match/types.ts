@@ -1,4 +1,5 @@
 import { BowlIntent } from '../bowling/delivery';
+import { FieldKind, FieldSetting } from '../fielding/fieldSettings';
 import { ContactResult, ShotInput, Stroke } from '../batting/shots';
 import { BallState } from '../physics/ball';
 import { DismissalKind } from '../rules/scorecard';
@@ -22,8 +23,12 @@ export type Command =
   | { type: 'bowl.start' }
   | { type: 'bowl.release' }
   | { type: 'bat.shot'; shot: ShotInput }
+  /** Advance down the pitch (during the run-up or early in the ball's flight). */
+  | { type: 'bat.charge' }
   | { type: 'run.call'; call: RunCall }
   | { type: 'bowler.select'; player: number }
+  /** Set the field for a bowler type: a preset id, custom spots, or back to automatic. */
+  | { type: 'field.set'; kind: FieldKind; preset?: string; field?: FieldSetting; auto?: boolean }
   | { type: 'match.continue' };
 
 /** Who issues a command. In multiplayer the server stamps this from the connection. */

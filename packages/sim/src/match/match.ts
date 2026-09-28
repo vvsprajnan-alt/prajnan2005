@@ -911,7 +911,7 @@ export class CricketMatch {
       swing: this.swing ? { stroke: this.swing.stroke, family: this.swing.input.family, contactTime: this.swing.contactTime } : null,
       fielders: this.fielding.fielders
         .filter((f) => f.role !== 'bowler')
-        .map((f) => ({ pos: f.pos, heading: f.heading, anim: f.anim, t: f.animT, keeper: f.role === 'keeper', name: f.name })),
+        .map((f) => ({ pos: f.pos, heading: f.heading, anim: f.anim, t: f.animT, keeper: f.role === 'keeper', name: f.name, player: f.player })),
       runUp: { t: this.runUpTime, duration: this.runUpDuration },
       delivery: this.delivery
         ? { speedKmh: this.delivery.speedKmh, variation: this.delivery.variation, aim: this.delivery.aim, bounce: this.firstBounce }
@@ -937,7 +937,7 @@ export interface MatchSnapshot {
   nonStriker: ActorSnapshot;
   strikerHand: 'R' | 'L';
   swing: { stroke: string; family: string; contactTime: number } | null;
-  fielders: (ActorSnapshot & { keeper: boolean; name: string })[];
+  fielders: (ActorSnapshot & { keeper: boolean; name: string; player: number })[];
   runUp: { t: number; duration: number };
   delivery: { speedKmh: number; variation: string; aim: { x: number; z: number }; bounce: Vec3 | null } | null;
   stumpsDown: { S: boolean; B: boolean };

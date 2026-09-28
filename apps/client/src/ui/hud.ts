@@ -1,0 +1,221 @@
+import {
+  CricketMatch,
+  InningsState,
+  VARIATION_LABEL,
+  Variation,
+  oversString,
+  requiredRate,
+  runRate,
+  variationsFor,
+} from '@crease/sim';
+import { Action, Input } from '../input/input';
+import { esc, h } from './dom';
+
+export type HudMode = 'batting' | 'bowling' | 'watching';
+
+/**
+ * Broadcast-style HUD: scorebug, batter/bowler lower-third, this-over tracker,
+ * event banners, timing feedback, running calls, bowling meter and on-screen
+ * (touch-friendly) controls. Pure presentation over match state.
+ */
+export class Hud {
+  readonly el: HTMLElement;
+  private scorebug = h('div', { class: 'scorebug' });
+  private lower = h('div', { class: 'lowerthird' });
+  private banner = h('div', { class: 'banner' });
+  private feedback = h('div', { class: 'feedback' });
+  private speed = h('div', { class: 'speed' });
+  private call = h('div', { class: 'call' });
+  private controls = h('div', { class: 'controls' });
+  private meter = h('div', { class: 'meter' });
+  private variations = h('div', { class: 'variations' });
+  private hint = h('div', { class: 'hint' });
+  private toast = h('div', { class: 'toast' });
+  private dpad: HTMLElement;
+  private bannerUntil = 0;
+  private feedbackUntil = 0;
+  private toastUntil = 0;
+  private lastKey = '';
+  private controlsKey = '';
+  private varKey = '';
+
+  constructor(parent: HTMLElement, private input: Input, onPause: () => void) {
+    this.dpad = this.makeDpad();
+    const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.dpad, pause);
+    parent.append(this.el);
+  }
+
+  destroy(): void {
+    this.el.remove();
+  }
+
+  private makeDpad(): HTMLElement {
+    const knob = h('div', { class: 'knob' });
+    const pad = h('div', { class: 'dpad', 'aria-label': 'Direction pad' }, knob,
+      h('div', { class: 'lbl', style: 'top:6px;left:50%;transform:translateX(-50%)' }, 'STRAIGHT'),
+      h('div', { class: 'lbl', style: 'bottom:6px;left:50%;transform:translateX(-50%)' }, 'BEHIND'));
+    const set = (e: PointerEvent) => {
+      const r = pad.getBoundingClientRect();
+      let x = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
+      let y = -(e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+      const m = Math.hypot(x, y);
+      if (m > 1) {
+        x /= m;
+        y /= m;
+      }
+      this.input.setTouchDir(x, y);
+      knob.style.transform = `translate(${x * 40}px, ${-y * 40}px)`;
+    };
+    const clear = () => {
+      this.input.setTouchDir(0, 0);
+      knob.style.transform = '';
+    };
+    pad.addEventListener('pointerdown', (e) => {
+      pad.setPointerCapture(e.pointerId);
+      set(e);
+    });
+    pad.addEventListener('pointermove', (e) => {
+      if (pad.hasPointerCapture(e.pointerId)) set(e);
+    });
+    pad.addEventListener('pointerup', clear);
+    pad.addEventListener('pointercancel', clear);
+    return pad;
+  }
+
+  showBanner(big: string, small: string, cls: string, now: number, dur = 2.4): void {
+    this.banner.innerHTML = `<div class="big ${cls}">${esc(big)}</div>${small ? `<div class="small">${esc(small)}</div>` : ''}`;
+    this.bannerUntil = now + dur;
+  }
+
+  showFeedback(text: string, cls: string, now: number): void {
+    this.feedback.className = `feedback ${cls}`;
+    this.feedback.textContent = text;
+    this.feedbackUntil = now + 1.4;
+  }
+
+  showToast(text: string, now: number): void {
+    this.toast.textContent = text;
+    this.toastUntil = now + 2;
+  }
+
+  setSpeed(kmh: number | null, label: string): void {
+    this.speed.style.display = kmh ? '' : 'none';
+    if (kmh) this.speed.innerHTML = `<b>${kmh}</b> km/h<div class="sub">${esc(label)}</div>`;
+  }
+
+  setCall(hint: 'yes' | 'no' | 'wait' | null, by: string, last: string | null): void {
+    if (!hint && !last) {
+      this.call.innerHTML = '';
+      return;
+    }
+    const txt = { yes: 'YES!', no: 'NO!', wait: 'WAIT' } as const;
+    let html = '';
+    if (hint) html += `<div class="call-bubble ${hint}"><span class="who">${esc(by)}</span>${txt[hint]}</div>`;
+    if (last) html += `<div class="call-bubble ${last === 'run' ? 'yes' : last === 'back' ? 'no' : 'wait'}"><span class="who">You</span>${last === 'run' ? 'RUN' : last === 'back' ? 'GO BACK' : 'STAY'}</div>`;
+    this.call.innerHTML = html;
+  }
+
+  /** Release meter during the bowler's run-up. */
+  setMeter(visible: boolean, t = 0, duration = 1, perfect = 0.03, good = 0.08): void {
+    this.meter.style.display = visible ? '' : 'none';
+    if (!visible) return;
+    const span = duration + 0.25; // meter covers the run-up plus the no-ball zone
+    const pct = (x: number) => `${(Math.max(0, Math.min(span, x)) / span) * 100}%`;
+    this.meter.innerHTML = `<div class="cap">Release</div><div class="track">
+      <div class="zone" style="left:${pct(duration - good)};width:calc(${pct(duration + good)} - ${pct(duration - good)})"></div>
+      <div class="zone perfect" style="left:${pct(duration - perfect)};width:calc(${pct(duration + perfect)} - ${pct(duration - perfect)})"></div>
+      <div class="nb" style="left:${pct(duration + 0.12)}"></div>
+      <div class="needle" style="left:${pct(t)}"></div></div>`;
+  }
+
+  setVariations(style: Parameters<typeof variationsFor>[0] | null, selected: Variation | null, onPick: (v: Variation) => void): void {
+    const key = `${style}|${selected}`;
+    if (key === this.varKey) return;
+    this.varKey = key;
+    this.variations.innerHTML = '';
+    if (!style) return;
+    variationsFor(style).forEach((v, i) => {
+      const b = h('button', { class: `ctrl${v === selected ? ' on' : ''}`, onclick: () => onPick(v) }, VARIATION_LABEL[v], h('kbd', {}, String(i + 1)));
+      this.variations.append(b);
+    });
+  }
+
+  setHint(text: string): void {
+    this.hint.style.display = text ? '' : 'none';
+    this.hint.textContent = text;
+  }
+
+  /** Context-sensitive on-screen buttons (also the touch controls). */
+  setControls(mode: HudMode, phase: string, device: string): void {
+    const key = `${mode}|${phase}|${device}`;
+    if (key === this.controlsKey) return;
+    this.controlsKey = key;
+    this.controls.innerHTML = '';
+    const pad = device === 'gamepad';
+    const btn = (label: string, kb: string, gp: string, a: Action, cls = '') =>
+      h('button', { class: `ctrl ${cls}`, onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger(a); } }, label, h('kbd', {}, pad ? gp : kb));
+    const row = (...b: HTMLElement[]) => h('div', { class: 'ctrl-row' }, ...b);
+    this.dpad.style.display = mode === 'watching' ? 'none' : '';
+    if (mode === 'batting') {
+      this.controls.append(
+        row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'RT', 'wait'), btn('Back', 'B', 'LT', 'back')),
+        row(btn('Sweep', 'Q', 'LB', 'sweep'), btn('Rev Sweep', 'E', 'RB', 'reverseSweep')),
+        row(btn('Defend', 'L', 'B', 'defend'), btn('Lofted', 'K', 'X', 'lofted', 'big'), btn('Ground', 'Space', 'A', 'primary', 'big')),
+      );
+    } else if (mode === 'bowling') {
+      const label = phase === 'runUp' ? 'Release' : 'Bowl';
+      this.controls.append(row(btn('Prev', 'Z', '◀', 'varPrev'), btn('Next', 'X', '▶', 'varNext')), row(btn(label, 'Space', 'A', 'primary', 'big')));
+    }
+  }
+
+  update(m: CricketMatch, now: number, mode: HudMode): void {
+    if (now > this.bannerUntil) this.banner.innerHTML = '';
+    if (now > this.feedbackUntil) this.feedback.textContent = '';
+    this.toast.style.display = now < this.toastUntil ? '' : 'none';
+    const inn = m.inn;
+    const key = `${m.inningsIndex}|${inn.log.length}|${inn.runs}|${inn.wickets}|${m.phase}|${inn.currentBowler}|${inn.striker}`;
+    if (key === this.lastKey) return;
+    this.lastKey = key;
+    this.renderScore(m, inn);
+    void mode;
+  }
+
+  private renderScore(m: CricketMatch, inn: InningsState): void {
+    const rules = m.cfg.rules;
+    const bat = m.cfg.teams[inn.battingTeam]!;
+    const bowl = m.cfg.teams[inn.bowlingTeam]!;
+    const rr = runRate(inn.runs, inn.legalBalls, rules.ballsPerOver).toFixed(2);
+    let info = `<span>RR <b>${rr}</b></span>`;
+    if (inn.target !== null) {
+      const need = Math.max(0, inn.target - inn.runs);
+      const left = rules.overs * rules.ballsPerOver - inn.legalBalls;
+      const rrr = requiredRate(inn, rules);
+      info = `<span>Need <b>${need}</b> off <b>${left}</b></span><span>RRR <b>${rrr !== null ? rrr.toFixed(2) : '-'}</b> · RR ${rr}</span>`;
+    } else {
+      info += `<span>${esc(rules.format)} · ${rules.overs} ov</span>`;
+    }
+    this.scorebug.style.setProperty('--team', bat.colors.primary);
+    this.scorebug.innerHTML = `<div class="team">${esc(bat.shortName)}</div>
+      <div class="score">${inn.runs}-${inn.wickets}<small>${oversString(inn.legalBalls, rules.ballsPerOver)}</small></div>
+      <div class="info">${info}</div>${inn.freeHit ? '<div class="freehit">FREE HIT</div>' : ''}`;
+
+    const card = (i: number) => inn.batters[i]!;
+    const s = card(inn.striker);
+    const n = card(inn.nonStriker);
+    const bw = inn.bowlers.find((b) => b.player === inn.currentBowler);
+    const bowler = bowl.players[inn.currentBowler]!;
+    const chips = inn.thisOver
+      .map((c) => {
+        const cls = c.startsWith('W') ? 'w' : c === '4' ? 'b4' : c === '6' ? 'b6' : /wd|nb|b|lb/.test(c) ? 'x' : '';
+        return `<span class="ball-chip ${cls}">${c === '0' ? '•' : esc(c)}</span>`;
+      })
+      .join('');
+    this.lower.innerHTML = `
+      <div class="lt-box"><div><span class="name">${esc(bat.players[s.player]!.shortName)}*</span><span class="val">${s.runs}</span> <span class="sub">(${s.balls})</span></div>
+        <div><span class="name">${esc(bat.players[n.player]!.shortName)}</span><span class="val">${n.runs}</span> <span class="sub">(${n.balls})</span></div></div>
+      <div class="lt-box hide-sm"><div class="sub">Partnership</div><div><span class="val" style="margin:0">${inn.partnership.runs}</span> <span class="sub">(${inn.partnership.balls})</span></div></div>
+      <div class="lt-box"><div><span class="name">${esc(bowler.shortName)}</span><span class="val">${bw ? `${bw.wickets}-${bw.runs}` : '0-0'}</span> <span class="sub">${bw ? oversString(bw.balls) : '0.0'}</span></div>
+        <div class="balls">${chips || '<span class="sub">New over</span>'}</div></div>`;
+  }
+}

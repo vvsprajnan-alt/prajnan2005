@@ -1,0 +1,24 @@
+{
+  "name": "crease-clash",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Crease Clash - an original 3D cricket game built around 2v2 multiplayer",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @crease/client",
+    "build": "npm run typecheck && npm run build -w @crease/client",
+    "preview": "npm run preview -w @crease/client",
+    "typecheck": "tsc -p packages/sim && tsc -p apps/client --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

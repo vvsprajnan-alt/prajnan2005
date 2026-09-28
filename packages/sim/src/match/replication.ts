@@ -37,7 +37,7 @@ export function stateHash(m: CricketMatch): number {
   };
   mix(m.tick);
   mix(m.rng.state);
-  mix(['preDelivery', 'runUp', 'inPlay', 'review', 'dead', 'inningsBreak', 'complete'].indexOf(m.phase));
+  mix(['intro', 'preDelivery', 'runUp', 'inPlay', 'review', 'dead', 'inningsBreak', 'complete'].indexOf(m.phase));
   const b = m.ball;
   mix(b.pos.x); mix(b.pos.y); mix(b.pos.z); mix(b.vel.x); mix(b.vel.y); mix(b.vel.z);
   const inn = m.inn;

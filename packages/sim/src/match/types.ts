@@ -10,6 +10,7 @@ import { Vec3 } from '../math/vec3';
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'expert';
 
 export type MatchPhase =
+  | 'intro' // team introductions before the first ball
   | 'preDelivery' // bowler setting up
   | 'runUp'
   | 'inPlay' // ball released until dead

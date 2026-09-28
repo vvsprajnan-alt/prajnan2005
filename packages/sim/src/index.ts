@@ -11,6 +11,7 @@ export * from './batting/shots';
 export * from './rules/config';
 export * from './rules/scorecard';
 export * from './rules/tracking';
+export * from './rules/stats';
 export * from './fielding/fieldSettings';
 export * from './match/types';
 export * from './match/running';

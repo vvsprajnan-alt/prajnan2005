@@ -25,6 +25,12 @@ export interface BallOutcome {
   atStrikerEnd: 'striker' | 'nonStriker';
   /** Direction the ball was hit (degrees relative to the batter, + = off side), for the wagon wheel. */
   shotAngle?: number;
+  /** Where the ball pitched: line (m towards the batter's off side) and length (m from the stumps). */
+  pitch?: { line: number; length: number; full?: boolean };
+  speedKmh?: number;
+  variation?: string;
+  /** The batter's shot, if one was played. */
+  shot?: { stroke: string; timing: string; outcome: 'hit' | 'edge' | 'miss'; lofted: boolean };
 }
 
 export interface BatterCard {

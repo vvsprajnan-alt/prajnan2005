@@ -72,6 +72,8 @@ export interface MatchConfig {
   battingOrders?: [number[] | null, number[] | null];
   /** Human fielding control per team (default: AI fields). */
   fieldingControl?: [FieldingControlMode, FieldingControlMode];
+  /** Team introductions before the first ball (seconds, 0 = none). Skippable with match.continue. */
+  introSeconds?: number;
   /** Max seconds a timing-critical input may be back-dated (network latency compensation). */
   maxInputRewind?: number;
   /** Extra seconds before an unreleased delivery is released automatically (networked play). */
@@ -204,6 +206,7 @@ export class CricketMatch {
     this.innings.push(newInnings(batting, this.pickBowler(null, 1 - batting), null, cfg.rules, { order: this.orderFor(batting) }));
     this.resetReviews();
     this.setupBall();
+    if ((cfg.introSeconds ?? 0) > 0) this.phase = 'intro';
   }
 
   // ---------------------------------------------------------------- queries
@@ -487,6 +490,10 @@ export class CricketMatch {
         return true;
       }
       case 'match.continue':
+        if (this.phase === 'intro') {
+          this.setPhase('preDelivery');
+          return true;
+        }
         if (this.phase !== 'inningsBreak') return false;
         this.startNextInnings();
         return true;
@@ -664,6 +671,9 @@ export class CricketMatch {
     this.time += DT;
     this.phaseTime += DT;
     switch (this.phase) {
+      case 'intro':
+        if (this.phaseTime >= (this.cfg.introSeconds ?? 0)) this.setPhase('preDelivery');
+        break;
       case 'preDelivery':
         break;
       case 'runUp':
@@ -1036,6 +1046,15 @@ export class CricketMatch {
 
   /** Apply a ball's outcome to the scorecard and start the between-balls pause. */
   private finalizeBall(outcome: BallOutcome): void {
+    // Record the delivery and shot for charts and commentary.
+    // Balls played on the full use the intended pitching point.
+    const pitched = this.firstBounce ?? this.delivery?.aim;
+    if (pitched) outcome.pitch = { line: pitched.x * this.offS, length: STRIKER_STUMPS_Z - pitched.z, ...(this.firstBounce ? {} : { full: true }) };
+    if (this.delivery) {
+      outcome.speedKmh = this.delivery.speedKmh;
+      outcome.variation = this.delivery.variation;
+    }
+    if (this.contact) outcome.shot = { stroke: this.contact.stroke, timing: this.contact.timing, outcome: this.contact.outcome, lofted: this.contact.lofted };
     this.setPhase('dead');
     this.deadTimer = this.cfg.rules.betweenBallsDelay + (this.wicket ? 1.2 : 0) + (this.boundary ? 0.6 : 0);
     const inn = this.inn;

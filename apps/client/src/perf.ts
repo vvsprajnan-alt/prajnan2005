@@ -101,6 +101,7 @@ export function detectDevice(d: DeviceInfo): DeviceProfile {
   const small = Math.min(d.screenWidth, d.screenHeight) <= 820;
   const mobile = uaMobile || (d.maxTouchPoints > 1 && small);
   const lowEnd = (d.memory !== undefined && d.memory <= 3) || (d.cores !== undefined && d.cores <= 4);
-  const quality: Quality = mobile ? (lowEnd ? 'low' : 'medium') : lowEnd ? 'medium' : 'high';
+  // Desktops start on Medium: GPUs vary too much to assume more (players can raise it; adaptive resolution protects the frame rate).
+  const quality: Quality = mobile && lowEnd ? 'low' : 'medium';
   return { mobile, lowEnd, quality, fpsCap: mobile && lowEnd ? 30 : 60 };
 }

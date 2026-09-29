@@ -66,7 +66,7 @@ describe('device profile', () => {
     const tablet = detectDevice({ userAgent: 'Mozilla/5.0 (iPad; CPU OS 17)', maxTouchPoints: 5, screenWidth: 820, screenHeight: 1180, cores: 8 });
     expect(tablet.quality).toBe('medium');
     const desktop = detectDevice({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', maxTouchPoints: 0, screenWidth: 1920, screenHeight: 1080, memory: 16, cores: 12 });
-    expect(desktop).toEqual({ mobile: false, lowEnd: false, quality: 'high', fpsCap: 60 });
+    expect(desktop).toEqual({ mobile: false, lowEnd: false, quality: 'medium', fpsCap: 60 });
   });
 });
 

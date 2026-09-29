@@ -40,6 +40,8 @@ describe('multiplayer server', () => {
     b.send({ t: 'join', code: a.room });
     await b.wait((m) => m.t === 'room');
     a.send({ t: 'seat', seat: { team: 0, slot: 0 } });
+    // Separate connections race: make sure Asha's seat is confirmed before Ben asks for it.
+    await b.wait((m) => m.t === 'room' && m.room.players.some((p) => p.id === a.id && p.seat?.team === 0));
     b.send({ t: 'seat', seat: { team: 0, slot: 0 } }); // taken
     const taken = await b.wait((m) => m.t === 'error');
     expect(taken.t === 'error' && taken.code).toBe('seat-taken');

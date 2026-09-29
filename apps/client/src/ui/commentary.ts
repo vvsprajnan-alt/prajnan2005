@@ -71,7 +71,9 @@ export function commentary(c: CommentaryInput): Commentary {
   const lead = `${bowl} to ${bat}, `;
   const shot = o.shot;
   const stroke = strokeLabel(shot?.stroke);
-  const where = o.shotAngle !== undefined ? region(o.shotAngle) : '';
+  let where = o.shotAngle !== undefined ? region(o.shotAngle) : '';
+  // Avoid "a straight drive straight down the ground".
+  if (/straight/.test(stroke) && where.startsWith('straight')) where = 'back past the bowler';
   const perfect = shot?.timing === 'perfect';
   const del = deliveryPhrase(rec);
   // Extras that are re-bowled carry the number of the ball still to come ("0.1" for a first-ball wide).

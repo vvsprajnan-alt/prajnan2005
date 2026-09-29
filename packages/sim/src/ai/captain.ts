@@ -105,3 +105,20 @@ export function adaptField(field: FieldSetting, inn: InningsState, striker: numb
   pick.name = describeSpot(angle, 64);
   return { ...field, id: `${field.id}-adapted`, name: `${field.name} (adjusted)`, spots };
 }
+
+/**
+ * AI batting order changes: at the death, send in a big hitter ahead of a
+ * slower batter if one is waiting. Returns the player to promote, or null.
+ */
+export function choosePromotion(team: TeamDef, inn: InningsState, rules: MatchRules): number | null {
+  const idx = inn.batters.length - 1;
+  const card = inn.batters[idx];
+  if (!card || card.balls > 0 || card.out || inn.complete || idx < 2) return null;
+  const over = Math.floor(inn.legalBalls / rules.ballsPerOver);
+  if (inningsPhase(rules, over) !== 'death' && !(inn.target !== null && ((inn.target - inn.runs) * rules.ballsPerOver) / Math.max(1, rules.overs * rules.ballsPerOver - inn.legalBalls) > 11)) return null;
+  const hitting = (p: number) => team.players[p]!.attrs.power * 0.6 + team.players[p]!.attrs.batting * 0.4;
+  const waiting = inn.order.slice(inn.nextBatter);
+  let best = card.player;
+  for (const p of waiting) if (hitting(p) > hitting(best) + 8) best = p;
+  return best === card.player ? null : best;
+}

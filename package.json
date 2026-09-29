@@ -16,7 +16,9 @@
     "preview": "npm run preview -w @crease/client",
     "typecheck": "tsc -p packages/sim && tsc -p packages/net && tsc -p apps/server && tsc -p apps/client --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "soak": "tsx scripts/soak.ts",
+    "e2e:browser": "node scripts/e2e-browser.mjs"
   },
   "devDependencies": {
     "tsx": "^4.23.15",

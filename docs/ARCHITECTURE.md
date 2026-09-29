@@ -107,6 +107,16 @@ While `inPlay`, every 1/120 s tick:
   contact shadow and trail, and the camera director. It holds no game logic.
 - Quality presets change pixel ratio, shadows, antialiasing, crowd size and effects.
 
+### Testing and hardening (Phase 10)
+
+- **Untrusted input:** every command is shape-checked (`isWellFormedCommand`) before the simulation touches it,
+  so a bad payload is rejected rather than throwing part-way through a tick (which would also risk a desync).
+  The lobby handler and the match loop are wrapped: a failing room is abandoned, never the process. Socket,
+  WebSocket-server and HTTP client errors all have listeners.
+- **Liveness:** online, an idle human bowler is covered by the AI after 20 s (`idleBowlAfter`); finished
+  matches stop simulating on the final tick.
+- **Invariants** (`packages/sim/test/invariants.ts`) are shared by the soak test and `scripts/soak.ts`.
+
 ### Performance (Phase 9)
 
 - **Loading:** three.js and `@crease/sim` / `@crease/net` are separate chunks (rarely invalidated); the Match

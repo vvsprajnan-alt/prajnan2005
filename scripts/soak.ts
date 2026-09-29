@@ -92,3 +92,4 @@ console.log(`Per match: drops ${(drops / N).toFixed(1)}, catches ${(catches / N)
 const mean = (a: number[]) => (a.reduce((x, y) => x + y, 0) / Math.max(1, a.length)).toFixed(1);
 console.log(`First innings ${mean(inn1)}, second ${mean(inn2)}; failed chases: ${chaseAllOut} all out, ${chaseOvers} out of overs`);
 console.log(`Invariant violations: ${violations}. Sim time ${(simSecs / 60).toFixed(0)} min in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+if (violations > 0) process.exit(1);

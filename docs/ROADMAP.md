@@ -11,7 +11,7 @@
 | 7 | Presentation: team intros, replays, wagon wheel, pitch map, commentary captions | **Done** |
 | 8 | Art and audio: skinned characters and animation, crowd, stadium detail, sound design | **Done** |
 | 9 | Optimization: code-splitting, instancing/LOD, network bandwidth, mobile tuning | **Done** |
-| 10 | Testing and bug fixing: end-to-end multiplayer tests, soak tests, balancing | Next |
+| 10 | Testing and bug fixing: end-to-end multiplayer tests, soak tests, balancing | **Done** |
 
 ## Phase 1 scope (delivered)
 

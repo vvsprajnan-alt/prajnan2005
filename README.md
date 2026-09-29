@@ -7,7 +7,10 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 9 complete - optimization: split and compressed downloads, about half the draw calls, level of
+**Status:** Phase 10 complete - testing and bug fixing: soak tests over complete matches with scorecard and
+physics invariants, a balance pass against real T20 numbers, end-to-end multiplayer tests (whole 2v2 matches,
+chaos, hostile clients, many rooms), a browser suite and CI - and the crashes, stalls and rule bugs they found
+are fixed. Phase 9 brought optimization: split and compressed downloads, about half the draw calls, level of
 detail for players and crowd, ~56% less network traffic, and phone tuning (device-based defaults, adaptive
 resolution, a 30 fps battery saver, a compact HUD). Phase 8 brought the art and audio: skinned cricketers with smoother animation and celebrations,
 a crowd in both teams' colours that stands, cheers and does the Mexican wave, a more detailed stadium (seat
@@ -44,7 +47,9 @@ Other scripts:
 | `npm run preview` | Serve the production build at http://localhost:4173 |
 | `npm run server` | Build the client and start the multiplayer server + game on http://localhost:8787 |
 | `npm run dev:server` | Multiplayer server with reload (use with `npm run dev`) |
-| `npm test` | Run the simulation test suite (Vitest) |
+| `npm test` | Run all unit, integration, soak and end-to-end tests (Vitest) |
+| `npm run soak -- 48 20` | Balance soak: 48 AI T20s with invariant checks and a statistics report (exits non-zero on any violation) |
+| `npm run e2e:browser -- [url]` | Browser suite (Playwright + Chromium) against a running server: single player and online flows |
 | `npm run typecheck` | Typecheck the sim and client |
 | `npx tsx scripts/sim-match.ts 5 42` | Play a headless 5-over AI vs AI match (seed 42) and print scorecards |
 | `npx tsx scripts/physics-probe.ts` | Print delivery and shot characteristics (for tuning) |
@@ -247,3 +252,23 @@ shot data, chart data (wagon wheel, pitch map, Manhattan, worm), commentary and 
 real match, replay recording and camera planning, and the SVG charts; and art/audio tests: the skinned rig's
 geometry and skin weights, every animation (no NaNs), crowd seating, team colours and Mexican waves, and the
 music data.
+
+Phase 10 added the heavy tests:
+
+- **Soak** (`packages/sim/test/soak.test.ts`): 30 complete AI matches across formats, pitches, difficulties and
+  pairings. After every ball the scorecard must add up (runs = batters + extras = the ball log; bowler figures,
+  balls faced, wickets, fall of wickets, quotas, no consecutive overs, the chase stopping on the winning ball);
+  every tick the ball and players must be physically sane; at every run-up the field restrictions must hold;
+  every match must finish with a consistent result; and seeds must replay identically. The checker is itself
+  tested against a corrupted scorecard.
+- **End-to-end multiplayer** (`apps/server/test/e2e.test.ts`): a whole 2v2 match over WebSockets with all four
+  mirrors identical to the server at the final tick; a chaos match (network jitter, a player dropping and
+  rejoining three times, resyncs, spectators coming and going); hostile clients (garbage, malformed commands of
+  every type, floods, oversized frames) while a match finishes normally; six rooms at once at under 0.3 ms per
+  simulation tick.
+- **Browser** (`scripts/e2e-browser.mjs`): real Chromium against the built game - intro, batting and bowling,
+  captions, replays, instant replay, every Match Centre tab, and an online 1v1 through matchmaking.
+- **CI** (`.github/workflows/ci.yml`): typecheck, tests, build and a short soak on every push.
+
+Balance (60 AI T20s, `npm run soak -- 60 20`): first innings ~160, ~6 wickets, ~15 fours and ~7 sixes an
+innings, ~70% of catches held, chases won ~45%; a green top plays low (~130) and a road high (~175).

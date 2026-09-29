@@ -96,3 +96,26 @@ describe('idle players online', () => {
     expect(h2.match.inn.log.length).toBe(0);
   });
 });
+
+describe('AI batting order', () => {
+  it('promotes a big hitter at the death, never before', async () => {
+    const { choosePromotion, newInnings, makeRules: mk, applyBall } = await import('../src/index');
+    const rules = mk(20);
+    const team = TEAMS[0]!;
+    const inn = newInnings(0, 7, null, rules);
+    // Early on: no change even after a wicket.
+    applyBall(inn, { batRuns: 0, extra: 'none', extraRuns: 0, boundary: 0, atStrikerEnd: 'striker', wicket: { kind: 'bowled', who: 'striker' } }, rules);
+    applyBall(inn, { batRuns: 0, extra: 'none', extraRuns: 0, boundary: 0, atStrikerEnd: 'striker', wicket: { kind: 'bowled', who: 'striker' } }, rules);
+    expect(choosePromotion(team, inn, rules)).toBeNull();
+    // At the death the hardest hitter still waiting is sent in, if clearly better.
+    inn.legalBalls = 17 * 6;
+    const p = choosePromotion(team, inn, rules);
+    const waiting = inn.order.slice(inn.nextBatter);
+    const hit = (i: number) => team.players[i]!.attrs.power * 0.6 + team.players[i]!.attrs.batting * 0.4;
+    const current = inn.batters[inn.batters.length - 1]!.player;
+    if (p !== null) {
+      expect(waiting).toContain(p);
+      expect(hit(p)).toBeGreaterThan(hit(current) + 8);
+    } else expect(waiting.every((w) => hit(w) <= hit(current) + 8)).toBe(true);
+  });
+});

@@ -2,6 +2,7 @@ import { BatterAI, runAdvice } from '../ai/batterAi';
 import { BowlerAI } from '../ai/bowlerAi';
 import { AI_SKILL } from '../ai/difficulty';
 import { aiWantsReview } from '../ai/review';
+import { choosePromotion } from '../ai/captain';
 import { Rng } from '../math/rng';
 import { CricketMatch, MatchConfig } from './match';
 import { Command, CommandSource, MatchEvent } from './types';
@@ -58,6 +59,7 @@ export class MatchHost {
   lastApplied: { src: CommandSource; cmd: Command }[] = [];
   private reviewDecided = false;
   private idleBall = -1;
+  private promotedFor = -1;
   opts: HostOptions;
 
   constructor(cfg: MatchConfig, opts: HostOptions) {
@@ -103,6 +105,12 @@ export class MatchHost {
     if (this.opts.idleBowlAfter !== undefined && m.phase === 'preDelivery' && m.phaseTime > this.opts.idleBowlAfter) this.idleBall = ballId;
     if (!this.isHuman(bowl) || this.idleBall === ballId) for (const c of this.bowlAi[bowl].think(m)) apply({ team: bowl, role: 'bowler' }, c);
     if (m.phase === 'inningsBreak' && this.opts.humanTeams.length === 0) apply({ team: 0 }, { type: 'match.continue' });
+    // AI batting sides promote a big hitter at the death.
+    if (!humanBat && (m.phase === 'dead' || m.phase === 'preDelivery') && m.inn.batters.length !== this.promotedFor) {
+      this.promotedFor = m.inn.batters.length;
+      const p = choosePromotion(m.battingTeam, m.inn, m.cfg.rules);
+      if (p !== null) apply({ team: bat, role: 'striker' }, { type: 'batter.select', player: p });
+    }
     // AI sides decide on reviews after a moment's thought.
     if (m.phase === 'review' && m.pendingReview) {
       const team = m.pendingReview.team;

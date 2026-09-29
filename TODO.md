@@ -102,16 +102,28 @@
 - [x] Mobile: first-run quality and frame cap from the device, adaptive resolution (trades pixels for frame rate), 30 fps battery saver, a performance overlay, touch prompts, a compact HUD for phones held sideways, a turn-your-phone hint, audio sleeps in a background tab
 - [x] Tests: bandwidth budget and mirror sync, packing, rounding, compression and static delivery, adaptive resolution, frame limiter, device profiles, crowd sectors, the distant body
 
+### Phase 10 - testing and bug fixing
+- [x] Soak test: complete AI matches with scorecard invariants after every ball, physical sanity every tick, field restrictions at every run-up, consistent results and seeded replays
+- [x] Balance soak script and a tuning pass: catching (54% -> ~70% held), stumpings (8% -> 2%), run outs (15% -> 4%), sixes (4 -> 7), fours (21 -> 15), pace harder to time, chases paced to the rate (won 35% -> ~45%)
+- [x] End-to-end multiplayer tests: whole 2v2 match, chaos (jitter, drop/rejoin x3, resyncs, spectators), hostile clients, six concurrent rooms
+- [x] Browser suite (single player and online) and CI (typecheck, tests, build, soak)
+- [x] Fixed: a client could crash the server with an oversized compressed frame (unhandled socket error)
+- [x] Fixed: malformed command payloads could throw inside the authoritative tick (strict command validation; guarded lobby and match loop)
+- [x] Fixed: an idle human bowler froze online matches (the AI bowls after 20 s)
+- [x] Fixed: finished matches kept simulating and streaming until the room closed
+- [x] Fixed: AI running trusted a placeholder estimate at contact ("yes... no!" run outs); also improves the hint shown to human batters
+- [x] Fixed: maidens counted byes and leg byes against the bowler
+- [x] AI batting sides promote a big hitter at the death
+
 ## Current task
 
-- Phase 9 review: try it on a mid-range phone and a laptop's integrated GPU before Phase 10 (testing and bug fixing).
+- All ten phases are complete. Next: play-testing with real players, then the items below.
 
 ## Known bugs / limitations
 
 - Players are procedural low-poly models; animation is procedural (keyframed poses and IK), not motion-captured.
-- Drops are a little frequent (about 8 per AI T20).
+- About 3-4 drops per AI T20 (roughly 70% of chances held; real T20 is closer to 80%).
 - Reviews cover LBW only (not caught-behind / edges).
-- The AI does not promote batters in its own order.
 - Replays are not available on a gamepad as an instant-replay button (keyboard I or the on-screen ⟲); automatic replays and skipping work on every device.
 - Commentary is text only (no voice).
 - Fielding steering is camera-relative; the fielding camera can swing when the ball passes the fielder.
@@ -125,4 +137,7 @@
 
 ## Next tasks
 
-1. Phase 10: testing and bug fixing - end-to-end multiplayer tests, soak tests, balancing
+1. Play-testing with real players (especially online 2v2) and tuning from their feedback
+2. Reviews for caught-behind (edge detection) as well as LBW
+3. Persistence for online sessions (a restart currently ends rooms) and skill-based matchmaking
+4. Motion-captured or hand-keyed animation to replace the procedural poses (original or licensed)

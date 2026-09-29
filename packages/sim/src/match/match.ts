@@ -1,3 +1,4 @@
+import { isWellFormedCommand } from './validate';
 import {
   BALL_RADIUS,
   BOUNDARY_RADIUS,
@@ -417,6 +418,7 @@ export class CricketMatch {
    * local or networked, human or AI.
    */
   command(src: CommandSource, c: Command): boolean {
+    if (!isWellFormedCommand(c)) return false;
     const inn = this.inn;
     const batting = src.team === inn.battingTeam;
     const bowling = src.team === inn.bowlingTeam;

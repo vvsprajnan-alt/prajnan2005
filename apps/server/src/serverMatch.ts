@@ -33,6 +33,9 @@ export class ServerMatch {
   private last = 0;
   private acc = 0;
   private ended = false;
+  /** CPU time spent simulating (ms) and ticks simulated, for load monitoring. */
+  busyMs = 0;
+  ticksRun = 0;
 
   constructor(
     readonly net: NetMatchConfig,
@@ -41,7 +44,7 @@ export class ServerMatch {
     private opts: ServerMatchOptions = {},
   ) {
     this.humans = [[...net.humans[0]], [...net.humans[1]]];
-    this.host = new MatchHost(buildMatchConfig(net), { humanTeams: this.humanTeams(), autoRunForHumans: false, quantize: true });
+    this.host = new MatchHost(buildMatchConfig(net), { humanTeams: this.humanTeams(), autoRunForHumans: false, quantize: true, idleBowlAfter: 20 });
   }
 
   get tick(): number {
@@ -68,14 +71,29 @@ export class ServerMatch {
     this.acc += ((now - this.last) / 1000) * (this.opts.timeScale ?? 1);
     this.last = now;
     let n = 0;
-    while (this.acc >= DT && n++ < 240) {
-      this.acc -= DT;
-      this.tickOnce();
-      if (this.tick - this.batchFrom >= TICKS_PER_BATCH) this.flush();
+    const t0 = performance.now();
+    try {
+      // A finished match stops simulating (clients stop exactly on the final tick).
+      while (this.acc >= DT && n++ < 240 && this.host.match.phase !== 'complete') {
+        this.acc -= DT;
+        this.tickOnce();
+        if (this.tick - this.batchFrom >= TICKS_PER_BATCH) this.flush();
+      }
+    } catch (err) {
+      // Never let one room take the server down: abandon this match and tell its players.
+      console.error('match error', err);
+      this.stop();
+      this.ended = true;
+      this.broadcast({ t: 'end', result: 'Match abandoned (server error)' });
+      this.opts.onEnd?.('abandoned');
+      return;
+    } finally {
+      this.busyMs += performance.now() - t0;
     }
     const m = this.host.match;
     if (m.phase === 'complete' && !this.ended) {
       this.ended = true;
+      this.stop();
       this.flush();
       this.broadcast({ t: 'end', result: m.result ?? '' });
       this.opts.onEnd?.(m.result ?? '');
@@ -83,6 +101,7 @@ export class ServerMatch {
   }
 
   tickOnce(): void {
+    this.ticksRun++;
     this.host.step();
     const tick = this.tick;
     for (const a of this.host.lastApplied) this.batch.push([tick, a.src.team, a.src.admin ? 'admin' : a.src.role ?? null, a.cmd]);

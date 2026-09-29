@@ -14,6 +14,7 @@ export * from './rules/tracking';
 export * from './rules/stats';
 export * from './fielding/fieldSettings';
 export * from './match/types';
+export * from './match/validate';
 export * from './match/running';
 export * from './match/fielding';
 export * from './match/match';

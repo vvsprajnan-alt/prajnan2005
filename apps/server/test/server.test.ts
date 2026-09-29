@@ -1,95 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { stateHash } from '@crease/sim';
-import { ClientMsg, Mirror, PROTOCOL_VERSION, ServerMsg, buildMatchConfig, decodeServer, encode, unpackTicks } from '@crease/net';
+import { ServerMsg, decodeServer, encode } from '@crease/net';
+import { Bot } from './bot';
 import { startServer } from '../src/main';
 
 type Srv = Awaited<ReturnType<typeof startServer>>;
 let srv: Srv;
 
-/** A scripted test client with its own mirror, like the browser client. */
-class Bot {
-  ws!: WebSocket;
-  inbox: ServerMsg[] = [];
-  mirror: Mirror | null = null;
-  seat: { team: 0 | 1; slot: 0 | 1 } | null = null;
-  room = '';
-  token = '';
-  id = '';
-  private sentStart = -1;
-  private sentRelease = -1;
-  private sentShot = -1;
-
-  async open(name: string, token?: string): Promise<void> {
-    this.ws = new WebSocket(`ws://localhost:${srv.port}/ws`);
-    await new Promise((r) => this.ws.once('open', r));
-    this.ws.on('message', (d) => {
-      const m = decodeServer(d.toString());
-      if (!m) return;
-      this.inbox.push(m);
-      if (m.t === 'room') this.room = m.room.code;
-      if (m.t === 'welcome') {
-        this.token = m.token;
-        this.id = m.id;
-      }
-      if (m.t === 'start') {
-        this.mirror = new Mirror(buildMatchConfig(m.match));
-        this.seat = m.you;
-      }
-      if (m.t === 'k') {
-        const b = unpackTicks(m);
-        this.mirror?.receive(b.to, b.cmds, b.hash);
-        this.drive();
-      }
-      if (m.t === 'state') this.mirror?.restore(m.tick, m.data);
-    });
-    this.send({ t: 'hello', name, version: PROTOCOL_VERSION, token });
-    await this.wait((m) => m.t === 'welcome');
-  }
-
-  send(m: ClientMsg): void {
-    this.ws.send(encode(m));
-  }
-
-  async wait(pred: (m: ServerMsg) => boolean, ms = 5000): Promise<ServerMsg> {
-    const t0 = Date.now();
-    while (Date.now() - t0 < ms) {
-      const i = this.inbox.findIndex(pred);
-      if (i >= 0) return this.inbox.splice(i, 1)[0]!;
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    throw new Error('timeout waiting for message');
-  }
-
-  /** Catch the mirror up and act like a (very simple) player. */
-  drive(): void {
-    const mr = this.mirror;
-    if (!mr) return;
-    while (mr.step()) {
-      /* consume */
-    }
-    const m = mr.match;
-    if (!this.seat) return;
-    const ball = m.inn.log.length * 10 + m.inningsIndex;
-    if (m.inn.bowlingTeam === this.seat.team) {
-      if (m.phase === 'preDelivery' && m.phaseTime > 0.5 && this.sentStart !== ball) {
-        this.sentStart = ball;
-        this.send({ t: 'cmd', cmd: { type: 'bowl.start' } });
-      }
-      if (m.phase === 'runUp' && m.runUpTime >= m.runUpDuration - 0.02 && this.sentRelease !== ball) {
-        this.sentRelease = ball;
-        this.send({ t: 'cmd', cmd: { type: 'bowl.release', at: m.tick } });
-      }
-    } else if (m.phase === 'inPlay' && !m.swing && m.ball.pos.z > 1 && this.sentShot !== ball) {
-      this.sentShot = ball;
-      this.send({ t: 'cmd', cmd: { type: 'bat.shot', shot: { family: 'ground', aimX: 0, aimY: 1 }, at: m.tick } });
-    }
-  }
-
-  close(): void {
-    this.ws.close();
-  }
-}
+const newBot = () => new Bot(srv.port);
 
 beforeAll(async () => {
   srv = await startServer(0, { timeScale: 6 });
@@ -112,8 +31,8 @@ describe('multiplayer server', () => {
   });
 
   it('runs a room: create, join, seats, ready, start, and every mirror stays in sync', async () => {
-    const a = new Bot();
-    const b = new Bot();
+    const a = newBot();
+    const b = newBot();
     await a.open('Asha');
     await b.open('Ben');
     a.send({ t: 'create' });
@@ -149,7 +68,7 @@ describe('multiplayer server', () => {
     expect(server.inn.log.length).toBeGreaterThanOrEqual(4);
 
     // A spectator joins mid-match and catches up from the full state.
-    const c = new Bot();
+    const c = newBot();
     await c.open('Cal');
     c.send({ t: 'join', code: a.room });
     await c.wait((m) => m.t === 'start');
@@ -184,8 +103,8 @@ describe('multiplayer server', () => {
   }, 30000);
 
   it('survives a player dropping mid-match and reconnecting to the same seat', async () => {
-    const a = new Bot();
-    const b = new Bot();
+    const a = newBot();
+    const b = newBot();
     await a.open('Asha');
     await b.open('Ben');
     a.send({ t: 'create' });
@@ -215,7 +134,7 @@ describe('multiplayer server', () => {
     await waitBalls(4);
     expect(server.inn.log.length).toBeGreaterThanOrEqual(4);
     // Ben comes back with his token: same id, same seat, full state.
-    const b2 = new Bot();
+    const b2 = newBot();
     await b2.open('Ben', token);
     expect(b2.id).toBe(id);
     await b2.wait((m) => m.t === 'start');
@@ -233,7 +152,7 @@ describe('multiplayer server', () => {
   }, 30000);
 
   it('plays 2v2: only the player holding a role is obeyed, and everyone stays in sync', async () => {
-    const bots = [new Bot(), new Bot(), new Bot(), new Bot()];
+    const bots = [newBot(), newBot(), newBot(), newBot()];
     await Promise.all(bots.map((b, i) => b.open(`P${i}`)));
     bots[0]!.send({ t: 'create' });
     await bots[0]!.wait((m) => m.t === 'room');

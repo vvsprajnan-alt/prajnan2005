@@ -19,6 +19,11 @@ export interface HostOptions {
    * wire carries short numbers.
    */
   quantize?: boolean;
+  /**
+   * Online: if a human bowler has not started the run-up after this many
+   * seconds, the AI bowls that ball for them (nobody waits on an idle player).
+   */
+  idleBowlAfter?: number;
 }
 
 /** Round every non-integer number in a command to 1/1000 (deep copy). */
@@ -52,6 +57,7 @@ export class MatchHost {
   /** Commands applied during the last step, in order (what a network mirror must replay). */
   lastApplied: { src: CommandSource; cmd: Command }[] = [];
   private reviewDecided = false;
+  private idleBall = -1;
   opts: HostOptions;
 
   constructor(cfg: MatchConfig, opts: HostOptions) {
@@ -93,7 +99,9 @@ export class MatchHost {
     batAi.controlsBatting = !humanBat;
     batAi.controlsRunning = !humanBat || this.opts.autoRunForHumans;
     for (const c of batAi.think(m)) apply({ team: bat, role: 'striker' }, c);
-    if (!this.isHuman(bowl)) for (const c of this.bowlAi[bowl].think(m)) apply({ team: bowl, role: 'bowler' }, c);
+    const ballId = m.inn.log.length * 100 + m.innings.length;
+    if (this.opts.idleBowlAfter !== undefined && m.phase === 'preDelivery' && m.phaseTime > this.opts.idleBowlAfter) this.idleBall = ballId;
+    if (!this.isHuman(bowl) || this.idleBall === ballId) for (const c of this.bowlAi[bowl].think(m)) apply({ team: bowl, role: 'bowler' }, c);
     if (m.phase === 'inningsBreak' && this.opts.humanTeams.length === 0) apply({ team: 0 }, { type: 'match.continue' });
     // AI sides decide on reviews after a moment's thought.
     if (m.phase === 'review' && m.pendingReview) {

@@ -14,7 +14,7 @@ import { Lobby, LobbyOptions } from './lobby';
 export function startServer(port: number, opts: { staticDir?: string; timeScale?: number; lobby?: LobbyOptions } = {}) {
   const lobby = new Lobby({ timeScale: opts.timeScale, ...opts.lobby });
   /** Traffic counters (payload bytes, before WebSocket compression). */
-  const stats = { conns: 0, bytesOut: 0, bytesIn: 0, msgsOut: 0, msgsIn: 0, since: Date.now() };
+  const stats = { conns: 0, bytesOut: 0, bytesIn: 0, msgsOut: 0, msgsIn: 0, errors: 0, since: Date.now() };
   const housekeeping = setInterval(() => lobby.tick(), 500);
   const staticDir = opts.staticDir && existsSync(opts.staticDir) ? resolve(opts.staticDir) : null;
   const types: Record<string, string> = {
@@ -81,8 +81,16 @@ export function startServer(port: number, opts: { staticDir?: string; timeScale?
     // Compress the big messages (full state, room updates); the 20 Hz tick batches are tiny and go as they are.
     perMessageDeflate: { threshold: 512, zlibDeflateOptions: { level: 3 }, concurrencyLimit: 4 },
   });
+  // Socket-level errors (oversized or corrupt frames, resets) must never become uncaught
+  // exceptions: without these listeners one bad client could take the whole server down.
+  wss.on('error', (err) => console.error('websocket server error', err));
+  http.on('clientError', (_err, socket) => socket.destroy());
   wss.on('connection', (ws) => {
     stats.conns++;
+    ws.on('error', () => {
+      stats.errors++;
+      ws.terminate();
+    });
     const conn = lobby.newConn(
       (msg) => {
         if (ws.readyState !== ws.OPEN) return;
@@ -113,7 +121,15 @@ export function startServer(port: number, opts: { staticDir?: string; timeScale?
       stats.bytesIn += raw.length;
       stats.msgsIn++;
       const msg = decodeClient(raw);
-      if (msg) lobby.handle(conn, msg);
+      if (!msg) return;
+      try {
+        lobby.handle(conn, msg);
+      } catch (err) {
+        // Untrusted input must never crash the server; the sender just gets an error.
+        stats.errors++;
+        console.error('bad message', err);
+        conn.send({ t: 'error', code: 'bad-message', message: 'Message rejected' });
+      }
     });
     ws.on('close', () => {
       stats.conns--;

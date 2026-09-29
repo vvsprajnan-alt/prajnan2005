@@ -75,3 +75,24 @@ describe('soak: complete AI matches', () => {
     expect(v).toContain('balls faced != non-wide deliveries');
   });
 });
+
+describe('idle players online', () => {
+  it('bowls for a human bowler who does nothing, so the match never stalls', () => {
+    const cfg = defaultConfig([TEAMS[0]!, TEAMS[1]!], 1, 77);
+    cfg.battingFirst = 1; // team 0 (the idle human) bowls first
+    const host = new MatchHost(cfg, { humanTeams: [0], autoRunForHumans: false, idleBowlAfter: 20 });
+    const m = host.match;
+    let t = 0;
+    let maxWait = 0;
+    while (m.innings.length === 1 && t++ < 120 * 60 * 30) {
+      host.step();
+      if (m.phase === 'preDelivery') maxWait = Math.max(maxWait, m.phaseTime);
+    }
+    expect(m.innings[0]!.legalBalls).toBe(6);
+    expect(maxWait).toBeLessThan(21);
+    // Offline (no idle limit) nothing is bowled for the human.
+    const h2 = new MatchHost(cfg, { humanTeams: [0], autoRunForHumans: false });
+    for (let i = 0; i < 120 * 60; i++) h2.step();
+    expect(h2.match.inn.log.length).toBe(0);
+  });
+});

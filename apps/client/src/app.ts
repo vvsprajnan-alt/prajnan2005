@@ -47,7 +47,7 @@ export class App {
   private setup: MatchSetup = { myOrder: null, myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
 
   constructor(root: HTMLElement) {
-    this.sfx.enabled = this.settings.sound;
+    this.applyAudio();
     this.world = new World(root.querySelector('#scene') as HTMLCanvasElement, this.settings);
     this.screens = root.querySelector('#screens') as HTMLElement;
     this.hudRoot = root.querySelector('#hud') as HTMLElement;
@@ -59,6 +59,12 @@ export class App {
     requestAnimationFrame(this.loop);
     // Expose for automated smoke tests / debugging.
     (window as unknown as { __crease: App }).__crease = this;
+  }
+
+  private applyAudio(): void {
+    const s = this.settings;
+    this.sfx.setEnabled(s.sound);
+    this.sfx.setVolumes({ master: s.volMaster / 100, effects: s.volEffects / 100, crowd: s.volCrowd / 100, music: s.volMusic / 100 });
   }
 
   private loop = (t: number) => {
@@ -294,13 +300,20 @@ export class App {
         field('Replays', sel('replays', [['key', 'Key moments (boundaries, wickets, drops)'], ['off', 'Off (I: instant replay)']])),
         field('Commentary captions', sel('captions', [['true', 'On'], ['false', 'Off']])),
       ),
+      h('div', { class: 'row', style: 'margin-top:12px' },
+        ...([['volMaster', 'Master volume'], ['volEffects', 'Effects'], ['volCrowd', 'Crowd'], ['volMusic', 'Music']] as const).map(([k, label]) => {
+          const out = h('span', { class: 'muted' }, String(s[k]));
+          return field(label, h('div', { class: 'range-row' },
+            h('input', { type: 'range', min: 0, max: 100, step: 5, value: s[k], 'aria-label': label, oninput: (e: Event) => { s[k] = Number((e.target as HTMLInputElement).value); out.textContent = String(s[k]); } }), out));
+        }),
+      ),
       h('p', { class: 'muted', style: 'font-size:13px' }, 'Graphics and time-of-day changes reload the game.'),
       h('div', { class: 'row', style: 'margin-top:12px' },
         h('button', { class: 'btn', onclick: () => {
           const reload = s.quality !== this.settings.quality || s.timeOfDay !== this.settings.timeOfDay;
           this.settings = s;
           saveSettings(s);
-          this.sfx.enabled = s.sound;
+          this.applyAudio();
           if (reload) location.reload();
           else this.mainMenu();
         } }, 'Save'),

@@ -1,49 +1,56 @@
 import * as THREE from 'three';
+import { BONES, BONE_OFFSET, BONE_PARENT, BoneName, Kit, buildBatGeometry, buildBodyGeometry, buildKitGeometry } from './rig';
+
+export type { Kit } from './rig';
 
 /**
- * Procedural low-poly cricketer built from primitives, animated with simple
- * pose blending plus arm IK towards the hands. Original art; no external assets.
+ * Animated cricketer: a skinned body (see rig.ts) driven by procedural poses,
+ * arm IK towards the bat handle, cross-fades between animations and a head
+ * that follows the ball. Original art; no external assets.
  *
  * Local space: the character faces +z, left is +x, feet at y = 0.
  */
 
-export interface Kit {
-  shirt: string;
-  trousers: string;
-  trim: string;
-  skin: string;
-  headgear: 'helmet' | 'cap' | 'hat' | 'none';
-  pads: boolean;
-  bat: boolean;
-  gloves: 'none' | 'batting' | 'keeping';
-}
-
 const SKINS = ['#f1c9a5', '#e0ac85', '#c68863', '#9c6644', '#7a4b2e', '#5c3a22'];
-export const skinFor = (id: string): string => {
+const HAIR = ['#1c1410', '#2e1f14', '#4a3222', '#6b4a2b', '#141414', '#8a6a44', '#b08850'];
+const hashOf = (id: string) => {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return SKINS[h % SKINS.length]!;
+  return h;
+};
+export const skinFor = (id: string): string => SKINS[hashOf(id) % SKINS.length]!;
+export const hairFor = (id: string): string => HAIR[(hashOf(id) >>> 3) % HAIR.length]!;
+/** Shirt number from the player id ("hawks-7" -> 7). */
+export const numberFor = (id: string): number => {
+  const m = /(\d+)$/.exec(id);
+  return m ? Number(m[1]) : (hashOf(id) % 98) + 1;
 };
 
-const mats = new Map<string, THREE.MeshStandardMaterial>();
-function mat(color: string, rough = 0.75): THREE.MeshStandardMaterial {
-  const k = `${color}:${rough}`;
-  let m = mats.get(k);
-  if (!m) {
-    m = new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0 });
-    mats.set(k, m);
+const MATTE = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.78, metalness: 0 });
+const GLOSS = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.05 });
+
+const numberTex = new Map<string, THREE.Texture>();
+function shirtNumber(n: number, color: string): THREE.Texture | null {
+  if (typeof document === 'undefined' || n <= 0) return null;
+  const key = `${n}:${color}`;
+  let t = numberTex.get(key);
+  if (!t) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = color;
+    ctx.font = 'bold 44px Arial Black, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(n), 32, 35);
+    t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    numberTex.set(key, t);
   }
-  return m;
+  return t;
 }
 
-const capsule = (r: number, len: number) => {
-  const g = new THREE.CapsuleGeometry(r, len, 4, 10);
-  g.translate(0, -len / 2 - r * 0.3, 0);
-  return g;
-};
-
-type Joint = 'hips' | 'chest' | 'head' | 'lShoulder' | 'lElbow' | 'rShoulder' | 'rElbow' | 'lHip' | 'lKnee' | 'rHip' | 'rKnee';
-export type Pose = Partial<Record<Joint, [number, number, number]>> & { hipsY?: number; lean?: number };
+export type Pose = Partial<Record<BoneName, [number, number, number]>> & { hipsY?: number; lean?: number };
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const smooth = (x: number) => {
@@ -51,113 +58,88 @@ const smooth = (x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+/** Animations that must track the simulation exactly (no cross-fade lag). */
+const SNAP = new Set(['swing', 'delivery']);
+
+export interface PoseExtra {
+  speed?: number;
+  shotAngle?: number;
+  stroke?: string;
+  /** World point to look at (x, z), e.g. the ball. */
+  look?: { x: number; y: number; z: number } | null;
+}
+
 export class Cricketer {
   readonly root = new THREE.Group();
   private body = new THREE.Group();
-  private j: Record<Joint, THREE.Group>;
+  private j: Record<BoneName, THREE.Bone>;
+  private bones: THREE.Bone[];
   readonly batPivot = new THREE.Group();
   private kit: Kit;
   private phase = Math.random() * 10;
+  private numberPlane: THREE.Mesh | null = null;
+  // Cross-fade state.
+  private anim = '';
+  private fadeT = 1;
+  private fadeDur = 0.2;
+  private from: THREE.Quaternion[] = [];
+  private fromHipsY = 0.95;
+  private fromBody = { px: 0, py: 0, rz: 0 };
+  private fromBat = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
 
   constructor(kit: Kit, castShadow = true) {
     this.kit = kit;
-    const g = (name: Joint, parent: THREE.Object3D, x: number, y: number, z: number) => {
-      const o = new THREE.Group();
-      o.name = name;
-      o.position.set(x, y, z);
-      parent.add(o);
-      return o;
-    };
+    this.bones = BONES.map((name) => {
+      const b = new THREE.Bone();
+      b.name = name;
+      b.position.set(...BONE_OFFSET[name]);
+      return b;
+    });
+    this.j = Object.fromEntries(BONES.map((n, i) => [n, this.bones[i]!])) as Record<BoneName, THREE.Bone>;
+    for (const n of BONES) {
+      const p = BONE_PARENT[n];
+      if (p) this.j[p].add(this.j[n]);
+    }
     this.root.add(this.body);
-    const hips = g('hips', this.body, 0, 0.95, 0);
-    const chest = g('chest', hips, 0, 0.12, 0);
-    const head = g('head', chest, 0, 0.5, 0);
-    const lShoulder = g('lShoulder', chest, 0.2, 0.4, 0);
-    const rShoulder = g('rShoulder', chest, -0.2, 0.4, 0);
-    const lElbow = g('lElbow', lShoulder, 0, -0.3, 0);
-    const rElbow = g('rElbow', rShoulder, 0, -0.3, 0);
-    const lHip = g('lHip', hips, 0.1, 0, 0);
-    const rHip = g('rHip', hips, -0.1, 0, 0);
-    const lKnee = g('lKnee', lHip, 0, -0.45, 0);
-    const rKnee = g('rKnee', rHip, 0, -0.45, 0);
-    this.j = { hips, chest, head, lShoulder, lElbow, rShoulder, rElbow, lHip, lKnee, rHip, rKnee };
+    const mesh = new THREE.SkinnedMesh(buildBodyGeometry(kit), MATTE);
+    mesh.castShadow = castShadow;
+    mesh.frustumCulled = false;
+    mesh.add(this.j.hips);
+    this.body.add(mesh);
+    mesh.updateMatrixWorld(true);
+    mesh.bind(new THREE.Skeleton(this.bones));
 
-    const shirt = mat(kit.shirt);
-    const trousers = mat(kit.trousers);
-    const skin = mat(kit.skin, 0.6);
-    const trim = mat(kit.trim);
-    const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, m: THREE.Material, x = 0, y = 0, z = 0) => {
-      const mesh = new THREE.Mesh(geo, m);
-      mesh.position.set(x, y, z);
-      mesh.castShadow = castShadow;
-      parent.add(mesh);
-      return mesh;
-    };
-    // Torso.
-    const torso = new THREE.CapsuleGeometry(0.17, 0.3, 4, 12);
-    torso.scale(1, 1, 0.72);
-    add(chest, torso, shirt, 0, 0.22, 0);
-    const pelvis = new THREE.CapsuleGeometry(0.15, 0.08, 4, 10);
-    pelvis.scale(1.05, 1, 0.75);
-    add(hips, pelvis, trousers, 0, 0.02, 0);
-    add(chest, new THREE.BoxGeometry(0.36, 0.05, 0.25), trim, 0, 0.44, 0); // collar/shoulder trim
-    // Head.
-    add(head, new THREE.CylinderGeometry(0.05, 0.06, 0.1, 8), skin, 0, -0.03, 0);
-    add(head, new THREE.SphereGeometry(0.105, 14, 12), skin, 0, 0.1, 0.01);
-    if (kit.headgear === 'helmet') {
-      add(head, new THREE.SphereGeometry(0.125, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), mat(kit.shirt, 0.35), 0, 0.12, -0.005);
-      const grille = new THREE.TorusGeometry(0.11, 0.008, 4, 16, Math.PI);
-      const gm = add(head, grille, mat('#c9ced6', 0.3), 0, 0.07, 0.035);
-      gm.rotation.set(0, 0, Math.PI);
-      const gm2 = add(head, grille, mat('#c9ced6', 0.3), 0, 0.03, 0.03);
-      gm2.rotation.set(0, 0, Math.PI);
-      add(head, new THREE.BoxGeometry(0.2, 0.015, 0.06), mat(kit.shirt, 0.35), 0, 0.14, 0.11);
-    } else if (kit.headgear === 'cap') {
-      add(head, new THREE.SphereGeometry(0.112, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), mat(kit.shirt, 0.6), 0, 0.12, 0);
-      add(head, new THREE.BoxGeometry(0.16, 0.012, 0.1), mat(kit.trim, 0.6), 0, 0.14, 0.12);
-    } else if (kit.headgear === 'hat') {
-      add(head, new THREE.CylinderGeometry(0.2, 0.2, 0.01, 16), mat('#f0f0f0'), 0, 0.15, 0);
-      add(head, new THREE.CylinderGeometry(0.1, 0.11, 0.1, 12), mat('#f0f0f0'), 0, 0.2, 0);
+    // Rigid kit riding on the bones.
+    for (const [b, g] of Object.entries(buildKitGeometry(kit)) as [BoneName, { matte?: THREE.BufferGeometry; gloss?: THREE.BufferGeometry }][]) {
+      for (const [geo, m] of [[g.matte, MATTE], [g.gloss, GLOSS]] as const) {
+        if (!geo) continue;
+        const piece = new THREE.Mesh(geo, m);
+        piece.castShadow = castShadow;
+        this.j[b].add(piece);
+      }
     }
-    // Arms.
-    add(lShoulder, capsule(0.052, 0.22), shirt);
-    add(rShoulder, capsule(0.052, 0.22), shirt);
-    add(lElbow, capsule(0.045, 0.22), skin);
-    add(rElbow, capsule(0.045, 0.22), skin);
-    const handGeo = kit.gloves === 'keeping' ? new THREE.BoxGeometry(0.12, 0.13, 0.08) : kit.gloves === 'batting' ? new THREE.BoxGeometry(0.09, 0.1, 0.08) : new THREE.SphereGeometry(0.045, 8, 6);
-    const handMat = kit.gloves === 'none' ? skin : mat(kit.gloves === 'keeping' ? '#f3f3f3' : '#f7f7f7', 0.8);
-    add(lElbow, handGeo, handMat, 0, -0.32, 0);
-    add(rElbow, handGeo, handMat, 0, -0.32, 0);
-    // Legs.
-    add(lHip, capsule(0.075, 0.33), trousers);
-    add(rHip, capsule(0.075, 0.33), trousers);
-    add(lKnee, capsule(0.06, 0.34), kit.pads ? mat('#f6f6f2', 0.9) : trousers);
-    add(rKnee, capsule(0.06, 0.34), kit.pads ? mat('#f6f6f2', 0.9) : trousers);
-    if (kit.pads) {
-      const pad = new THREE.BoxGeometry(0.15, 0.5, 0.08);
-      add(lKnee, pad, mat('#f6f6f2', 0.9), 0, -0.2, 0.06);
-      add(rKnee, pad, mat('#f6f6f2', 0.9), 0, -0.2, 0.06);
+    // Shirt number on the back.
+    const tex = shirtNumber(kit.number, kit.trim);
+    if (tex) {
+      this.numberPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.17, 0.17), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.8, depthWrite: false }));
+      this.numberPlane.position.set(0, 0.2, -0.123);
+      this.numberPlane.rotation.y = Math.PI;
+      this.j.chest.add(this.numberPlane);
     }
-    const shoe = new THREE.BoxGeometry(0.1, 0.07, 0.24);
-    add(lKnee, shoe, mat('#f2f2f2', 0.6), 0, -0.46, 0.05);
-    add(rKnee, shoe, mat('#f2f2f2', 0.6), 0, -0.46, 0.05);
-
     // Bat (pivot at the top hand; blade points along -y of the pivot).
     if (kit.bat) {
-      const handle = new THREE.CylinderGeometry(0.018, 0.018, 0.3, 8);
-      handle.translate(0, -0.1, 0);
-      const blade = new THREE.BoxGeometry(0.105, 0.56, 0.045);
-      blade.translate(0, -0.52, 0.008);
-      const hm = new THREE.Mesh(handle, mat('#222222', 0.6));
-      const bm = new THREE.Mesh(blade, mat('#e8cf9a', 0.55));
-      hm.castShadow = bm.castShadow = castShadow;
-      this.batPivot.add(hm, bm);
+      const bat = new THREE.Mesh(buildBatGeometry(kit.trim), MATTE);
+      bat.castShadow = castShadow;
+      this.batPivot.add(bat);
       this.root.add(this.batPivot);
     }
+    this.from = this.bones.map(() => new THREE.Quaternion());
   }
 
   setMirror(m: 1 | -1): void {
     this.root.scale.x = m;
+    // Keep the shirt number readable on a mirrored (left-handed) rig.
+    if (this.numberPlane) this.numberPlane.scale.x = m;
   }
 
   setTransform(x: number, z: number, heading: number): void {
@@ -166,7 +148,7 @@ export class Cricketer {
   }
 
   private reset(): void {
-    for (const k of Object.keys(this.j) as Joint[]) this.j[k].rotation.set(0, 0, 0);
+    for (const b of this.bones) b.rotation.set(0, 0, 0);
     this.j.hips.position.y = 0.95;
     this.body.rotation.set(0, 0, 0);
     this.body.position.set(0, 0, 0);
@@ -178,7 +160,7 @@ export class Cricketer {
       else if (k === 'lean') this.j.chest.rotation.x += p.lean! * w;
       else {
         const r = p[k] as [number, number, number];
-        const o = this.j[k as Joint].rotation;
+        const o = this.j[k as BoneName].rotation;
         o.x += r[0] * w;
         o.y += r[1] * w;
         o.z += r[2] * w;
@@ -191,7 +173,6 @@ export class Cricketer {
     const sh = side === 'l' ? this.j.lShoulder : this.j.rShoulder;
     const el = side === 'l' ? this.j.lElbow : this.j.rElbow;
     this.root.updateMatrixWorld(true);
-    // Work in the shoulder's parent space (handles mirrored rigs too).
     const tWorld = this.root.localToWorld(target.clone());
     const tLocal = sh.parent!.worldToLocal(tWorld);
     const dir = tLocal.sub(sh.position);
@@ -208,19 +189,66 @@ export class Cricketer {
     this.batPivot.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir.clone().normalize());
   }
 
+  /** Turn the head (and a little of the chest) towards a world point. */
+  private lookAt(p: { x: number; y: number; z: number }): void {
+    this.root.updateMatrixWorld(true);
+    const local = this.root.worldToLocal(new THREE.Vector3(p.x, p.y, p.z));
+    const yaw = Math.atan2(local.x, local.z);
+    if (Math.abs(yaw) > 2.4) return; // behind: don't wring the neck
+    const y = Math.max(-1.15, Math.min(1.15, yaw));
+    this.j.head.rotation.y += y * 0.75;
+    this.j.chest.rotation.y += y * 0.25;
+    const dist = Math.hypot(local.x, local.z);
+    this.j.head.rotation.x += Math.max(-0.5, Math.min(0.35, -Math.atan2(local.y - 1.6, Math.max(1, dist)) * 0.6));
+  }
+
+  /** Record the current pose as the start of a cross-fade. */
+  private beginFade(dur: number): void {
+    this.bones.forEach((b, i) => this.from[i]!.copy(b.quaternion));
+    this.fromHipsY = this.j.hips.position.y;
+    this.fromBody = { px: this.body.position.x, py: this.body.position.y, rz: this.body.rotation.z };
+    this.fromBat.p.copy(this.batPivot.position);
+    this.fromBat.q.copy(this.batPivot.quaternion);
+    this.fadeT = 0;
+    this.fadeDur = dur;
+  }
+
+  private blend(dt: number): void {
+    if (this.fadeT >= 1) return;
+    this.fadeT = Math.min(1, this.fadeT + dt / this.fadeDur);
+    const k = smooth(this.fadeT);
+    this.bones.forEach((b, i) => b.quaternion.slerpQuaternions(this.from[i]!, b.quaternion.clone(), k));
+    this.j.hips.position.y = this.fromHipsY + (this.j.hips.position.y - this.fromHipsY) * k;
+    this.body.position.x = this.fromBody.px + (this.body.position.x - this.fromBody.px) * k;
+    this.body.position.y = this.fromBody.py + (this.body.position.y - this.fromBody.py) * k;
+    this.body.rotation.z = this.fromBody.rz + (this.body.rotation.z - this.fromBody.rz) * k;
+    if (this.kit.bat) {
+      this.batPivot.position.lerpVectors(this.fromBat.p, this.batPivot.position.clone(), k);
+      this.batPivot.quaternion.slerpQuaternions(this.fromBat.q, this.batPivot.quaternion.clone(), k);
+    }
+  }
+
   // ------------------------------------------------------------------ poses
 
-  pose(anim: string, t: number, dt: number, extra: { speed?: number; shotAngle?: number; stroke?: string } = {}): void {
+  pose(anim: string, t: number, dt: number, extra: PoseExtra = {}): void {
+    if (anim !== this.anim) {
+      if (this.anim) this.beginFade(SNAP.has(anim) ? 0.08 : anim === 'dive' || anim === 'throw' ? 0.1 : 0.22);
+      this.anim = anim;
+    }
     this.reset();
-    this.phase += dt * (extra.speed ? 1.3 + extra.speed * 0.28 : 1);
+    const speed = extra.speed ?? 0;
+    this.phase += dt * (anim === 'run' || anim === 'runup' ? (speed < 2.6 ? 0.55 + speed * 0.28 : 1.3 + speed * 0.28) : 1);
+    let look = true;
     switch (anim) {
       case 'run':
       case 'runup':
-        this.run(extra.speed ?? 6);
+        if (speed < 2.6 && anim === 'run') this.walk(speed);
+        else this.run(anim === 'runup' ? Math.max(4, speed) : Math.max(3, speed));
         if (this.kit.bat) this.holdBatRunning();
+        look = anim === 'run';
         break;
       case 'ready':
-        this.apply({ hipsY: 0.82, lean: 0.35, lHip: [-0.5, 0, 0.08], rHip: [-0.5, 0, -0.08], lKnee: [0.7, 0, 0], rKnee: [0.7, 0, 0], lShoulder: [-0.7, 0, 0.15], rShoulder: [-0.7, 0, -0.15], lElbow: [-0.4, 0, 0], rElbow: [-0.4, 0, 0] });
+        this.idleReady();
         break;
       case 'keeper':
         this.apply({ hipsY: 0.55, lean: 0.25, lHip: [-1.3, 0, 0.35], rHip: [-1.3, 0, -0.35], lKnee: [1.9, 0, 0], rKnee: [1.9, 0, 0], lShoulder: [-1.0, 0, 0.1], rShoulder: [-1.0, 0, -0.1], lElbow: [-0.3, 0, 0], rElbow: [-0.3, 0, 0] });
@@ -229,72 +257,177 @@ export class Cricketer {
         const k = smooth(1 - t / 0.6);
         this.body.rotation.z = 1.25 * k;
         this.body.position.y = -0.55 * k;
-        this.apply({ lShoulder: [-3.0, 0, 0.3], rShoulder: [-3.0, 0, -0.3] }, k);
+        this.apply({ lShoulder: [-3.0, 0, 0.3], rShoulder: [-3.0, 0, -0.3], lHip: [-0.3, 0, 0.2], rKnee: [0.6, 0, 0] }, k);
+        look = false;
         break;
       }
       case 'catch':
-        this.apply({ lShoulder: [-1.6, 0, 0.15], rShoulder: [-1.6, 0, -0.15], lElbow: [-0.6, 0, 0], rElbow: [-0.6, 0, 0], lean: 0.1 });
+        this.apply({ lShoulder: [-1.6, 0, 0.15], rShoulder: [-1.6, 0, -0.15], lElbow: [-0.6, 0, 0], rElbow: [-0.6, 0, 0], lean: 0.1, hipsY: 0.9, lKnee: [0.2, 0, 0], rKnee: [0.2, 0, 0] });
         break;
       case 'pickup':
         this.apply({ hipsY: 0.72, lean: 0.9, lHip: [-0.6, 0, 0], lKnee: [0.9, 0, 0], rHip: [0.1, 0, 0], rKnee: [0.4, 0, 0], rShoulder: [-1.2, 0, 0], lShoulder: [-0.6, 0, 0] });
+        look = false;
         break;
       case 'throw': {
         const k = clamp01(1 - t / 0.4);
-        this.apply({ rShoulder: [-3.4 + 2.0 * k, 0, -0.2], lShoulder: [-1.2 * k, 0, 0.2], chest: [0.3 * (1 - k), -0.5 * k, 0], lHip: [-0.4, 0, 0], rHip: [0.3, 0, 0] });
+        this.apply({ rShoulder: [-3.4 + 2.0 * k, 0, -0.2], lShoulder: [-1.2 * k, 0, 0.2], chest: [0.3 * (1 - k), -0.5 * k, 0], lHip: [-0.4, 0, 0], rHip: [0.3, 0, 0], lKnee: [0.2, 0, 0] });
+        look = false;
         break;
       }
-      case 'celebrate':
-        this.apply({ lShoulder: [-2.8, 0, 0.5], rShoulder: [-2.8, 0, -0.5] });
-        this.body.position.y = Math.max(0, Math.sin(this.phase * 9)) * 0.25;
-        break;
       case 'mark':
-        this.apply({ lShoulder: [0, 0, 0.12], rShoulder: [-0.3, 0, -0.12], rElbow: [-1.2, 0, 0] });
+        this.apply({ lShoulder: [0, 0, 0.12], rShoulder: [-0.3, 0, -0.12], rElbow: [-1.2, 0, 0], chest: [0, 0, Math.sin(this.phase * 1.6) * 0.02] });
+        look = false;
         break;
       case 'delivery':
         this.bowl(t);
+        look = false;
         break;
       case 'stance':
         this.batStance();
+        look = false;
         break;
       case 'backup':
-        this.apply({ lShoulder: [0, 0, 0.12], rShoulder: [-0.2, 0, -0.12], lean: 0.05 });
+        this.apply({ lShoulder: [0, 0, 0.12], rShoulder: [-0.2, 0, -0.12], lean: 0.08, lHip: [-0.25, 0, 0], lKnee: [0.3, 0, 0], rKnee: [0.12, 0, 0] });
         if (this.kit.bat) this.placeBat(new THREE.Vector3(-0.28, 0.72, 0.05), new THREE.Vector3(0.15, -1, 0.2));
         if (this.kit.bat) this.reachArm('r', this.batPivot.position);
         break;
       case 'swing':
         this.batSwing(t, extra.stroke ?? 'straightDrive', extra.shotAngle ?? 0);
+        look = false;
         break;
+      // --- reactions (presentation only)
+      case 'celebrate': {
+        const hop = Math.max(0, Math.sin(this.phase * 9));
+        this.apply({ lShoulder: [-2.8, 0, 0.5], rShoulder: [-2.8, 0, -0.5], lElbow: [-0.2, 0, 0], rElbow: [-0.2, 0, 0], lKnee: [0.5 * hop, 0, 0], rKnee: [0.5 * hop, 0, 0] });
+        this.body.position.y = hop * 0.22;
+        look = false;
+        break;
+      }
+      case 'fistPump': {
+        const pump = Math.abs(Math.sin(this.phase * 6));
+        this.apply({ rShoulder: [-1.2 - 0.9 * pump, 0, -0.3], rElbow: [-1.6 + 0.8 * pump, 0, 0], lShoulder: [-0.3, 0, 0.35], lElbow: [-1.2, 0, 0], lean: -0.05, hipsY: 0.9, lKnee: [0.25, 0, 0], rKnee: [0.25, 0, 0] });
+        look = false;
+        break;
+      }
+      case 'clap': {
+        const c = Math.sin(this.phase * 14) * 0.18;
+        this.apply({ lShoulder: [-1.05, -0.55 + c, 0.2], rShoulder: [-1.05, 0.55 - c, -0.2], lElbow: [-1.1, 0, 0], rElbow: [-1.1, 0, 0] });
+        break;
+      }
+      case 'appeal': {
+        const k = smooth(t / 0.25);
+        this.apply({ lShoulder: [-2.9 * k, 0, 0.35], rShoulder: [-2.9 * k, 0, -0.35], lean: -0.25 * k, head: [-0.3 * k, 0, 0], lHip: [-0.3, 0, 0], lKnee: [0.3, 0, 0] });
+        look = false;
+        break;
+      }
+      case 'dejected':
+        this.apply({ head: [0.55, 0, 0], lean: 0.12, lShoulder: [-0.25, 0, 0.35], rShoulder: [-0.25, 0, -0.35], lElbow: [-1.9, 0, 0.4], rElbow: [-1.9, 0, -0.4] });
+        if (this.kit.bat) {
+          this.placeBat(new THREE.Vector3(-0.3, 0.75, 0.1), new THREE.Vector3(0.1, -1, 0.1));
+          this.reachArm('r', this.batPivot.position);
+        }
+        look = false;
+        break;
+      case 'handsOnHead':
+        this.apply({ lShoulder: [-2.5, 0, 0.9], rShoulder: [-2.5, 0, -0.9], lElbow: [-2.2, 0, 0], rElbow: [-2.2, 0, 0], head: [-0.25, 0, 0], lean: -0.1 });
+        look = false;
+        break;
+      case 'raiseBat': {
+        const k = smooth(t / 0.5);
+        this.apply({ head: [-0.25 * k, 0, 0], lShoulder: [-2.7 * k, 0, 0.4], lean: -0.08 * k });
+        if (this.kit.bat) {
+          this.placeBat(new THREE.Vector3(-0.28, 0.9 + 1.25 * k, 0.12 + 0.1 * k), new THREE.Vector3(0.05, -1 + 1.9 * k, 0.1).normalize());
+          this.reachArm('r', this.batPivot.position);
+        }
+        look = false;
+        break;
+      }
       case 'signal-out':
-        // Finger raised straight up.
         this.apply({ rShoulder: [-3.05 * smooth(t / 0.4), 0, -0.05], rElbow: [0, 0, 0], lShoulder: [0, 0, 0.1] });
+        look = false;
         break;
       case 'signal-six':
         this.apply({ rShoulder: [-3.0 * smooth(t / 0.4), 0, -0.15], lShoulder: [-3.0 * smooth(t / 0.4), 0, 0.15] });
+        look = false;
         break;
       case 'signal-four': {
-        // Arm across the body, waving.
         const k = smooth(t / 0.3);
         this.apply({ rShoulder: [-1.5 * k, 0, -0.2 + 0.9 * Math.sin(t * 9) * k], lShoulder: [0, 0, 0.1] });
+        look = false;
         break;
       }
       case 'signal-wide':
         this.apply({ rShoulder: [0, 0, -1.5 * smooth(t / 0.4)], lShoulder: [0, 0, 1.5 * smooth(t / 0.4)] });
+        look = false;
         break;
       case 'signal-noBall':
         this.apply({ rShoulder: [0, 0, -1.5 * smooth(t / 0.4)], lShoulder: [0, 0, 0.1] });
+        look = false;
         break;
       case 'signal-bye':
         this.apply({ rShoulder: [-2.9 * smooth(t / 0.4), 0, -0.1], rElbow: [0, 0, 0] });
+        look = false;
         break;
       case 'signal-notOut':
         this.apply({ lShoulder: [0, 0, 0.1], rShoulder: [0, 0, -0.1], head: [0, 0.5 * Math.sin(t * 8) * (t < 0.8 ? 1 : 0), 0] });
+        look = false;
         break;
       case 'umpire':
-        this.apply({ lShoulder: [0, 0, 0.1], rShoulder: [0, 0, -0.1], lean: 0.08 });
+        this.apply({ lShoulder: [-0.35, 0.3, 0.05], rShoulder: [-0.35, -0.3, -0.05], lElbow: [-1.3, 0, 0], rElbow: [-1.3, 0, 0], lean: 0.1, lHip: [-0.1, 0, 0.05], rHip: [-0.1, 0, -0.05], lKnee: [0.15, 0, 0], rKnee: [0.15, 0, 0], hipsY: 0.93 });
+        this.breathe();
         break;
       default:
         this.apply({ lShoulder: [0, 0, 0.1], rShoulder: [0, 0, -0.1] });
+        this.breathe();
     }
+    if (look && extra.look) this.lookAt(extra.look);
+    this.blend(dt);
+  }
+
+  private breathe(): void {
+    const b = Math.sin(this.phase * 1.7) * 0.025;
+    this.j.chest.rotation.x += b;
+    this.j.lShoulder.rotation.z += b;
+    this.j.rShoulder.rotation.z -= b;
+  }
+
+  /** Fielder waiting for the ball: crouched, weight shifting, hands ready. */
+  private idleReady(): void {
+    const sway = Math.sin(this.phase * 1.3) * 0.04;
+    this.apply({
+      hipsY: 0.82,
+      lean: 0.35,
+      lHip: [-0.5, 0, 0.1 + sway],
+      rHip: [-0.5, 0, -0.1 + sway],
+      lKnee: [0.7, 0, 0],
+      rKnee: [0.7, 0, 0],
+      lShoulder: [-0.75, 0, 0.18],
+      rShoulder: [-0.75, 0, -0.18],
+      lElbow: [-0.5, 0, 0],
+      rElbow: [-0.5, 0, 0],
+    });
+    this.body.position.x = sway * 0.4;
+    this.breathe();
+  }
+
+  private walk(speed: number): void {
+    const p = this.phase * 5.2;
+    const amp = 0.35 + Math.min(1, speed / 2.6) * 0.35;
+    const s = Math.sin(p);
+    const c = Math.cos(p);
+    this.apply({
+      hipsY: 0.945 + Math.abs(c) * 0.018,
+      lean: 0.04,
+      lHip: [-0.55 * s * amp, 0, 0.03],
+      rHip: [0.55 * s * amp, 0, -0.03],
+      lKnee: [0.15 + 0.5 * Math.max(0, -c) * amp, 0, 0],
+      rKnee: [0.15 + 0.5 * Math.max(0, c) * amp, 0, 0],
+      lShoulder: [0.45 * s * amp, 0, 0.1],
+      rShoulder: [-0.45 * s * amp, 0, -0.1],
+      lElbow: [-0.35, 0, 0],
+      rElbow: [-0.35, 0, 0],
+      chest: [0, 0.12 * s * amp, 0],
+    });
   }
 
   private run(speed: number): void {
@@ -303,16 +436,18 @@ export class Cricketer {
     const s = Math.sin(p);
     const c = Math.cos(p);
     this.apply({
-      hipsY: 0.93 + Math.abs(c) * 0.05 * amp,
-      lean: 0.18 * amp,
-      lHip: [-0.8 * s * amp, 0, 0.04],
-      rHip: [0.8 * s * amp, 0, -0.04],
-      lKnee: [(0.3 + 0.9 * Math.max(0, -c)) * amp, 0, 0],
-      rKnee: [(0.3 + 0.9 * Math.max(0, c)) * amp, 0, 0],
-      lShoulder: [0.7 * s * amp, 0, 0.12],
-      rShoulder: [-0.7 * s * amp, 0, -0.12],
-      lElbow: [-1.1 * amp, 0, 0],
-      rElbow: [-1.1 * amp, 0, 0],
+      hipsY: 0.9 + Math.abs(c) * 0.07 * amp,
+      lean: 0.2 * amp,
+      lHip: [-0.95 * s * amp, 0, 0.04],
+      rHip: [0.95 * s * amp, 0, -0.04],
+      lKnee: [(0.35 + 1.2 * Math.max(0, -c)) * amp, 0, 0],
+      rKnee: [(0.35 + 1.2 * Math.max(0, c)) * amp, 0, 0],
+      lShoulder: [0.85 * s * amp, 0, 0.12],
+      rShoulder: [-0.85 * s * amp, 0, -0.12],
+      lElbow: [-1.35 * amp, 0, 0],
+      rElbow: [-1.35 * amp, 0, 0],
+      chest: [0, 0.2 * s * amp, 0],
+      hips: [0, -0.12 * s * amp, 0],
     });
   }
 
@@ -359,7 +494,6 @@ export class Cricketer {
       K.contact = { h: new THREE.Vector3(0.2, sweep ? 0.45 : 1.05, 0.34), d: new THREE.Vector3(0.25, sweep ? -0.25 : 0.1, 1) };
       K.follow = { h: new THREE.Vector3(-0.1, sweep ? 0.6 : 1.25, -0.15), d: new THREE.Vector3(-0.7, 0.35, -0.6) };
     } else if (scoop) {
-      // Get low and paddle the ball up over the keeper.
       K.back = { h: new THREE.Vector3(0.05, 0.9, 0.3), d: new THREE.Vector3(0.2, -1, 0.1) };
       K.contact = { h: new THREE.Vector3(0.3, 0.55, 0.35), d: new THREE.Vector3(0.7, -0.2, 0.2) };
       K.follow = { h: new THREE.Vector3(0.05, 1.0, 0.3), d: new THREE.Vector3(0.2, 0.95, -0.1) };
@@ -385,10 +519,11 @@ export class Cricketer {
       stride = 1;
     }
     const legs: Pose = front
-      ? { lHip: [-0.55 * stride, 0.1, 0.25 * stride], lKnee: [0.55 * stride, 0, 0], rHip: [0.1, 0, -0.12], rKnee: [0.2, 0, 0] }
+      ? { lHip: [-0.55 * stride, 0.1, 0.25 * stride], lKnee: [0.55 * stride, 0, 0], rHip: [0.1, 0, -0.12], rKnee: [0.2 + 0.2 * stride, 0, 0] }
       : { rHip: [0.25 * stride, 0, -0.3 * stride], lHip: [-0.1, 0, 0.15], lKnee: [0.2, 0, 0], rKnee: [0.15, 0, 0] };
     if (sweep || scoop) Object.assign(legs, { hipsY: 0.95 - 0.4 * stride, lHip: [-1.2 * stride, 0, 0.3], lKnee: [1.3 * stride, 0, 0], rHip: [0.3, 0, -0.2], rKnee: [1.9 * stride, 0, 0] });
-    this.apply({ hipsY: 0.9, lean: 0.2 + 0.15 * stride, head: [0, 1.1, 0], chest: [0, -0.35 * stride + (horizontalLeg ? -0.4 * clamp01(t / 0.2) : 0), 0], ...legs });
+    const twist = t < 0 ? -0.35 * stride : -0.35 - 0.45 * smooth(t / 0.3) * (defence ? 0 : 1);
+    this.apply({ hipsY: 0.9, lean: 0.2 + 0.15 * stride, head: [0, 1.1 + (t > 0 ? -0.3 * smooth(t / 0.4) * (defence ? 0 : 1) : 0), 0], chest: [0, twist + (horizontalLeg ? -0.4 * clamp01(t / 0.2) : 0), 0], hips: [0, twist * 0.4, 0], ...legs });
     if (front) this.body.position.x = 0.15 * stride;
     this.placeBat(k.h, k.d);
     this.reachArm('l', k.h.clone().add(new THREE.Vector3(0, 0.02, 0)));
@@ -397,22 +532,27 @@ export class Cricketer {
 
   /** Bowling action; t = seconds since release. */
   private bowl(t: number): void {
-    // Windmill of the bowling (right) arm around release (t=0).
-    const arm = Math.PI * 1.1 + Math.max(-0.35, Math.min(0.45, t)) * 6.0; // rotation about x (negative = forward)
+    // Windmill of the bowling (right) arm around release (t=0), front arm pulling down, hips driving through.
+    const arm = Math.PI * 1.1 + Math.max(-0.35, Math.min(0.45, t)) * 6.0;
     const k = clamp01((t + 0.35) / 0.5);
+    const drive = smooth(t / 0.3);
     this.apply({
       rShoulder: [-arm, 0, -0.1],
       lShoulder: [-2.6 + 2.3 * k, 0, 0.25],
-      lean: -0.15 + 0.7 * smooth(t / 0.3),
-      lHip: [-0.6, 0, 0.05],
-      lKnee: [0.15, 0, 0],
-      rHip: [0.5 * smooth(t / 0.3), 0, -0.05],
-      rKnee: [0.6 * smooth(t / 0.3), 0, 0],
+      lElbow: [-0.3 * k, 0, 0],
+      lean: -0.2 + 0.8 * drive,
+      chest: [0, 0.5 - 0.9 * drive, 0],
+      hips: [0, 0.3 - 0.5 * drive, 0],
+      lHip: [-0.6 + 0.2 * drive, 0, 0.05],
+      lKnee: [0.1, 0, 0],
+      rHip: [0.55 * drive, 0, -0.05],
+      rKnee: [0.8 * drive, 0, 0],
+      hipsY: 0.93 - 0.05 * drive,
     });
     if (t > 0.35) {
       // Follow-through turns into a jog.
       this.reset();
-      this.run(3);
+      this.run(3.5);
     }
   }
 }
@@ -425,11 +565,13 @@ export function kitFor(colors: { primary: string; secondary: string; accent: str
     trousers,
     trim: colors.secondary,
     skin: skinFor(id),
+    hair: hairFor(id),
     headgear: role === 'batter' ? 'helmet' : role === 'keeper' ? 'helmet' : 'cap',
     pads: role === 'batter' || role === 'keeper',
     bat: role === 'batter',
     gloves: role === 'batter' ? 'batting' : role === 'keeper' ? 'keeping' : 'none',
+    number: numberFor(id),
   };
 }
 
-export const UMPIRE_KIT: Kit = { shirt: '#f4f4f4', trousers: '#20242c', trim: '#1b2a4a', skin: '#c68863', headgear: 'hat', pads: false, bat: false, gloves: 'none' };
+export const UMPIRE_KIT: Kit = { shirt: '#f4f4f4', trousers: '#20242c', trim: '#1b2a4a', skin: '#c68863', hair: '#2e1f14', headgear: 'hat', pads: false, bat: false, gloves: 'none', number: 0, longSleeves: true };

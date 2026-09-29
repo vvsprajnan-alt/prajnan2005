@@ -143,3 +143,97 @@ export function makeScreen(): { tex: THREE.CanvasTexture; draw: (lines: string[]
   };
   return { tex, draw };
 }
+
+/**
+ * Seating for the stepped stand. `rows` gives each profile segment (in lathe v
+ * order) as a tread (seats), riser (concrete) or other; sections alternate
+ * seat colours round the ground with dark aisles between them.
+ */
+export function seatTexture(rows: ('tread' | 'riser' | 'other')[], night: boolean): THREE.CanvasTexture {
+  const W = 2048;
+  const H = rows.length * 8;
+  const [c, ctx] = canvas(W, H);
+  const sections = 32;
+  const seatColors = ['#1f4f8f', '#23676b', '#1f4f8f', '#8a3a2c'];
+  const concrete = night ? '#4a505c' : '#9aa1ad';
+  rows.forEach((kind, j) => {
+    const y = H - (j + 1) * 8; // canvas y grows down; lathe v grows up the profile
+    if (kind === 'tread') {
+      for (let s = 0; s < sections; s++) {
+        const x0 = (s / sections) * W;
+        const w = W / sections;
+        ctx.fillStyle = seatColors[s % seatColors.length]!;
+        ctx.fillRect(x0, y, w, 8);
+        // Individual seat backs.
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        for (let k = 0; k < w; k += 6) ctx.fillRect(x0 + k, y, 1, 8);
+        // Aisle.
+        ctx.fillStyle = concrete;
+        ctx.fillRect(x0, y, w * 0.06, 8);
+      }
+    } else {
+      ctx.fillStyle = kind === 'riser' ? concrete : night ? '#3a4150' : '#8a93a3';
+      ctx.fillRect(0, y, W, 8);
+    }
+  });
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.RepeatWrapping;
+  return t;
+}
+
+/** Floodlight lamp bank: a grid of bright lamps. */
+export function lampTexture(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(128, 64);
+  ctx.fillStyle = '#20242c';
+  ctx.fillRect(0, 0, 128, 64);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 8; x++) {
+      const g = ctx.createRadialGradient(8 + x * 16, 8 + y * 16, 0, 8 + x * 16, 8 + y * 16, 7);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(0.6, '#fff6d8');
+      g.addColorStop(1, '#8a8470');
+      ctx.fillStyle = g;
+      ctx.fillRect(1 + x * 16, 1 + y * 16, 14, 14);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** LED ribbon board round the stand fascia: sponsor loop, or a flashing message. */
+export function makeRibbon(): { tex: THREE.CanvasTexture; draw: (msg: { text: string; bg: string; fg: string } | null, phase: number) => void } {
+  const [c, ctx] = canvas(2048, 48);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  const ads = ['CREASE CLASH', 'ORBITEL', 'ZEPHYR FIZZ', 'KESTREL AIR', 'HALCYON BANK', 'NIMBUS PLAY'];
+  const draw = (msg: { text: string; bg: string; fg: string } | null, phase: number) => {
+    ctx.fillStyle = msg ? msg.bg : '#050b16';
+    ctx.fillRect(0, 0, 2048, 48);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 30px Arial Black, Arial, sans-serif';
+    if (msg) {
+      const n = 8;
+      for (let i = 0; i < n; i++) {
+        ctx.fillStyle = (i + Math.floor(phase * 6)) % 2 ? msg.fg : '#ffffff';
+        ctx.fillText(msg.text, (i + 0.5) * (2048 / n), 26);
+      }
+    } else {
+      const w = 2048 / ads.length;
+      ads.forEach((a, i) => {
+        ctx.fillStyle = i % 2 ? '#ffb627' : '#9fd5ff';
+        ctx.fillText(a, (i + 0.5) * w, 26);
+      });
+    }
+    // LED pixel grid.
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    for (let x = 0; x < 2048; x += 4) ctx.fillRect(x, 0, 1, 48);
+    for (let y = 0; y < 48; y += 4) ctx.fillRect(0, y, 2048, 1);
+    tex.needsUpdate = true;
+  };
+  draw(null, 0);
+  return { tex, draw };
+}

@@ -16,6 +16,11 @@ export interface Settings {
   replays: 'key' | 'off';
   /** Commentary captions. */
   captions: boolean;
+  /** Mixer levels, 0..100. */
+  volMaster: number;
+  volEffects: number;
+  volCrowd: number;
+  volMusic: number;
 }
 
 export interface QualityPreset {
@@ -40,7 +45,7 @@ export const ASSIST_LEVEL: Record<Assist, number> = { beginner: 1, standard: 0.5
 const KEY = 'crease-clash-settings-v1';
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { quality: 'medium', timeOfDay: 'night', assist: 'beginner', autoRun: false, sound: true, showPitchGuide: true, fielding: 'assisted', playerName: '', replays: 'key', captions: true };
+  const defaults: Settings = { quality: 'medium', timeOfDay: 'night', assist: 'beginner', autoRun: false, sound: true, showPitchGuide: true, fielding: 'assisted', playerName: '', replays: 'key', captions: true, volMaster: 80, volEffects: 100, volCrowd: 80, volMusic: 70 };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...defaults, ...JSON.parse(raw) };

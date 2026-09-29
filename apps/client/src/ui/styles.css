@@ -275,3 +275,5 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .mc-split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .mc-split .mc-table { margin-top: 0; }
 @media (max-width: 720px) { .mc-split { grid-template-columns: 1fr; } }
+.range-row { display: flex; align-items: center; gap: 10px; }
+.range-row input[type=range] { flex: 1; accent-color: var(--accent); }

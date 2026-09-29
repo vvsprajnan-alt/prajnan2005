@@ -107,6 +107,24 @@ While `inPlay`, every 1/120 s tick:
   contact shadow and trail, and the camera director. It holds no game logic.
 - Quality presets change pixel ratio, shadows, antialiasing, crowd size and effects.
 
+### Art and audio (Phase 8)
+
+- **Characters** (`render/rig.ts`, `render/players.ts`) are generated in code, not loaded. The body is one
+  skinned mesh: tapered capsules for the limbs and a lofted torso, each vertex weighted to its bone and blended
+  into the neighbouring bone near a joint so elbows and knees bend smoothly. Kit colours are vertex colours, so
+  every character shares one material; rigid kit is merged per bone. The pose code writes bone rotations (plus
+  arm IK to the bat handle); a cross-fade from the previous pose hides animation switches, except for the
+  stroke and the bowling action, which must match the simulation exactly. `World` measures each actor's speed
+  from its position change (walk / jog / sprint), points heads at the ball, and layers presentation-only
+  reactions (celebrations, dejection) over idle animations; it never changes the simulation.
+- **Crowd** (`render/crowd.ts`): one instanced mesh; seating (`crowdSeats`) and shirt colours are pure and
+  deterministic. All motion is in the vertex shader, driven by three uniforms: time, excitement and the
+  Mexican-wave front.
+- **Sound** (`audio/sfx.ts`): everything is synthesized with WebAudio. Buses (effects, crowd, music) feed a
+  compressor; reverb sends follow the bus volumes. Sounds are panned by projecting their world position onto
+  the screen. Music stings are small note lists (`STINGS`) played on detuned sawtooth "brass" with synthesized
+  drums.
+
 ### Presentation (Phase 7)
 
 - **Data comes from the sim.** Every `BallOutcome` records where the ball pitched (line and length; balls hit

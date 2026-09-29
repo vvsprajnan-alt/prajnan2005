@@ -7,7 +7,11 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 7 complete - broadcast presentation: team introductions before the first ball, automatic
+**Status:** Phase 8 complete - art and audio: skinned cricketers with smoother animation and celebrations,
+a crowd in both teams' colours that stands, cheers and does the Mexican wave, a more detailed stadium (seat
+sections, an LED ribbon board, floodlight beams, dugouts, clouds) and a full synthesized sound design (layered
+bat and ball sounds, a reactive crowd, an appeal, music stings, volume sliders). Phase 7 added the broadcast
+presentation: team introductions before the first ball, automatic
 slow-motion replays of boundaries, wickets and dropped catches (plus instant replay), commentary captions,
 milestone banners, end-of-over and new batter/bowler cards, and a Match Centre with the scorecard, wagon wheel,
 pitch map, Manhattan, worm and ball-by-ball commentary. Before that, Phase 6 brought online multiplayer (1v1 to 2v2, plus spectators) through an authoritative
@@ -137,12 +141,12 @@ apps/server       @crease/server: HTTP + WebSocket server, lobby/rooms, authorit
   ai/             AI bowler, AI batter, running decisions, difficulty tables
   data/           fictional players and teams
 apps/client       @crease/client: Vite + three.js front end
-  render/         stadium, procedural players and animation, ball, cameras
+  render/         stadium and crowd, skinned procedural players (rig.ts) and animation, ball, cameras
   game/           GameSession: fixed-step loop, input to commands, events to presentation; replays
   input/          keyboard, gamepad and touch mapped to one set of actions
   ui/             menus, HUD (scorebug, lower third, meters, touch controls), commentary,
                   Match Centre and its SVG charts
-  audio/          synthesized sound effects (WebAudio)
+  audio/          synthesized sound design and music stings (WebAudio)
 scripts/          headless match, physics probe, browser smoke test
 docs/             architecture notes and the roadmap
 ```
@@ -218,12 +222,13 @@ overs as bowler; the other one fields (and can set the field). A lone human on a
 ## Graphics settings
 
 Settings -> Graphics quality: Low / Medium / High / Ultra (resolution scale, shadows and shadow resolution,
-antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under floodlights. Replays: key moments
+antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under floodlights. Sound: on/off plus
+master, effects, crowd and music volume. Replays: key moments
 or off; commentary captions: on or off.
 
 ## Testing
 
-`npm test` runs ~130 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~140 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the
@@ -234,4 +239,6 @@ end-to-end server tests with real WebSocket clients (1v1 with a mid-match specta
 player dropping and reconnecting mid-match), plus lobby tests with a fake clock (resume, replaced tabs, grace
 periods, host migration, chat, matchmaking), and presentation tests: the intro phase, per-ball delivery and
 shot data, chart data (wagon wheel, pitch map, Manhattan, worm), commentary and milestones for every ball of a
-real match, replay recording and camera planning, and the SVG charts.
+real match, replay recording and camera planning, and the SVG charts; and art/audio tests: the skinned rig's
+geometry and skin weights, every animation (no NaNs), crowd seating, team colours and Mexican waves, and the
+music data.

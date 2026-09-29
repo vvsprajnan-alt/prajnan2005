@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { BOUNDARY_RADIUS, INNER_CIRCLE_RADIUS, PITCH_HALF_LENGTH, STUMP_HEIGHT } from '@crease/sim';
 import { QualityPreset, TimeOfDay } from '../settings';
-import { adBoardTexture, grassTexture, makeScreen, pitchTexture, radialTexture } from './textures';
+import { adBoardTexture, grassTexture, lampTexture, makeRibbon, makeScreen, pitchTexture, radialTexture, seatTexture } from './textures';
+import { WaveDirector, buildCrowd, crowdSeats } from './crowd';
 
 export interface StumpSet {
   group: THREE.Group;
@@ -19,6 +20,12 @@ export interface Stadium {
   marker: THREE.Mesh;
   lengthGuide: THREE.Group;
   update(time: number, excitement: number): void;
+  /** Dress the crowd in the two teams' colours. */
+  setTeams(home: string, away: string): void;
+  /** Flash a message on the LED ribbon (FOUR, SIX, WICKET...). */
+  flash(text: string, bg: string, fg: string, time: number, dur?: number): void;
+  /** Start a Mexican wave. */
+  wave(time: number): void;
 }
 
 const LIGHTING: Record<TimeOfDay, { top: string; horizon: string; sun: string; sunI: number; sunPos: [number, number, number]; hemiSky: string; hemiGround: string; hemiI: number; exposure: number; flood: boolean }> = {
@@ -32,12 +39,21 @@ function skyDome(tod: TimeOfDay): THREE.Mesh {
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
-    uniforms: { top: { value: new THREE.Color(L.top) }, horizon: { value: new THREE.Color(L.horizon) }, stars: { value: tod === 'night' ? 1 : 0 } },
+    uniforms: { top: { value: new THREE.Color(L.top) }, horizon: { value: new THREE.Color(L.horizon) }, stars: { value: tod === 'night' ? 1 : 0 }, clouds: { value: tod === 'night' ? 0.15 : tod === 'dusk' ? 0.8 : 0.65 }, cloudTint: { value: new THREE.Color(tod === 'dusk' ? '#ffb89a' : tod === 'night' ? '#1a2640' : '#ffffff') } },
     vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-    fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform float stars; varying vec3 vDir;
+    fragmentShader: `uniform vec3 top; uniform vec3 horizon; uniform float stars; uniform float clouds; uniform vec3 cloudTint; varying vec3 vDir;
       float h(vec3 p){ return fract(sin(dot(p, vec3(12.9898,78.233,37.719)))*43758.5453); }
+      float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise(vec2 p){ vec2 i = floor(p); vec2 f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(h2(i), h2(i+vec2(1,0)), f.x), mix(h2(i+vec2(0,1)), h2(i+vec2(1,1)), f.x), f.y); }
+      float fbm(vec2 p){ float v = 0.0; float a = 0.5; for (int i = 0; i < 5; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; } return v; }
       void main(){ float t = clamp(vDir.y*1.6, 0.0, 1.0); vec3 c = mix(horizon, top, pow(t, 0.7));
         if (stars > 0.5) { vec3 q = floor(vDir*420.0); float s = step(0.9985, h(q)) * t; c += vec3(s); }
+        if (vDir.y > 0.02) {
+          vec2 uv = vDir.xz / (vDir.y + 0.25) * 1.6;
+          float cl = smoothstep(0.52, 0.8, fbm(uv + vec2(3.1, 1.7))) * clouds * smoothstep(0.02, 0.2, vDir.y);
+          c = mix(c, cloudTint * (0.75 + 0.25 * t), cl);
+        }
         gl_FragColor = vec4(c, 1.0); }`,
   });
   const m = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16), mat);
@@ -226,9 +242,68 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
   }
   profile.push(new THREE.Vector2(125, 38));
   profile.push(new THREE.Vector2(126, 0));
-  const standMat = new THREE.MeshStandardMaterial({ color: tod === 'night' ? '#3a4150' : '#8a93a3', roughness: 0.95, side: THREE.DoubleSide });
-  const stands = new THREE.Mesh(new THREE.LatheGeometry(profile, 96), standMat);
+  const kinds = profile.slice(1).map((p, j) => {
+    const a = profile[j]!;
+    if (Math.abs(p.y - a.y) < 1e-6 && p.x > a.x) return 'tread' as const;
+    if (Math.abs(p.x - a.x) < 1e-6 && p.y > a.y) return 'riser' as const;
+    return 'other' as const;
+  });
+  const seats = seatTexture(kinds, tod === 'night');
+  seats.anisotropy = anisotropy;
+  const standMat = new THREE.MeshStandardMaterial({ map: seats, roughness: 0.92, side: THREE.DoubleSide });
+  const stands = new THREE.Mesh(new THREE.LatheGeometry(profile, 128), standMat);
+  stands.receiveShadow = q.shadows;
   root.add(stands);
+
+  // LED ribbon board along the front of the upper tier.
+  const ribbon = makeRibbon();
+  ribbon.tex.repeat.set(-3, 1);
+  const ribbonMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(100.4, 100.4, 1.5, 128, 1, true),
+    new THREE.MeshBasicMaterial({ map: ribbon.tex, side: THREE.BackSide, toneMapped: false }),
+  );
+  ribbonMesh.position.y = 17.3;
+  root.add(ribbonMesh);
+  let ribbonMsg: { text: string; bg: string; fg: string; until: number } | null = null;
+
+  // Roof supports and (at night) the lights under the canopy.
+  const colGeo = new THREE.CylinderGeometry(0.35, 0.45, 8, 6);
+  colGeo.translate(0, 4, 0);
+  const cols = new THREE.InstancedMesh(colGeo, new THREE.MeshStandardMaterial({ color: '#b8bec8', metalness: 0.5, roughness: 0.4 }), 32);
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * Math.PI * 2;
+    m4.makeTranslation(Math.cos(a) * 124.5, 36.5, Math.sin(a) * 124.5);
+    cols.setMatrixAt(i, m4);
+  }
+  root.add(cols);
+  if (L.flood) {
+    const strip = new THREE.Mesh(new THREE.TorusGeometry(116, 0.25, 4, 160), new THREE.MeshBasicMaterial({ color: '#fff4d6', toneMapped: false }));
+    strip.rotation.x = Math.PI / 2;
+    strip.position.y = 42.4;
+    root.add(strip);
+  }
+
+  // Dugouts either side of the ground, square of the pitch.
+  for (const side of [1, -1]) {
+    const g = new THREE.Group();
+    const shell = new THREE.MeshStandardMaterial({ color: '#d9dde4', roughness: 0.7 });
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.6, 11), shell);
+    back.position.set(1.4, 1.3, 0);
+    const roofD = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.2, 11.4), new THREE.MeshStandardMaterial({ color: side > 0 ? '#1f4f8f' : '#8a3a2c', roughness: 0.5 }));
+    roofD.position.set(0, 2.7, 0);
+    roofD.rotation.z = -0.08;
+    const bench = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.45, 10), new THREE.MeshStandardMaterial({ color: '#30353f' }));
+    bench.position.set(0.8, 0.22, 0);
+    for (const z of [-5.5, 5.5]) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(3, 2.6, 0.2), shell);
+      wall.position.set(0, 1.3, z);
+      g.add(wall);
+    }
+    g.add(back, roofD, bench);
+    g.position.set(side * (BOUNDARY_RADIUS + 6.4), 0, 0);
+    g.rotation.y = side > 0 ? 0 : Math.PI;
+    root.add(g);
+  }
 
   // Roof canopy.
   const roof = new THREE.Mesh(
@@ -238,56 +313,49 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
   roof.position.y = 44;
   root.add(roof);
 
-  // Crowd: instanced figures on the tiers, bobbing in the vertex shader.
-  const crowdGeo = new THREE.BoxGeometry(0.5, 0.95, 0.4);
-  crowdGeo.translate(0, 0.48, 0);
-  const crowdMat = new THREE.MeshLambertMaterial({ color: '#ffffff' });
-  const uniforms = { uTime: { value: 0 }, uExcite: { value: 0 } };
-  crowdMat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = uniforms.uTime;
-    shader.uniforms.uExcite = uniforms.uExcite;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime; uniform float uExcite;')
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-         float ph = fract(sin(float(gl_InstanceID) * 12.9898) * 43758.5453);
-         float jump = max(0.0, sin(uTime * (4.0 + ph * 5.0) + ph * 6.28)) * (0.06 + 0.5 * uExcite * step(0.35, ph));
-         transformed.y += jump;`,
-      );
-  };
-  const crowd = new THREE.InstancedMesh(crowdGeo, crowdMat, q.crowd);
-  const palette = ['#0f4c81', '#f2a900', '#7a1f2b', '#e8dcc2', '#ffffff', '#2ec4b6', '#ff6b4a', '#1d1d1d', '#9bd13b', '#e0463a', '#6c3ce0', '#f4f1ea'];
-  const col = new THREE.Color();
-  let seed = 11;
-  const rnd = () => {
-    seed = (seed * 16807) % 2147483647;
-    return seed / 2147483647;
-  };
-  let placed = 0;
-  for (let i = 0; placed < q.crowd && i < q.crowd * 3; i++) {
-    const t = tiers[rnd() < 0.62 ? 0 : 1]!;
-    const f = rnd();
-    const r = t.r0 + (t.r1 - t.r0) * f;
-    const y = t.y0 + (t.y1 - t.y0) * f + 0.4;
-    const a = rnd() * Math.PI * 2;
-    // Leave the sight-screen blocks empty.
-    const nearAxis = Math.abs(Math.sin(a)) < 0.12;
-    if (nearAxis && t === tiers[0]) continue;
-    m4.makeRotationY(-a + Math.PI / 2);
-    m4.setPosition(Math.cos(a) * r, y, Math.sin(a) * r);
-    crowd.setMatrixAt(placed, m4);
-    col.set(palette[Math.floor(rnd() * palette.length)]!).multiplyScalar(0.55 + rnd() * 0.45);
-    crowd.setColorAt(placed, col);
-    placed++;
+  // Crowd.
+  const crowd = buildCrowd(q.crowd, tiers);
+  root.add(crowd.mesh);
+  const waves = new WaveDirector();
+
+  // Camera flashes twinkling in the stands at night (more when the crowd is excited).
+  let flashU: { uTime: { value: number }; uExcite: { value: number } } | null = null;
+  if (L.flood) {
+    const pts = crowdSeats(600, tiers, 97);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap((p) => [p.x, p.y + 1.2, p.z]), 3));
+    g.setAttribute('aSeed', new THREE.Float32BufferAttribute(pts.map((p) => p.seed), 1));
+    flashU = { uTime: { value: 0 }, uExcite: { value: 0 } };
+    const fm = new THREE.ShaderMaterial({
+      uniforms: flashU,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: `uniform float uTime; uniform float uExcite; attribute float aSeed; varying float vA;
+        void main(){ float slot = floor(uTime * 8.0 + aSeed * 97.0); float r = fract(sin(slot * 12.9898 + aSeed * 78.233) * 43758.5453);
+          vA = step(1.0 - (0.004 + 0.05 * uExcite), r);
+          vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = vA * 900.0 / -mv.z; gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `varying float vA; void main(){ vec2 d = gl_PointCoord - 0.5; float a = smoothstep(0.5, 0.0, length(d)) * vA; gl_FragColor = vec4(vec3(1.0, 0.98, 0.9) * a, a); }`,
+    });
+    const flashes = new THREE.Points(g, fm);
+    flashes.frustumCulled = false;
+    root.add(flashes);
   }
-  crowd.count = placed;
-  root.add(crowd);
 
   // Floodlight towers.
   const glow = radialTexture('rgba(255,255,245,1)', 'rgba(255,255,245,0)');
   const towerMat = new THREE.MeshStandardMaterial({ color: '#9aa3b2', metalness: 0.6, roughness: 0.4 });
-  const panelMat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: new THREE.Color('#ffffff'), emissiveIntensity: L.flood ? 2.5 : 0.1 });
+  const lamps = lampTexture();
+  const panelMat = new THREE.MeshStandardMaterial({ color: '#ffffff', map: lamps, emissive: new THREE.Color('#ffffff'), emissiveMap: lamps, emissiveIntensity: L.flood ? 2.2 : 0.05 });
+  // Light shafts: brightest at the lamps, fading to nothing well above the grass.
+  const beamMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'varying vec2 vUv; void main(){ float a = 0.07 * pow(vUv.y, 2.2); gl_FragColor = vec4(vec3(1.0, 0.97, 0.88) * a, a); }',
+  });
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
     const x = Math.cos(a) * 128;
@@ -299,7 +367,22 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
     panel.position.set(x * 0.98, 72, z * 0.98);
     panel.lookAt(0, 0, 0);
     root.add(panel);
+    // Lattice bracing up the tower.
+    for (let k = 0; k < 6; k++) {
+      const brace = new THREE.Mesh(new THREE.BoxGeometry(3.2 - k * 0.25, 0.25, 0.25), towerMat);
+      brace.position.set(x, 8 + k * 11, z);
+      brace.rotation.y = -a;
+      root.add(brace);
+    }
     if (L.flood) {
+      // A faint beam from the lamp bank down onto the field.
+      const len = 110;
+      const beam = new THREE.Mesh(new THREE.ConeGeometry(22, len, 32, 1, true), beamMat);
+      beam.geometry.translate(0, -len / 2, 0);
+      beam.position.copy(panel.position);
+      beam.lookAt(new THREE.Vector3(0, -40, 0));
+      beam.rotateX(-Math.PI / 2);
+      root.add(beam);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: '#fffbe8', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
       sprite.position.copy(panel.position);
       sprite.scale.setScalar(46);
@@ -361,8 +444,27 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
     marker,
     lengthGuide,
     update(time: number, excitement: number) {
-      uniforms.uTime.value = time;
-      uniforms.uExcite.value = excitement;
+      crowd.update(time, excitement, waves.update(time, excitement));
+      if (flashU) {
+        flashU.uTime.value = time;
+        flashU.uExcite.value = excitement;
+      }
+      if (ribbonMsg) {
+        if (time > ribbonMsg.until || time < ribbonMsg.until - 30) {
+          ribbonMsg = null;
+          ribbon.draw(null, 0);
+        } else ribbon.draw(ribbonMsg, time);
+      } else ribbon.tex.offset.x = (time * 0.004) % 1;
+    },
+    setTeams(home: string, away: string) {
+      crowd.setTeams(home, away);
+    },
+    flash(text: string, bg: string, fg: string, time: number, dur = 4) {
+      ribbonMsg = { text, bg, fg, until: time + dur };
+      ribbon.tex.offset.x = 0;
+    },
+    wave(time: number) {
+      waves.trigger(time);
     },
   };
 }

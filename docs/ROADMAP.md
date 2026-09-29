@@ -9,8 +9,8 @@
 | 5 | Authoritative Node.js server, WebSocket protocol, lockstep command replication with hashes/resync, latency compensation, basic rooms | **Done** |
 | 6 | Invite links, reconnect to your seat, disconnect grace, quick-chat, matchmaking, host migration | **Done** |
 | 7 | Presentation: team intros, replays, wagon wheel, pitch map, commentary captions | **Done** |
-| 8 | Art and audio: skinned characters and animation, crowd, stadium detail, sound design | Next |
-| 9 | Optimization: code-splitting, instancing/LOD, network bandwidth, mobile tuning | |
+| 8 | Art and audio: skinned characters and animation, crowd, stadium detail, sound design | **Done** |
+| 9 | Optimization: code-splitting, instancing/LOD, network bandwidth, mobile tuning | Next |
 | 10 | Testing and bug fixing: end-to-end multiplayer tests, soak tests, balancing | |
 
 ## Phase 1 scope (delivered)

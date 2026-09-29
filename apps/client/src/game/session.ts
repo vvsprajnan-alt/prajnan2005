@@ -82,6 +82,7 @@ export class GameSession {
   private replay: { frames: ReplayFrame[]; shots: ReplayShot[]; shot: number; t: number; simElapsed: number; down: { S: boolean; B: boolean } } | null = null;
   private autoReplay: { at: number; info: ReplayInfo; label: string } | null = null;
   private droppedThisBall = false;
+  private wicketThisBall = false;
   private later: { at: number; fn: () => void }[] = [];
   private batterSeen = { inn: '', count: 0, pending: false };
 
@@ -105,9 +106,11 @@ export class GameSession {
       this.driver = new LocalDriver(cfg, humanTeam === null ? [] : [humanTeam], settings.autoRun);
     }
     this.hud = new Hud(hudParent, input, () => cb.onPause());
+    this.sfx.ambientOnly = humanTeam === null && !this.driver.networked;
     if (humanTeam === null && !this.driver.networked) this.hud.el.style.display = 'none';
     this.intent = defaultIntent(this.match.bowlerDef.bowlStyle);
     this.syncRoster();
+    this.world.setTeams(cfg.teams[0]!, cfg.teams[1]!);
     this.world.resetStumps();
     this.world.cams.mode = this.preBallCam();
     this.world.cams.snap();
@@ -440,18 +443,24 @@ export class GameSession {
     switch (e.type) {
       case 'release':
         this.droppedThisBall = false;
+        this.wicketThisBall = false;
         hud.setSpeed(e.speedKmh, `${VARIATION_LABEL[e.variation as Variation] ?? e.variation}${e.reverse ? ' · reversing' : ''}`);
         this.world.ball.resetTrail();
         break;
       case 'bounce':
         if (e.onPitch) this.world.ball.pitchMark(e.pos.x, e.pos.z, now);
-        this.sfx.bounce();
+        this.sfx.bounce(e.onPitch, this.panOf(e.pos));
         break;
       case 'shot': {
         const r = e.result;
+        const pan = this.panOf(m.ball.pos);
+        if (r.outcome === 'miss') this.after(0.35, () => !this.wicketThisBall && !m.padContact && this.sfx.crowd('ooh', 0.5));
         if (r.outcome !== 'miss') {
-          if (r.outcome === 'edge') this.sfx.edge();
-          else this.sfx.bat(r.quality);
+          if (r.outcome === 'edge') {
+            this.sfx.edge(pan);
+            this.after(0.5, () => !this.wicketThisBall && this.sfx.crowd('ooh', 0.7));
+          } else this.sfx.bat(r.quality, pan);
+          if (r.outcome === 'hit' && r.quality > 0.75 && m.ball.vel.y > 6) this.sfx.crowd('rise', 0.8);
           const v = m.ball.vel;
           this.world.cams.startFollow(new THREE.Vector3(v.x, v.y, v.z));
           this.world.cams.mode = 'follow';
@@ -473,8 +482,10 @@ export class GameSession {
         break;
       }
       case 'padHit':
-        this.sfx.bounce();
+        this.sfx.pad(this.panOf(m.ball.pos));
         if (!e.appeal) break;
+        world.react(['bowler', 'f0'], 'appeal', now + 0.15, 1.4);
+        this.sfx.appeal();
         hud.showBanner('HOWZAT!', e.lbw ? 'Given out LBW' : 'Not out', e.lbw ? 'out' : '', now, 1.6);
         world.umpireSignal(e.lbw ? 'out' : 'notOut', now + 0.5);
         break;
@@ -490,7 +501,7 @@ export class GameSession {
         world.cams.mode = 'tracking';
         this.trackUntil = Infinity;
         hud.showTracking(e.tracking, now, `${m.cfg.teams[e.team]!.shortName} review`);
-        this.sfx.cheer(0.3);
+        this.sfx.crowd('rise', 0.6);
         break;
       case 'reviewResult': {
         const sub = e.overturned ? 'Decision overturned' : e.umpiresCall ? "Umpire's call - review retained" : `Decision stands - review lost (${e.reviewsLeft} left)`;
@@ -498,6 +509,7 @@ export class GameSession {
         world.umpireSignal(e.out ? 'out' : 'notOut', now);
         this.trackUntil = now + 2.8;
         this.world.cheer(e.overturned ? 0.8 : 0.3);
+        this.sfx.crowd(e.out ? 'roar' : 'groan', e.out ? 0.8 : 0.5);
         break;
       }
       case 'bouncer':
@@ -522,29 +534,52 @@ export class GameSession {
         break;
       case 'stumpsHit':
         this.world.onStumpsBroken(e.end === 'striker' ? 'S' : 'B', now);
-        this.sfx.stumps();
+        this.sfx.stumps(this.panOf({ x: 0, y: 0.4, z: e.end === 'striker' ? STRIKER_STUMPS_Z : -STRIKER_STUMPS_Z }));
         if (!m.batContact && e.end === 'striker') {
           this.world.cams.mode = 'wicketSide';
           this.cutUntil = now + 1.6;
         }
         break;
       case 'catchTaken':
-        this.sfx.catchSound();
+        this.sfx.catchSound(this.panOf(m.ball.pos), this.world.cams.camera.position.distanceTo(new THREE.Vector3(m.ball.pos.x, m.ball.pos.y, m.ball.pos.z)));
         break;
       case 'dropped':
         this.droppedThisBall = true;
+        {
+          const key = world.fielderKey(e.fielder);
+          if (key) world.react([key], 'handsOnHead', now + 0.4, 2.6);
+          world.react(['bowler'], 'handsOnHead', now + 0.5, 2.4);
+          this.sfx.crowd('groan');
+        }
         hud.showToast(`Dropped by ${e.name}!`, now);
         this.world.cheer(0.4);
-        this.sfx.cheer(0.3);
         break;
-      case 'boundary':
+      case 'boundary': {
+        const bat = m.battingTeam.colors;
+        world.stadium.flash(e.runs === 6 ? 'SIX!' : 'FOUR!', bat.primary, bat.secondary, now, 4.5);
+        world.react(['nonStriker'], 'clap', now + 0.6, 2.2);
+        if (e.runs === 6) world.react(['bowler'], 'handsOnHead', now + 0.8, 2.2);
+        this.sfx.sting(e.runs === 6 ? 'six' : 'four');
         hud.showBanner(e.runs === 6 ? 'SIX!' : 'FOUR!', '', e.runs === 6 ? 'six' : 'four', now, 2.6);
         world.umpireSignal(e.runs === 6 ? 'six' : 'four', now + 0.4);
         this.world.cheer(1);
         this.sfx.cheer(e.runs === 6 ? 1 : 0.7);
         this.world.cams.kick(0.15);
         break;
+      }
       case 'wicket': {
+        this.wicketThisBall = true;
+        {
+          const bowl = m.bowlingTeam.colors;
+          world.stadium.flash('WICKET!', bowl.primary, bowl.secondary, now, 4.5);
+          const out = world.batterKey(m.battingTeam.players[e.batter]?.id ?? '');
+          if (out) world.react([out], 'dejected', now + 0.8, 4);
+          world.react(['bowler'], 'celebrate', now + 0.2, 2.6);
+          const n = m.fielding.fielders.filter((f) => f.role !== 'bowler').length;
+          const moods = ['fistPump', 'clap', 'celebrate'];
+          for (let i = 0; i < n; i++) world.react([`f${i}`], i === 0 ? 'fistPump' : moods[(i + m.inn.wickets) % moods.length]!, now + 0.3 + (i % 3) * 0.15, 2.4);
+          this.sfx.sting('wicket');
+        }
         const name = m.battingTeam.players[e.batter]?.name ?? '';
         hud.showBanner('OUT!', `${name} ${e.text}`, 'out', now, 3);
         if (e.kind !== 'lbw') world.umpireSignal('out', now + 0.3);
@@ -572,10 +607,18 @@ export class GameSession {
         break;
       case 'inningsComplete':
         break;
-      case 'matchComplete':
+      case 'matchComplete': {
         this.world.cheer(1);
         this.sfx.cheer(1);
+        this.sfx.sting('win');
+        const battingWon = m.winner === m.inn.battingTeam;
+        const n = m.fielding.fielders.filter((f) => f.role !== 'bowler').length;
+        const fielders = [...Array(n).keys()].map((i) => `f${i}`);
+        if (m.winner === null) break;
+        world.react(['striker', 'nonStriker'], battingWon ? 'raiseBat' : 'dejected', now + 0.4, 10);
+        world.react([...fielders, 'bowler'], battingWon ? 'dejected' : 'celebrate', now + 0.4, 10);
         break;
+      }
     }
   }
 
@@ -603,7 +646,11 @@ export class GameSession {
     }
     // Team introductions.
     if (m.phase === 'intro') {
-      if (!this.hud.introShown) this.hud.showIntro(m, this.humanTeam !== null ? () => this.skipIntro() : null);
+      if (!this.hud.introShown) {
+        this.hud.showIntro(m, this.humanTeam !== null ? () => this.skipIntro() : null);
+        this.sfx.sting('intro');
+        this.sfx.crowd('applause', 0.8);
+      }
       this.world.cams.mode = 'intro';
       this.hud.update(m, now, mode);
       this.hud.setHint('');
@@ -646,7 +693,8 @@ export class GameSession {
       this.world.cams.mode = this.preBallCam();
     }
     if (m.phase === 'preDelivery') this.world.resetStumps();
-    if (m.phase === 'preDelivery' || m.phase === 'dead') this.syncRoster();
+    // After a wicket the dismissed batter stays out there (dejected) until the next ball is set up.
+    if (m.phase === 'preDelivery' || (m.phase === 'dead' && !this.wicketThisBall)) this.syncRoster();
 
     // Bowling guide.
     const guide = this.settings.showPitchGuide && mode === 'bowling';
@@ -719,6 +767,7 @@ export class GameSession {
 
     this.checkScreens(m);
     this.updateBigScreen(m);
+    if (this.humanTeam !== null || this.driver.networked) this.sfx.update(this.world.excitementLevel, m.phase);
     const snap = m.snapshot();
     this.world.render(snap, dt, this.time);
   }
@@ -754,6 +803,13 @@ export class GameSession {
     if (this.settings.captions) this.hud.showCaption(c.over, c.text, now);
     if (c.milestone) {
       const text = c.milestone;
+      const who = /FIFTY|HUNDRED/.test(text) ? this.world.batterKey(m.battingTeam.players[rec.striker]?.id ?? '') : null;
+      if (who) this.after(rec.outcome.boundary ? 1.6 : 0.4, () => this.world.react([who], 'raiseBat', this.time, 3.5));
+      this.after(rec.outcome.boundary || rec.outcome.wicket ? 2.2 : 0.5, () => {
+        this.sfx.sting('milestone');
+        this.sfx.crowd('applause', 1);
+      });
+      if (/FIFTY|HUNDRED|HAT-TRICK|FIVE/.test(text)) this.after(0.5, () => this.world.stadium.flash(text.split(' for ')[0]!, m.battingTeam.colors.primary, '#ffb627', this.time, 4));
       this.after(rec.outcome.boundary || rec.outcome.wicket ? 2.4 : 0.6, () => this.hud.showMilestone(text, this.time));
     }
     const o = rec.outcome;
@@ -779,6 +835,7 @@ export class GameSession {
     this.hud.setReplay(label, () => this.endReplay());
     this.hud.hideReviewPrompt();
     this.world.clearSignal();
+    this.world.clearReactions();
     this.world.setPathPreview(null);
     this.world.setShotCue(null);
     this.world.stadium.marker.visible = false;
@@ -912,6 +969,12 @@ export class GameSession {
       ['Batting / Power', `${p.attrs.batting} / ${p.attrs.power}`],
       ['Score', `${inn.runs}/${inn.wickets}`],
     ], this.time, 4.5, m.battingTeam.colors.primary);
+  }
+
+  /** Stereo position of a world point on screen (-1 left .. 1 right). */
+  private panOf(p: { x: number; y: number; z: number }): number {
+    const v = new THREE.Vector3(p.x, p.y, p.z).project(this.world.cams.camera);
+    return Math.max(-1, Math.min(1, v.x)) * 0.7;
   }
 
   /** Stadium big screen mirrors the score. */

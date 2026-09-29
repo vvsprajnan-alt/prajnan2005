@@ -83,27 +83,37 @@
 - [x] Match Centre (pause, innings break, results): scorecard, wagon wheel by batter, pitch map by bowler, Manhattan, worm with target, phase splits, ball-by-ball commentary
 - [x] Tests: intro phase, recorded ball data, chart data, commentary and milestones, replay recording/planning, SVG charts
 
+### Phase 8 - art and audio
+- [x] Skinned cricketers generated in code: one continuous body mesh on an 11-bone skeleton (smooth elbows, knees, waist), kit in vertex colours, faces and hair, shirt numbers, merged rigid kit (helmet with grille, cap, umpire's hat, gloves, pads, spikes), a bat with grip and sticker
+- [x] Animation: cross-fades between animations, speed-driven walk / jog / sprint, a fuller running action and bowling action, head (and chest) tracking the ball, breathing and weight shift, characters cached per roster
+- [x] Reactions: bowler and fielders celebrate wickets, the dismissed batter stands dejected, appeals, hands on heads for drops and sixes, the non-striker applauds boundaries, bat raised for fifties and hundreds, winners celebrate at the end
+- [x] Crowd: instanced spectators in both teams' colours, seated on the stand treads, animated in the vertex shader (sway, clap, stand and raise arms with the excitement), Mexican waves in quiet spells, camera flashes at night
+- [x] Stadium: seat rows, colour sections and aisles, an LED ribbon board that flashes FOUR / SIX / WICKET / milestones, roof supports and canopy lights, floodlight lamp grids, lattice bracing and light shafts, dugouts, clouds
+- [x] Sound: mixer with effects / crowd / music buses, a compressor and a stadium reverb; layered bat, edge, pad, gloves, bounce and stumps sounds panned to the screen; an appeal; a crowd bed that hushes for the run-up and swells with the moment; roars, oohs, groans and applause; original music stings (intro, four, six, wicket, milestone, win); volume sliders
+- [x] Tests: rig geometry, skin weights and every animation, crowd seating, colours and waves, music data
+
 ## Current task
 
-- Phase 7 review: play a few full matches and check the replays, captions and Match Centre before Phase 8 (art and audio).
+- Phase 8 review: play on a real GPU and tune the look (proportions, crowd density per quality preset) and the mix before Phase 9 (optimization).
 
 ## Known bugs / limitations
 
-- Players are simple primitive models; animation is procedural and approximate.
+- Players are procedural low-poly models; animation is procedural (keyframed poses and IK), not motion-captured.
 - Drops are a little frequent (about 8 per AI T20).
 - Reviews cover LBW only (not caught-behind / edges).
 - The AI does not promote batters in its own order.
 - Replays are not available on a gamepad as an instant-replay button (keyboard I or the on-screen ⟲); automatic replays and skipping work on every device.
 - Commentary is text only (no voice).
 - Fielding steering is camera-relative; the fielding camera can swing when the ball passes the fielder.
-- The crowd is instanced boxes; audio is synthesized ambience only.
+- All audio is synthesized: there are no recorded voices, so the appeal and crowd are approximations.
+- The Ultra crowd (18,000 spectators) is heavy on integrated GPUs; Phase 9 adds level of detail.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
-- Single client bundle (~735 KB, ~206 KB gzip).
+- Single client bundle (~780 KB, ~220 KB gzip).
 - Online: sessions and rooms live in the server's memory (a server restart ends them); matchmaking has no skill rating yet.
 - Online: the local player's own input is shown when the server echoes it (one round trip); shot timing itself is compensated.
 - Online: pausing only opens the menu; the match keeps running for everyone.
 
 ## Next tasks
 
-1. Phase 8: art pass - skinned characters and richer animation (original or licensed), crowd, audio
-2. Phase 9: optimization - code-splitting, instancing/LOD, network bandwidth, mobile tuning
+1. Phase 9: optimization - code-splitting, instancing/LOD, network bandwidth, mobile tuning
+2. Phase 10: testing and bug fixing - end-to-end multiplayer tests, soak tests, balancing

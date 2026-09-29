@@ -182,6 +182,21 @@ function symbolFor(o: BallOutcome, rules: MatchRules): string {
   return s;
 }
 
+/** Runs charged to the bowler for a ball (wides, no-ball penalty and runs off the bat; not byes or leg byes). */
+export function bowlerCharge(o: BallOutcome, rules: MatchRules): number {
+  switch (o.extra) {
+    case 'wide':
+      return totalRunsForBall(o, rules);
+    case 'noBall':
+      return rules.noBallRuns + o.batRuns;
+    case 'bye':
+    case 'legBye':
+      return 0;
+    default:
+      return o.batRuns;
+  }
+}
+
 export interface ApplyResult {
   overComplete: boolean;
   inningsComplete: boolean;
@@ -303,7 +318,9 @@ export function applyBall(inn: InningsState, o: BallOutcome, rules: MatchRules, 
   const inningsComplete = allOut || oversDone || chased;
 
   if (overComplete) {
-    if (inn.overRuns === 0) bowler.maidens++;
+    // A maiden: the bowler conceded nothing (byes and leg byes don't count against the bowler).
+    const conceded = inn.log.filter((l) => l.over === overNo).reduce((a, l) => a + bowlerCharge(l.outcome, rules), 0);
+    if (conceded === 0) bowler.maidens++;
     // Batters swap ends at the end of an over.
     const t = inn.striker;
     inn.striker = inn.nonStriker;

@@ -332,9 +332,9 @@ export function resolveContact(p: ContactParams): ContactResult {
     elev = 28 + (1 - q) * 25 + rng.gauss() * 3;
     spin = 20;
   } else {
-    speed = spec.batSpeed * (0.7 + 0.35 * power) * (0.3 + 0.7 * q) + 0.15 * inSpeed * q;
+    speed = spec.batSpeed * (0.7 + 0.35 * power) * (0.3 + 0.7 * q) + 0.08 * inSpeed * q;
     if (lofted) {
-      speed *= 1.06;
+      speed *= 1.17;
       elev = (stroke === 'hook' ? 30 : 25) + (1 - q) * 24 + rng.gauss() * 3;
       spin = 70;
     } else {

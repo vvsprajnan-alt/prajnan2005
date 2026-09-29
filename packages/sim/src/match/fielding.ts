@@ -444,8 +444,8 @@ export class FieldingUnit {
       if (airborneCatch && keeperCanReach && closest && ball.pos.y < 2.5 && d < reachC) {
         const dive = d > 1.0;
         const speed = length(ball.vel);
-        const onTheRun = f.speed > 5 ? 0.12 : 0;
-        let p = 0.42 + 0.55 * a01(f.def.attrs.catching) - Math.max(0, speed - 16) * 0.012 - (dive ? 0.3 : 0) - (ball.pos.y > 2.1 ? 0.12 : 0) - onTheRun;
+        const onTheRun = f.speed > 5 ? 0.06 : 0;
+        let p = 0.6 + 0.45 * a01(f.def.attrs.catching) - Math.max(0, speed - 16) * 0.009 - (dive ? 0.22 : 0) - (ball.pos.y > 2.1 ? 0.1 : 0) - onTheRun;
         if (f.role === 'keeper') p += 0.06;
         if (controlled && h!.mode === 'manual') {
           // Manual catching: a well-timed press helps, no press at all is a fumble waiting to happen.
@@ -459,7 +459,7 @@ export class FieldingUnit {
         if (ctx.sinceContact < needT) p *= (ctx.sinceContact / needT) ** 1.5;
         p = clamp(p, 0.02, 0.97);
         // Not a real chance: it just flies past.
-        if (p < 0.15) continue;
+        if (p < 0.22) continue;
         f.anim = dive ? 'dive' : 'catch';
         f.animT = 0.6;
         if (ctx.rng.next() < p) {

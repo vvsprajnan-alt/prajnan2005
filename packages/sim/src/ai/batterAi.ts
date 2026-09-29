@@ -15,8 +15,9 @@ export function aggression(m: CricketMatch): number {
   const wktsLeft = rules.playersPerSide - 1 - inn.wickets;
   let a = 0.45 + 0.35 * (1 - ballsLeft / total);
   if (inn.target !== null) {
+    // Chasing: pace the innings to the required rate, but never slower than a first innings at this stage.
     const rrr = ((inn.target - inn.runs) * 6) / ballsLeft;
-    a = 0.3 + (rrr - 6) * 0.06;
+    a = Math.max(a - 0.08, 0.3 + (rrr - 6) * 0.07);
   }
   if (wktsLeft <= 2) a -= 0.15;
   return Math.max(0.05, Math.min(0.95, a));
@@ -43,7 +44,14 @@ export function runMargin(m: CricketMatch): number {
     const c = f.fielders[f.chaser]!;
     tBall = Math.max(0, f.chaseEta) + 0.35 + toStumps(f.chasePoint) / throwSpeed(c.def) + 0.2;
   } else {
-    tBall = 6;
+    // No usable chase estimate yet: the nearest fielder to the ball runs to it and throws.
+    let best = Infinity;
+    for (const fl of f.fielders) {
+      if (fl.role === 'bowler' && m.phaseTime < 1) continue;
+      const t = distXZ(fl.pos, m.ball.pos) / 6.5 + 0.35 + toStumps(m.ball.pos) / throwSpeed(fl.def) + 0.2;
+      if (t < best) best = t;
+    }
+    tBall = Math.min(6, best);
   }
   // Heading for the rope: plenty of time.
   if (lengthXZ(m.ball.pos) > 60) tBall += 2;
@@ -55,6 +63,11 @@ export function runAdvice(m: CricketMatch, threshold: number): 'yes' | 'no' | 'w
   const run = m.running;
   if (!(m.batContact || m.padContact || m.passedBatter)) return 'wait';
   if (run.inRun) return 'wait';
+  // Until the fielding side has picked who is going for the ball, the time estimate is a guess:
+  // don't commit to a run in that instant (it used to cause "yes... no!" run outs).
+  const f = m.fielding;
+  const sinceContact = m.swing ? m.time - m.swing.contactTime : 1;
+  if (f.holder < 0 && f.throwEnd === null && (f.chaser < 0 || f.chaseEta >= 90) && sinceContact < 0.3 && lengthXZ(m.ball.pos) < 60) return 'wait';
   const margin = runMargin(m);
   if (margin > threshold) return 'yes';
   if (margin > threshold - 0.5) return 'wait';
@@ -91,7 +104,7 @@ export class BatterAI {
         this.chargeDecidedFor = id;
         const st = m.bowlerDef.bowlStyle;
         const spin = st === 'offspin' || st === 'legspin';
-        const p = spin ? 0.02 + 0.1 * aggression(m) : 0.003;
+        const p = spin ? 0.008 + 0.045 * aggression(m) : 0.002;
         if (this.rng.next() < p) out.push({ type: 'bat.charge' });
       }
     }
@@ -128,7 +141,7 @@ export class BatterAI {
   private runDecision(m: CricketMatch): RunCall | null {
     const run = m.running;
     const skill = AI_SKILL[m.cfg.difficulty];
-    const threshold = skill.runMargin - 0.25 * aggression(m);
+    const threshold = skill.runMargin - 0.12 * aggression(m);
     if (!run.inRun && !run.wantRun) {
       return runAdvice(m, threshold) === 'yes' ? 'run' : null;
     }
@@ -153,12 +166,12 @@ export class BatterAI {
 
     // Leave balls well outside off (more often when defensive).
     if (offX > 1.35 || offX < -0.95 || read.pos.y > 2.0) return null;
-    if (offX > 0.7 && r.next() > agg) return null;
+    if (offX > 0.7 && r.next() > agg + 0.3) return null;
 
     const onStumps = Math.abs(read.pos.x) < 0.2 && read.pos.y < 0.8;
     const goodLength = read.bounceDist !== null && read.bounceDist > 4.5 && read.bounceDist < 7.5;
     let family: ShotFamily;
-    if (onStumps && goodLength && r.next() > agg + 0.25) family = 'defend';
+    if (onStumps && goodLength && r.next() > agg + 0.4) family = 'defend';
     else if (r.next() < agg * 0.55 && !(onStumps && goodLength)) family = 'lofted';
     else family = 'ground';
     const slow = Math.hypot(read.vel.x, read.vel.z) < 25;
@@ -192,7 +205,12 @@ export class BatterAI {
     const plane = m.planeFor(stroke, best.footwork);
     const tPlane = m.timeToPlane(plane);
     if (tPlane === null) return null;
-    const timingSd = skill.batTiming * (1.25 - 0.5 * a01(batter.attrs.timing));
+    let timingSd = skill.batTiming * (1.25 - 0.5 * a01(batter.attrs.timing));
+    // Real pace, yorkers and bouncers are harder to time.
+    const kmh = m.delivery?.speedKmh ?? 120;
+    timingSd *= 1 + Math.max(0, Math.min(1, (kmh - 115) / 35)) * 0.45;
+    if (read.bounceDist !== null && read.bounceDist < 1.8) timingSd *= 1.25;
+    if (isShortBall(read) && read.pos.y > 1.3) timingSd *= 1.15;
     // Deception: change-ups and the better bowlers are harder to time.
     const v = m.delivery?.variation;
     const bowlSkill = a01(m.bowlerDef.attrs.bowling);

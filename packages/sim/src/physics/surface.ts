@@ -28,7 +28,7 @@ export interface PitchConditions {
 export const PITCH_PRESETS: Record<string, PitchConditions> = {
   balanced: { name: 'Balanced', bounce: 1, grip: 1, seam: 0.35, swing: 1, outfieldSlowness: 1 },
   green: { name: 'Green Top', bounce: 1.08, grip: 0.9, seam: 0.65, swing: 1.3, outfieldSlowness: 1.1 },
-  dusty: { name: 'Dust Bowl', bounce: 0.92, grip: 1.45, seam: 0.25, swing: 0.8, outfieldSlowness: 0.95 },
+  dusty: { name: 'Dust Bowl', bounce: 0.92, grip: 1.45, seam: 0.25, swing: 0.8, outfieldSlowness: 1.1 },
   flat: { name: 'Road', bounce: 1.0, grip: 0.8, seam: 0.15, swing: 0.7, outfieldSlowness: 0.85 },
 };
 

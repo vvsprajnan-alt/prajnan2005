@@ -52,8 +52,8 @@ export class Bot {
   private handle(raw: string): void {
     const m = decodeServer(raw);
     if (!m) return;
-    this.inbox.push(m);
-    if (this.inbox.length > 2000) this.inbox.splice(0, 1000);
+    // Tick batches go straight to the mirror; everything else waits in the inbox for the test.
+    if (m.t !== 'k') this.inbox.push(m);
     if (m.t === 'room') this.room = m.room.code;
     if (m.t === 'welcome') {
       this.token = m.token;
@@ -87,7 +87,7 @@ export class Bot {
       if (i >= 0) return this.inbox.splice(i, 1)[0]!;
       await new Promise((r) => setTimeout(r, 10));
     }
-    throw new Error('timeout waiting for message');
+    throw new Error(`timeout waiting for message: ${pred.toString().slice(0, 80)} (inbox: ${this.inbox.map((m) => m.t).slice(-8).join(',')})`);
   }
 
   /** Catch the mirror up and act like a (very simple) player. */

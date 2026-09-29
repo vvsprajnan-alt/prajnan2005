@@ -13,6 +13,27 @@ export interface HostOptions {
   humanTeams: (0 | 1)[];
   /** Let the AI make running calls for human batting teams. */
   autoRunForHumans: boolean;
+  /**
+   * Round command numbers before applying them (networked play): the rounded
+   * values are what the mirrors receive, so they stay bit-identical while the
+   * wire carries short numbers.
+   */
+  quantize?: boolean;
+}
+
+/** Round every non-integer number in a command to 1/1000 (deep copy). */
+export function quantizeCommand<T>(cmd: T): T {
+  const q = (v: unknown): unknown => {
+    if (typeof v === 'number') return Number.isInteger(v) || !Number.isFinite(v) ? v : Math.round(v * 1000) / 1000;
+    if (Array.isArray(v)) return v.map(q);
+    if (v && typeof v === 'object') {
+      const o: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v)) o[k] = q(x);
+      return o;
+    }
+    return v;
+  };
+  return q(cmd) as T;
 }
 
 /**
@@ -59,7 +80,8 @@ export class MatchHost {
   step(): MatchEvent[] {
     const m = this.match;
     const applied: { src: CommandSource; cmd: Command }[] = [];
-    const apply = (src: CommandSource, cmd: Command) => {
+    const apply = (src: CommandSource, raw: Command) => {
+      const cmd = this.opts.quantize ? quantizeCommand(raw) : raw;
       if (m.command(src, cmd)) applied.push({ src, cmd });
     };
     for (const q of this.queue) apply(q.src, q.cmd);

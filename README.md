@@ -7,7 +7,9 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 8 complete - art and audio: skinned cricketers with smoother animation and celebrations,
+**Status:** Phase 9 complete - optimization: split and compressed downloads, about half the draw calls, level of
+detail for players and crowd, ~56% less network traffic, and phone tuning (device-based defaults, adaptive
+resolution, a 30 fps battery saver, a compact HUD). Phase 8 brought the art and audio: skinned cricketers with smoother animation and celebrations,
 a crowd in both teams' colours that stands, cheers and does the Mexican wave, a more detailed stadium (seat
 sections, an LED ribbon board, floodlight beams, dugouts, clouds) and a full synthesized sound design (layered
 bat and ball sounds, a reactive crowd, an appeal, music stings, volume sliders). Phase 7 added the broadcast
@@ -224,11 +226,14 @@ overs as bowler; the other one fields (and can set the field). A lone human on a
 Settings -> Graphics quality: Low / Medium / High / Ultra (resolution scale, shadows and shadow resolution,
 antialiasing, crowd size, ball trail). Time of day: Day, Dusk or Night under floodlights. Sound: on/off plus
 master, effects, crowd and music volume. Replays: key moments
-or off; commentary captions: on or off.
+or off; commentary captions: on or off. Resolution: Adaptive (drops the render resolution when frames are slow,
+restores it when there is headroom) or Fixed. Frame rate: 60, 30 (battery saver) or the display's rate.
+Performance overlay: frame rate, draw calls, triangles and resolution. On first run the quality and frame cap are
+chosen from the device (phones and low-memory machines start lower).
 
 ## Testing
 
-`npm test` runs ~140 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
+`npm test` runs ~150 unit and integration tests over the simulation: physics (gravity, drag, spin turn,
 grip), delivery solving, bowling variations, batting timing and direction, the rules engine (extras, free
 hits, strike rotation, over and innings completion), running between the wickets, full AI matches,
 determinism, command validation, fielding restrictions, footwork, charging and stumpings, over/round the

@@ -44,7 +44,8 @@ export class World {
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     const q = QUALITY[settings.quality];
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q.antialias, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, q.pixelRatio));
+    this.basePixelRatio = Math.min(window.devicePixelRatio || 1, q.pixelRatio);
+    this.renderer.setPixelRatio(this.basePixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = settings.timeOfDay === 'night' ? 1.1 : 1.0;
@@ -134,6 +135,16 @@ export class World {
     this.cue.quaternion.copy(this.cams.camera.quaternion);
     this.cue.scale.setScalar(1 + 4 * k);
     (this.cue.material as THREE.MeshBasicMaterial).color.set(k < 0.12 ? '#7bd88f' : '#ffffff');
+  }
+
+  /** Render resolution as a fraction of the quality preset (adaptive resolution). */
+  resolutionScale = 1;
+  private basePixelRatio = 1;
+
+  setResolutionScale(scale: number): void {
+    this.resolutionScale = scale;
+    this.renderer.setPixelRatio(this.basePixelRatio * scale);
+    this.resize();
   }
 
   resize(): void {
@@ -332,6 +343,10 @@ export class World {
         this.landingMark.scale.setScalar(1 + 0.25 * Math.sin(time * 10));
       }
     }
+
+    // Level of detail for every character from the last frame's camera position.
+    const camPos = this.cams.camera.position;
+    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.setDistance(c.root.position.distanceTo(camPos));
 
     // Crowd and camera.
     this.excitement *= Math.exp(-0.5 * dt);

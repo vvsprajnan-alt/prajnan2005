@@ -149,7 +149,7 @@ function limbWeights(bone: BoneName, parent: BoneName | null, child: BoneName | 
 }
 
 /** Torso: lofted elliptical sections from the seat to the base of the neck. */
-function torsoGeo(): THREE.BufferGeometry {
+function torsoGeo(N = 18): THREE.BufferGeometry {
   // y, half width (x), half depth (z), forward offset (z)
   const rings: [number, number, number, number][] = [
     [0.8, 0.07, 0.06, -0.01],
@@ -167,7 +167,6 @@ function torsoGeo(): THREE.BufferGeometry {
     [1.51, 0.13, 0.075, 0],
     [1.54, 0.06, 0.05, 0],
   ];
-  const N = 18;
   const verts: number[] = [];
   const idx: number[] = [];
   for (const [y, hx, hz, oz] of rings) {
@@ -209,16 +208,22 @@ function sphere(r: number, at: THREE.Vector3, scale: [number, number, number] = 
   return g;
 }
 
-/** Build the skinned body geometry for a kit. */
-export function buildBodyGeometry(kit: Kit): THREE.BufferGeometry {
+/**
+ * Build the skinned body geometry for a kit. `low` is the distant level of
+ * detail: the same shape and skinning with far fewer segments and no face.
+ */
+export function buildBodyGeometry(kit: Kit, detail: 'high' | 'low' = 'high', withKit = false): THREE.BufferGeometry {
   const P = (b: BoneName) => bindPosition(b);
+  const lo = detail === 'low';
+  const R = (n: number) => (lo ? Math.max(5, Math.round(n / 2)) : n); // radial segments
+  const H = (n: number) => (lo ? Math.max(2, Math.round(n / 3)) : n); // rings along a limb
   const parts: THREE.BufferGeometry[] = [];
   const shirt = kit.shirt;
   const skin = kit.skin;
 
   // Torso: trousers below the waist, shirt above, trim on the collar and shoulder panels.
   parts.push(
-    finish(torsoGeo(), (p) => (p.y < 0.985 ? kit.trousers : p.y > 1.495 ? kit.trim : shirt), (p) => {
+    finish(torsoGeo(lo ? 9 : 18), (p) => (p.y < 0.985 ? kit.trousers : p.y > 1.495 ? kit.trim : shirt), (p) => {
       const k = smooth((p.y - 1.0) / 0.16);
       return [['hips', 1 - k], ['chest', k]];
     }),
@@ -226,41 +231,43 @@ export function buildBodyGeometry(kit: Kit): THREE.BufferGeometry {
 
   // Neck and head.
   const head = P('head');
-  const neck = limbGeo(new THREE.Vector3(0, 1.48, 0), new THREE.Vector3(0, 1.62, 0.005), 0.052, 0.048, 10, 4);
+  const neck = limbGeo(new THREE.Vector3(0, 1.48, 0), new THREE.Vector3(0, 1.62, 0.005), 0.052, 0.048, R(10), H(4));
   parts.push(finish(neck.geo, skin, (p) => {
     const k = smooth((neck.s(p) - 0.2) / 0.7);
     return [['chest', 1 - k], ['head', k]];
   }));
   const face = head.clone().add(new THREE.Vector3(0, 0.1, 0.01));
   const onHead = (): Weights => [['head', 1]];
-  parts.push(finish(sphere(0.105, face, [0.95, 1.05, 1.02], 18, 14), skin, onHead));
-  if (kit.headgear === 'none' || kit.headgear === 'cap') {
+  parts.push(finish(sphere(0.105, face, [0.95, 1.05, 1.02], lo ? 8 : 18, lo ? 6 : 14), skin, onHead));
+  if (!lo && (kit.headgear === 'none' || kit.headgear === 'cap')) {
     const hair = sphere(0.109, face.clone().add(new THREE.Vector3(0, 0.01, -0.012)), [0.97, 1.02, 1.03], 18, 8, Math.PI * (kit.headgear === 'cap' ? 0.4 : 0.47));
     parts.push(finish(hair, kit.hair, onHead));
   }
-  for (const sx of [1, -1]) {
+  for (const sx of lo ? [] : [1, -1]) {
     parts.push(finish(sphere(0.013, face.clone().add(new THREE.Vector3(0.035 * sx, 0.018, 0.093)), [1, 1, 0.6], 8, 6), '#1a1410', onHead));
     parts.push(finish(sphere(0.022, face.clone().add(new THREE.Vector3(0.1 * sx, 0.0, -0.005)), [0.5, 1, 0.8], 8, 6), skin, onHead));
   }
-  const nose = new THREE.ConeGeometry(0.018, 0.04, 6);
-  nose.rotateX(Math.PI / 2 + 0.25);
-  nose.translate(face.x, face.y - 0.012, face.z + 0.105);
-  parts.push(finish(nose, skin, onHead));
+  if (!lo) {
+    const nose = new THREE.ConeGeometry(0.018, 0.04, 6);
+    nose.rotateX(Math.PI / 2 + 0.25);
+    nose.translate(face.x, face.y - 0.012, face.z + 0.105);
+    parts.push(finish(nose, skin, onHead));
+  }
 
   // Arms: short sleeves (shirt, trim cuff), then skin.
   for (const side of ['l', 'r'] as const) {
     const sh = P(`${side}Shoulder`);
     const el = P(`${side}Elbow`);
     const hand = el.clone().add(new THREE.Vector3(0, HAND_OFFSET + 0.04, 0));
-    const upper = limbGeo(sh, el, 0.06, 0.047, 12, 8);
+    const upper = limbGeo(sh, el, 0.06, 0.047, R(12), H(8));
     const sleeve = kit.longSleeves ? 2 : 0.55;
     parts.push(finish(upper.geo, (p) => {
       const t = upper.s(p);
       return t < sleeve - 0.08 ? shirt : t < sleeve ? kit.trim : skin;
     }, limbWeights(`${side}Shoulder`, 'chest', `${side}Elbow`, upper.s)));
-    const fore = limbGeo(el, hand, 0.045, 0.036, 10, 8);
+    const fore = limbGeo(el, hand, 0.045, 0.036, R(10), H(8));
     parts.push(finish(fore.geo, kit.longSleeves ? shirt : skin, limbWeights(`${side}Elbow`, `${side}Shoulder`, null, fore.s)));
-    if (kit.gloves === 'none') parts.push(finish(sphere(0.042, el.clone().add(new THREE.Vector3(0, HAND_OFFSET, 0.005)), [0.85, 1.1, 0.7], 10, 8), skin, () => [[`${side}Elbow`, 1]]));
+    if (kit.gloves === 'none') parts.push(finish(sphere(0.042, el.clone().add(new THREE.Vector3(0, HAND_OFFSET, 0.005)), [0.85, 1.1, 0.7], lo ? 6 : 10, lo ? 4 : 8), skin, () => [[`${side}Elbow`, 1]]));
   }
 
   // Legs.
@@ -268,13 +275,20 @@ export function buildBodyGeometry(kit: Kit): THREE.BufferGeometry {
     const hip = P(`${side}Hip`);
     const knee = P(`${side}Knee`);
     const ankle = knee.clone().add(new THREE.Vector3(0, FOOT_OFFSET + 0.08, 0));
-    const thigh = limbGeo(hip.clone().add(new THREE.Vector3(0, 0.02, 0)), knee, 0.088, 0.064, 12, 8);
+    const thigh = limbGeo(hip.clone().add(new THREE.Vector3(0, 0.02, 0)), knee, 0.088, 0.064, R(12), H(8));
     parts.push(finish(thigh.geo, kit.trousers, limbWeights(`${side}Hip`, 'hips', `${side}Knee`, thigh.s)));
-    const shin = limbGeo(knee, ankle, 0.062, 0.045, 12, 8);
+    const shin = limbGeo(knee, ankle, 0.062, 0.045, R(12), H(8));
     parts.push(finish(shin.geo, kit.trousers, limbWeights(`${side}Knee`, `${side}Hip`, null, shin.s)));
   }
 
+  if (withKit) parts.push(...buildSkinnedKit(kit).matte);
   return mergeGeometries(parts, false)!;
+}
+
+/** Glossy kit (helmet) as a skinned geometry, or null. */
+export function buildGlossGeometry(kit: Kit): THREE.BufferGeometry | null {
+  const g = buildSkinnedKit(kit).gloss;
+  return g.length ? mergeGeometries(g, false)! : null;
 }
 
 // ------------------------------------------------------------------ rigid kit
@@ -291,8 +305,50 @@ function colored(geo: THREE.BufferGeometry, color: string): THREE.BufferGeometry
 
 const box = (w: number, h: number, d: number, x = 0, y = 0, z = 0) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
 
+type KitParts = Partial<Record<BoneName, { matte: THREE.BufferGeometry[]; gloss: THREE.BufferGeometry[] }>>;
+
 /** Rigid kit pieces, grouped by the bone they ride on (bone-local coordinates). */
 export function buildKitGeometry(kit: Kit): Partial<Record<BoneName, { matte?: THREE.BufferGeometry; gloss?: THREE.BufferGeometry }>> {
+  const out = kitParts(kit);
+  const res: Partial<Record<BoneName, { matte?: THREE.BufferGeometry; gloss?: THREE.BufferGeometry }>> = {};
+  for (const [b, e] of Object.entries(out) as [BoneName, { matte: THREE.BufferGeometry[]; gloss: THREE.BufferGeometry[] }][]) {
+    res[b] = {
+      matte: e.matte.length ? mergeGeometries(e.matte.map((g) => (g.index ? g.toNonIndexed() : g)), false)! : undefined,
+      gloss: e.gloss.length ? mergeGeometries(e.gloss.map((g) => (g.index ? g.toNonIndexed() : g)), false)! : undefined,
+    };
+  }
+  return res;
+}
+
+/**
+ * The rigid kit as skinned geometry in bind space (each piece weighted fully
+ * to its bone), so it can be merged into the body: one draw call per player
+ * instead of one per bone. Glossy pieces (helmets) come back separately.
+ */
+export function buildSkinnedKit(kit: Kit): { matte: THREE.BufferGeometry[]; gloss: THREE.BufferGeometry[] } {
+  const res = { matte: [] as THREE.BufferGeometry[], gloss: [] as THREE.BufferGeometry[] };
+  for (const [b, e] of Object.entries(kitParts(kit)) as [BoneName, { matte: THREE.BufferGeometry[]; gloss: THREE.BufferGeometry[] }][]) {
+    const at = bindPosition(b);
+    for (const [list, dest] of [[e.matte, res.matte], [e.gloss, res.gloss]] as const) {
+      for (const g of list) {
+        const geo = (g.index ? g : g).clone().translate(at.x, at.y, at.z);
+        const n = geo.getAttribute('position').count;
+        const si = new Uint16Array(n * 4);
+        const sw = new Float32Array(n * 4);
+        for (let i = 0; i < n; i++) {
+          si[i * 4] = BI[b];
+          sw[i * 4] = 1;
+        }
+        geo.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
+        geo.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
+        dest.push(geo);
+      }
+    }
+  }
+  return res;
+}
+
+function kitParts(kit: Kit): KitParts {
   const out: Partial<Record<BoneName, { matte: THREE.BufferGeometry[]; gloss: THREE.BufferGeometry[] }>> = {};
   const add = (b: BoneName, g: THREE.BufferGeometry, color: string, gloss = false) => {
     const e = (out[b] ??= { matte: [], gloss: [] });
@@ -356,14 +412,7 @@ export function buildKitGeometry(kit: Kit): Partial<Record<BoneName, { matte?: T
     add(b, box(0.1, 0.075, 0.25, 0, FOOT_OFFSET, 0.05), '#f2f2f2');
     add(b, box(0.102, 0.022, 0.25, 0, FOOT_OFFSET - 0.028, 0.05), '#2b2b2b');
   }
-  const res: Partial<Record<BoneName, { matte?: THREE.BufferGeometry; gloss?: THREE.BufferGeometry }>> = {};
-  for (const [b, e] of Object.entries(out) as [BoneName, { matte: THREE.BufferGeometry[]; gloss: THREE.BufferGeometry[] }][]) {
-    res[b] = {
-      matte: e.matte.length ? mergeGeometries(e.matte.map((g) => (g.index ? g.toNonIndexed() : g)), false)! : undefined,
-      gloss: e.gloss.length ? mergeGeometries(e.gloss.map((g) => (g.index ? g.toNonIndexed() : g)), false)! : undefined,
-    };
-  }
-  return res;
+  return out;
 }
 
 /** Bat: handle with grip, willow blade with a sticker in the team colour. Handle top at the origin, blade down -y. */

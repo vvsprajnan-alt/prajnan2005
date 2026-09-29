@@ -3,6 +3,7 @@ import { BOUNDARY_RADIUS, INNER_CIRCLE_RADIUS, PITCH_HALF_LENGTH, STUMP_HEIGHT }
 import { QualityPreset, TimeOfDay } from '../settings';
 import { adBoardTexture, grassTexture, lampTexture, makeRibbon, makeScreen, pitchTexture, radialTexture, seatTexture } from './textures';
 import { WaveDirector, buildCrowd, crowdSeats } from './crowd';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export interface StumpSet {
   group: THREE.Group;
@@ -265,6 +266,7 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
   ribbonMesh.position.y = 17.3;
   root.add(ribbonMesh);
   let ribbonMsg: { text: string; bg: string; fg: string; until: number } | null = null;
+  let ribbonFrame = -1;
 
   // Roof supports and (at night) the lights under the canopy.
   const colGeo = new THREE.CylinderGeometry(0.35, 0.45, 8, 6);
@@ -314,13 +316,13 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
   root.add(roof);
 
   // Crowd.
-  const crowd = buildCrowd(q.crowd, tiers);
+  const crowd = buildCrowd(q.crowd, tiers, q.crowdDetail);
   root.add(crowd.mesh);
   const waves = new WaveDirector();
 
   // Camera flashes twinkling in the stands at night (more when the crowd is excited).
   let flashU: { uTime: { value: number }; uExcite: { value: number } } | null = null;
-  if (L.flood) {
+  if (L.flood && q.atmosphere) {
     const pts = crowdSeats(600, tiers, 97);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap((p) => [p.x, p.y + 1.2, p.z]), 3));
@@ -356,39 +358,52 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: 'varying vec2 vUv; void main(){ float a = 0.07 * pow(vUv.y, 2.2); gl_FragColor = vec4(vec3(1.0, 0.97, 0.88) * a, a); }',
   });
+  // Towers, bracing, lamp banks and beams are merged: four draw calls for all six towers.
+  const steel: THREE.BufferGeometry[] = [];
+  const banks: THREE.BufferGeometry[] = [];
+  const shafts: THREE.BufferGeometry[] = [];
+  const obj = new THREE.Object3D();
+  const place = (g: THREE.BufferGeometry) => {
+    obj.updateMatrix();
+    return g.applyMatrix4(obj.matrix);
+  };
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
     const x = Math.cos(a) * 128;
     const z = Math.sin(a) * 128;
-    const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.4, 70, 8), towerMat);
-    tower.position.set(x, 35, z);
-    root.add(tower);
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(14, 7, 1), panelMat);
-    panel.position.set(x * 0.98, 72, z * 0.98);
-    panel.lookAt(0, 0, 0);
-    root.add(panel);
+    obj.position.set(x, 35, z);
+    obj.rotation.set(0, 0, 0);
+    steel.push(place(new THREE.CylinderGeometry(0.8, 1.4, 70, 8)));
     // Lattice bracing up the tower.
     for (let k = 0; k < 6; k++) {
-      const brace = new THREE.Mesh(new THREE.BoxGeometry(3.2 - k * 0.25, 0.25, 0.25), towerMat);
-      brace.position.set(x, 8 + k * 11, z);
-      brace.rotation.y = -a;
-      root.add(brace);
+      obj.position.set(x, 8 + k * 11, z);
+      obj.rotation.set(0, -a, 0);
+      steel.push(place(new THREE.BoxGeometry(3.2 - k * 0.25, 0.25, 0.25)));
     }
+    const panelPos = new THREE.Vector3(x * 0.98, 72, z * 0.98);
+    obj.position.copy(panelPos);
+    obj.rotation.set(0, 0, 0);
+    obj.lookAt(0, 0, 0);
+    banks.push(place(new THREE.BoxGeometry(14, 7, 1)));
     if (L.flood) {
-      // A faint beam from the lamp bank down onto the field.
-      const len = 110;
-      const beam = new THREE.Mesh(new THREE.ConeGeometry(22, len, 32, 1, true), beamMat);
-      beam.geometry.translate(0, -len / 2, 0);
-      beam.position.copy(panel.position);
-      beam.lookAt(new THREE.Vector3(0, -40, 0));
-      beam.rotateX(-Math.PI / 2);
-      root.add(beam);
+      if (q.atmosphere) {
+        // A faint shaft of light from the lamp bank down towards the field.
+        const len = 110;
+        obj.position.copy(panelPos);
+        obj.rotation.set(0, 0, 0);
+        obj.lookAt(new THREE.Vector3(0, -40, 0));
+        obj.rotateX(-Math.PI / 2);
+        shafts.push(place(new THREE.ConeGeometry(22, len, 32, 1, true).translate(0, -len / 2, 0)));
+      }
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: '#fffbe8', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      sprite.position.copy(panel.position);
+      sprite.position.copy(panelPos);
       sprite.scale.setScalar(46);
       root.add(sprite);
     }
   }
+  root.add(new THREE.Mesh(mergeGeometries(steel.map((g) => g.toNonIndexed()), false)!, towerMat));
+  root.add(new THREE.Mesh(mergeGeometries(banks, false)!, panelMat));
+  if (shafts.length) root.add(new THREE.Mesh(mergeGeometries(shafts, false)!, beamMat));
 
   // Big screen.
   const screen = makeScreen();
@@ -453,7 +468,11 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
         if (time > ribbonMsg.until || time < ribbonMsg.until - 30) {
           ribbonMsg = null;
           ribbon.draw(null, 0);
-        } else ribbon.draw(ribbonMsg, time);
+        } else if (Math.floor(time * 6) !== ribbonFrame) {
+          // The message blinks at 6 Hz: redraw (and re-upload) only when it changes.
+          ribbonFrame = Math.floor(time * 6);
+          ribbon.draw(ribbonMsg, time);
+        }
       } else ribbon.tex.offset.x = (time * 0.004) % 1;
     },
     setTeams(home: string, away: string) {

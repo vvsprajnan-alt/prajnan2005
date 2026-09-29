@@ -9,7 +9,7 @@ import {
   makeRules,
 } from '@crease/sim';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 /** Server ticks per network batch (120 Hz sim -> 20 batches per second). */
 export const TICKS_PER_BATCH = 6;
 /** Send a state hash every N ticks so clients can detect drift. */
@@ -100,6 +100,29 @@ export function buildMatchConfig(n: NetMatchConfig): MatchConfig {
 /** One replicated command: [tick, team, role ('admin' for server commands), command]. */
 export type WireCommand = [number, 0 | 1, string | null, Command];
 
+/** On the wire the tick is sent as an offset back from the batch's last tick (small numbers). */
+export type PackedCommand = [number, 0 | 1, string | null, Command];
+
+/** Compact batch of confirmed ticks: `{ t: 'k', n }` alone when nothing happened. */
+export interface TickBatch {
+  t: 'k';
+  /** Commands applied on ticks up to and including `n` are final; the client may advance to `n`. */
+  n: number;
+  c?: PackedCommand[];
+  h?: [number, number];
+}
+
+export function packTicks(to: number, cmds: WireCommand[], hash?: [number, number]): TickBatch {
+  const m: TickBatch = { t: 'k', n: to };
+  if (cmds.length) m.c = cmds.map(([tick, team, role, cmd]) => [to - tick, team, role, cmd]);
+  if (hash) m.h = hash;
+  return m;
+}
+
+export function unpackTicks(m: TickBatch): { to: number; cmds: WireCommand[]; hash?: [number, number] } {
+  return { to: m.n, cmds: (m.c ?? []).map(([dt, team, role, cmd]) => [m.n - dt, team, role, cmd]), hash: m.h };
+}
+
 export type ClientMsg =
   | { t: 'hello'; name: string; version: number; token?: string }
   | { t: 'queue'; mode: QueueMode }
@@ -130,8 +153,8 @@ export type ServerMsg =
   | { t: 'room'; room: RoomState }
   | { t: 'left' }
   | { t: 'start'; match: NetMatchConfig; you: Seat | null; players: { id: string; name: string; seat: Seat | null }[] }
-  /** Commands applied on ticks (from, to]; the client may advance its mirror to `to`. */
-  | { t: 'ticks'; from: number; to: number; cmds: WireCommand[]; hash?: [number, number] }
+  /** Commands applied on confirmed ticks (see packTicks). */
+  | TickBatch
   | { t: 'state'; tick: number; data: string }
   | { t: 'pong'; c: number; tick: number }
   | { t: 'end'; result: string };

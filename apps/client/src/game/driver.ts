@@ -1,5 +1,5 @@
 import { AI_SKILL, Command, CommandSource, CricketMatch, MatchConfig, MatchEvent, MatchHost, runAdvice } from '@crease/sim';
-import { Mirror, NetMatchConfig, RoleMap, Seat, buildMatchConfig, roleMap } from '@crease/net';
+import { Mirror, NetMatchConfig, RoleMap, Seat, buildMatchConfig, roleMap, unpackTicks } from '@crease/net';
 import { NetClient } from '../net/client';
 
 /**
@@ -63,7 +63,10 @@ export class NetDriver implements MatchDriver {
     this.mirror = new Mirror(buildMatchConfig(net));
     this.humans = [[...net.humans[0]], [...net.humans[1]]];
     this.off = client.on((m) => {
-      if (m.t === 'ticks') this.mirror.receive(m.to, m.cmds, m.hash);
+      if (m.t === 'k') {
+        const b = unpackTicks(m);
+        this.mirror.receive(b.to, b.cmds, b.hash);
+      }
       else if (m.t === 'state') this.mirror.restore(m.tick, m.data);
       else if (m.t === 'humans') this.humans = m.humans;
     });

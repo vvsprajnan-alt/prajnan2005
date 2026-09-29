@@ -58,6 +58,30 @@ describe('skinned cricketer rig', () => {
     expect(numberFor('hawks-7')).toBe(7);
   });
 
+  it('has a light distant level of detail with the same skinning', () => {
+    const hi = buildBodyGeometry(kit);
+    const lo = buildBodyGeometry(kit, 'low');
+    expect(lo.index!.count).toBeLessThan(hi.index!.count / 3);
+    const sw = lo.getAttribute('skinWeight');
+    for (let i = 0; i < sw.count; i++) expect(sw.getX(i) + sw.getY(i) + sw.getZ(i) + sw.getW(i)).toBeCloseTo(1, 5);
+    const c = new Cricketer(kit, false);
+    expect(c.lod).toBe('high');
+    c.setDistance(40);
+    expect(c.lod).toBe('low');
+    c.setDistance(29); // hysteresis: stays low until clearly close
+    expect(c.lod).toBe('low');
+    c.setDistance(20);
+    expect(c.lod).toBe('high');
+    // The kit is part of the body at either detail, so a player costs few draw calls.
+    expect(buildBodyGeometry(kit, 'low', true).getAttribute('position').count).toBeGreaterThan(lo.getAttribute('position').count + 100);
+    for (const d of [10, 40]) {
+      c.setDistance(d);
+      let draws = 0;
+      c.root.traverseVisible((o) => { if ((o as THREE.Mesh).isMesh) draws++; });
+      expect(draws).toBeLessThanOrEqual(4); // body, helmet shine, bat, shirt number
+    }
+  });
+
   it('poses every animation without NaNs and cross-fades between them', () => {
     const c = new Cricketer(kit, false);
     const anims = ['stance', 'swing', 'run', 'ready', 'dive', 'celebrate', 'dejected', 'raiseBat', 'appeal', 'fistPump', 'clap', 'handsOnHead', 'backup', 'signal-out', 'umpire'];

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BONES, BONE_OFFSET, BONE_PARENT, BoneName, Kit, buildBatGeometry, buildBodyGeometry, buildKitGeometry } from './rig';
+import { BONES, BONE_OFFSET, BONE_PARENT, BoneName, Kit, buildBatGeometry, buildBodyGeometry, buildGlossGeometry } from './rig';
 
 export type { Kit } from './rig';
 
@@ -78,6 +78,9 @@ export class Cricketer {
   private kit: Kit;
   private phase = Math.random() * 10;
   private numberPlane: THREE.Mesh | null = null;
+  private near: THREE.SkinnedMesh;
+  private far: THREE.SkinnedMesh;
+  private distant = false;
   // Cross-fade state.
   private anim = '';
   private fadeT = 1;
@@ -101,23 +104,33 @@ export class Cricketer {
       if (p) this.j[p].add(this.j[n]);
     }
     this.root.add(this.body);
-    const mesh = new THREE.SkinnedMesh(buildBodyGeometry(kit), MATTE);
-    mesh.castShadow = castShadow;
-    mesh.frustumCulled = false;
-    mesh.add(this.j.hips);
-    this.body.add(mesh);
-    mesh.updateMatrixWorld(true);
-    mesh.bind(new THREE.Skeleton(this.bones));
-
-    // Rigid kit riding on the bones.
-    for (const [b, g] of Object.entries(buildKitGeometry(kit)) as [BoneName, { matte?: THREE.BufferGeometry; gloss?: THREE.BufferGeometry }][]) {
-      for (const [geo, m] of [[g.matte, MATTE], [g.gloss, GLOSS]] as const) {
-        if (!geo) continue;
-        const piece = new THREE.Mesh(geo, m);
-        piece.castShadow = castShadow;
-        this.j[b].add(piece);
-      }
+    // Two levels of detail share one skeleton; distant players use the light body.
+    const skeleton = new THREE.Skeleton(this.bones);
+    const make = (detail: 'high' | 'low') => {
+      // The rigid kit is merged into the body (rigidly weighted to its bone): one draw call per player.
+      const mesh = new THREE.SkinnedMesh(buildBodyGeometry(kit, detail, true), MATTE);
+      mesh.castShadow = castShadow;
+      // Skinned meshes cannot use their bind-pose bounds; a sphere that covers any pose (dives, raised bats) lets off-screen players be culled.
+      mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 2.4);
+      return mesh;
+    };
+    this.near = make('high');
+    this.far = make('low');
+    this.far.visible = false;
+    // Bones hang off the body group (not a mesh), so the kit riding on them stays visible at either detail.
+    this.body.add(this.j.hips, this.near, this.far);
+    this.body.updateMatrixWorld(true);
+    this.near.bind(skeleton);
+    this.far.bind(skeleton, this.near.bindMatrix);
+    const glossGeo = buildGlossGeometry(kit);
+    if (glossGeo) {
+      const gloss = new THREE.SkinnedMesh(glossGeo, GLOSS);
+      gloss.castShadow = castShadow;
+      gloss.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 2.4);
+      this.body.add(gloss);
+      gloss.bind(skeleton, this.near.bindMatrix);
     }
+
     // Shirt number on the back.
     const tex = shirtNumber(kit.number, kit.trim);
     if (tex) {
@@ -134,6 +147,20 @@ export class Cricketer {
       this.root.add(this.batPivot);
     }
     this.from = this.bones.map(() => new THREE.Quaternion());
+  }
+
+  /** Level of detail from the camera distance (with hysteresis so it doesn't flicker). */
+  setDistance(d: number): void {
+    const distant = this.distant ? d > 26 : d > 32;
+    if (distant === this.distant) return;
+    this.distant = distant;
+    this.near.visible = !distant;
+    this.far.visible = distant;
+    if (this.numberPlane) this.numberPlane.visible = !distant;
+  }
+
+  get lod(): 'high' | 'low' {
+    return this.distant ? 'low' : 'high';
   }
 
   setMirror(m: 1 | -1): void {

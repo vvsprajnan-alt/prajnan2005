@@ -8,6 +8,7 @@ import {
   WireCommand,
   authorize,
   buildMatchConfig,
+  packTicks,
   roleMap,
 } from '@crease/net';
 
@@ -40,7 +41,7 @@ export class ServerMatch {
     private opts: ServerMatchOptions = {},
   ) {
     this.humans = [[...net.humans[0]], [...net.humans[1]]];
-    this.host = new MatchHost(buildMatchConfig(net), { humanTeams: this.humanTeams(), autoRunForHumans: false });
+    this.host = new MatchHost(buildMatchConfig(net), { humanTeams: this.humanTeams(), autoRunForHumans: false, quantize: true });
   }
 
   get tick(): number {
@@ -90,7 +91,7 @@ export class ServerMatch {
 
   flush(): void {
     if (this.tick === this.batchFrom) return;
-    this.broadcast({ t: 'ticks', from: this.batchFrom, to: this.tick, cmds: this.batch, hash: this.hash });
+    this.broadcast(packTicks(this.tick, this.batch, this.hash));
     this.batch = [];
     this.hash = undefined;
     this.batchFrom = this.tick;

@@ -10,6 +10,16 @@ export default defineConfig({
   preview: { host: true, port: 4173 },
   build: {
     target: 'es2022',
-    chunkSizeWarningLimit: 1200,
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        // Long-lived vendor and simulation chunks: a game update rarely invalidates the cached three.js.
+        manualChunks(id) {
+          if (id.includes('node_modules/three/')) return 'three';
+          if (id.includes('packages/sim/') || id.includes('packages/net/')) return 'sim';
+          return undefined;
+        },
+      },
+    },
   },
 });

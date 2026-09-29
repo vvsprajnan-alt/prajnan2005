@@ -75,6 +75,13 @@ export class Sfx {
     }
   }
 
+  /** Suspend audio processing (hidden tab) and resume it. */
+  setSuspended(hidden: boolean): void {
+    if (!this.ctx) return;
+    if (hidden) void this.ctx.suspend();
+    else void this.ctx.resume();
+  }
+
   setEnabled(on: boolean): void {
     this.enabled = on;
     this.applyVolumes();

@@ -77,6 +77,8 @@ export class Input {
   device: 'keyboard' | 'gamepad' | 'touch' = 'keyboard';
 
   constructor(target: Window = window) {
+    // Phones and tablets start with touch prompts.
+    if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) this.device = 'touch';
     target.addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement | null)?.tagName === 'INPUT') return;
       this.device = 'keyboard';

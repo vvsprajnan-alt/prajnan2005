@@ -10,8 +10,8 @@
 | 6 | Invite links, reconnect to your seat, disconnect grace, quick-chat, matchmaking, host migration | **Done** |
 | 7 | Presentation: team intros, replays, wagon wheel, pitch map, commentary captions | **Done** |
 | 8 | Art and audio: skinned characters and animation, crowd, stadium detail, sound design | **Done** |
-| 9 | Optimization: code-splitting, instancing/LOD, network bandwidth, mobile tuning | Next |
-| 10 | Testing and bug fixing: end-to-end multiplayer tests, soak tests, balancing | |
+| 9 | Optimization: code-splitting, instancing/LOD, network bandwidth, mobile tuning | **Done** |
+| 10 | Testing and bug fixing: end-to-end multiplayer tests, soak tests, balancing | Next |
 
 ## Phase 1 scope (delivered)
 

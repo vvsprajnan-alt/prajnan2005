@@ -11,13 +11,17 @@ import {
   oversString,
 } from '@crease/sim';
 import { Sfx } from './audio/sfx';
+import { FrameLimiter, ResolutionGovernor } from './perf';
 import { GameSession } from './game/session';
 import { Input } from './input/input';
 import { World } from './render/world';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
-import { fieldEditor } from './ui/fieldEditor';
-import { CentreTab, matchCentre } from './ui/matchCentre';
+import type { CentreTab, MatchCentreOptions } from './ui/matchCentre';
+
+// Screens that are not needed to start playing load on demand (and are prefetched when the browser is idle).
+const loadCentre = () => import('./ui/matchCentre');
+const loadFieldEditor = () => import('./ui/fieldEditor');
 import { NetClient, loadSession, saveSession } from './net/client';
 import { NetDriver } from './game/driver';
 import { QUICK_CHAT, QueueMode, RoomState, Seat, ServerMsg } from '@crease/net';
@@ -44,6 +48,11 @@ export class App {
   private screens: HTMLElement;
   private hudRoot: HTMLElement;
   private last = performance.now();
+  private governor: ResolutionGovernor;
+  private limiter: FrameLimiter;
+  private fpsEl: HTMLElement;
+  private fpsFrames = 0;
+  private fpsSince = performance.now();
   private setup: MatchSetup = { myOrder: null, myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
 
   constructor(root: HTMLElement) {
@@ -54,7 +63,16 @@ export class App {
     const unlock = () => this.sfx.unlock();
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
+    this.governor = new ResolutionGovernor(ResolutionGovernor.forCap(this.settings.fpsCap));
+    this.limiter = new FrameLimiter(this.settings.fpsCap);
+    this.fpsEl = h('div', { class: 'fps' });
+    this.fpsEl.style.display = this.settings.showFps ? '' : 'none';
+    root.append(this.fpsEl, this.rotateHint());
+    // Save battery and CPU in the background: audio sleeps while the tab is hidden.
+    document.addEventListener('visibilitychange', () => this.sfx.setSuspended(document.hidden));
     this.startAttract();
+    const idle = (window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 2000));
+    idle(() => void Promise.all([loadCentre(), loadFieldEditor()]).catch(() => {}));
     if (!this.handleInviteLink()) this.mainMenu();
     requestAnimationFrame(this.loop);
     // Expose for automated smoke tests / debugging.
@@ -68,11 +86,35 @@ export class App {
   }
 
   private loop = (t: number) => {
+    requestAnimationFrame(this.loop);
+    if (!this.limiter.ready(t)) return;
     const dt = (t - this.last) / 1000;
     this.last = t;
     this.session?.frame(dt);
-    requestAnimationFrame(this.loop);
+    if (this.settings.adaptiveResolution) {
+      const scale = this.governor.sample(dt);
+      if (scale !== null) this.world.setResolutionScale(scale);
+    }
+    if (this.settings.showFps) {
+      this.fpsFrames++;
+      if (t - this.fpsSince > 500) {
+        const fps = (this.fpsFrames * 1000) / (t - this.fpsSince);
+        const info = this.world.renderer.info.render;
+        this.fpsEl.textContent = `${fps.toFixed(0)} fps · ${info.calls} draws · ${(info.triangles / 1000).toFixed(0)}k tris · ${Math.round(this.world.resolutionScale * 100)}% res`;
+        this.fpsFrames = 0;
+        this.fpsSince = t;
+      }
+    }
   };
+
+  /** Phones held upright get a hint to turn sideways (dismissable). */
+  private rotateHint(): HTMLElement {
+    const el = h('div', { class: 'rotate-hint' },
+      h('div', { class: 'rotate-icon', 'aria-hidden': 'true' }, '⟳'),
+      h('p', {}, 'Turn your phone sideways for the best view.'),
+      h('button', { class: 'btn secondary', onclick: () => el.remove() }, 'Play upright'));
+    return el;
+  }
 
   get currentMatch(): CricketMatch | null {
     return this.session?.match ?? null;
@@ -288,6 +330,12 @@ export class App {
         field('Time of day', sel('timeOfDay', [['day', 'Day'], ['dusk', 'Dusk'], ['night', 'Night (floodlights)']])),
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
+        field('Resolution', sel('adaptiveResolution', [['true', 'Adaptive (keeps the frame rate up)'], ['false', 'Fixed']])),
+        field('Frame rate', h('select', { onchange: (e: Event) => { s.fpsCap = Number((e.target as HTMLSelectElement).value); } },
+          ...[[60, '60 fps'], [30, '30 fps (battery saver)'], [0, 'Unlimited (display rate)']].map(([v, l]) => h('option', { value: String(v), selected: s.fpsCap === v }, String(l))))),
+        field('Performance overlay', sel('showFps', [['false', 'Off'], ['true', 'On']])),
+      ),
+      h('div', { class: 'row', style: 'margin-top:12px' },
         field('Assistance', sel('assist', [['beginner', 'Beginner (wide timing, full guide)'], ['standard', 'Standard'], ['pro', 'Pro (no guide during run-up)']])),
         field('Running', sel('autoRun', [['false', 'Manual calls'], ['true', 'Automatic']])),
         field('Fielding', sel('fielding', [['assisted', 'Assisted (recommended)'], ['manual', 'Manual'], ['auto', 'Automatic (AI fields)']])),
@@ -314,6 +362,10 @@ export class App {
           this.settings = s;
           saveSettings(s);
           this.applyAudio();
+          this.limiter.cap = s.fpsCap;
+          this.governor = new ResolutionGovernor(ResolutionGovernor.forCap(s.fpsCap));
+          this.world.setResolutionScale(1);
+          this.fpsEl.style.display = s.showFps ? '' : 'none';
           if (reload) location.reload();
           else this.mainMenu();
         } }, 'Save'),
@@ -651,7 +703,7 @@ export class App {
 
   private onlineResults(m: CricketMatch): void {
     const potm = m.playerOfMatch;
-    this.show(matchCentre(m, {
+    this.showCentre(m, {
       title: m.result ?? 'Match complete',
       sub: potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name)) : null,
       scorecardHtml: (i) => this.scorecardHtml(m, i),
@@ -659,18 +711,23 @@ export class App {
         h('button', { class: 'btn', onclick: () => { this.startAttract(); this.roomScreen(); } }, 'Back to the room'),
         h('button', { class: 'btn secondary', onclick: () => { this.leaveOnline(); this.mainMenu(); } }, 'Leave'),
       ],
-    }), true);
+    });
+  }
+
+  /** Match Centre (lazy-loaded). */
+  private showCentre(m: CricketMatch, opts: MatchCentreOptions): void {
+    void loadCentre().then(({ matchCentre }) => this.show(matchCentre(m, opts), true));
   }
 
   private openFieldEditor(): void {
     const s = this.session;
     if (!s || s.humanTeam === null) return;
     s.paused = true;
-    this.show(fieldEditor(s.match, (r) => {
+    void loadFieldEditor().then(({ fieldEditor }) => this.show(fieldEditor(s.match, (r) => {
       if (r) s.applyField(r);
       s.paused = false;
       this.clearScreens();
-    }), true);
+    }), true));
   }
 
   private pauseMenu(): void {
@@ -702,12 +759,12 @@ export class App {
   }
 
   private matchCentreOverlay(m: CricketMatch, back: () => void, tab: CentreTab = 'scorecard'): void {
-    this.show(matchCentre(m, {
+    this.showCentre(m, {
       title: 'Match Centre',
       tab,
       scorecardHtml: (i) => this.scorecardHtml(m, i),
       actions: [h('button', { class: 'btn secondary', onclick: back }, 'Back')],
-    }), true);
+    });
   }
 
   private inningsBreak(m: CricketMatch): void {
@@ -742,7 +799,7 @@ export class App {
   private results(m: CricketMatch, setup: MatchSetup): void {
     const potm = m.playerOfMatch;
     const potmTeam = potm ? m.cfg.teams[potm.team]! : null;
-    this.show(matchCentre(m, {
+    this.showCentre(m, {
       title: m.result ?? 'Match complete',
       sub: potm ? h('p', {}, h('span', { class: 'pill' }, 'Player of the Match'), ' ', h('b', {}, potm.name), ` (${potmTeam?.name})`) : null,
       scorecardHtml: (i) => this.scorecardHtml(m, i),
@@ -750,6 +807,6 @@ export class App {
         h('button', { class: 'btn', onclick: () => this.toss() }, 'Rematch'),
         h('button', { class: 'btn secondary', onclick: () => { this.setup = setup; this.mainMenu(); } }, 'Main menu'),
       ],
-    }), true);
+    });
   }
 }

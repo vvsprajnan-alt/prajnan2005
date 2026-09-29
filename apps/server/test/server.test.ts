@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { stateHash } from '@crease/sim';
-import { ClientMsg, Mirror, PROTOCOL_VERSION, ServerMsg, buildMatchConfig, decodeServer, encode } from '@crease/net';
+import { ClientMsg, Mirror, PROTOCOL_VERSION, ServerMsg, buildMatchConfig, decodeServer, encode, unpackTicks } from '@crease/net';
 import { startServer } from '../src/main';
 
 type Srv = Awaited<ReturnType<typeof startServer>>;
@@ -36,8 +36,9 @@ class Bot {
         this.mirror = new Mirror(buildMatchConfig(m.match));
         this.seat = m.you;
       }
-      if (m.t === 'ticks') {
-        this.mirror?.receive(m.to, m.cmds, m.hash);
+      if (m.t === 'k') {
+        const b = unpackTicks(m);
+        this.mirror?.receive(b.to, b.cmds, b.hash);
         this.drive();
       }
       if (m.t === 'state') this.mirror?.restore(m.tick, m.data);

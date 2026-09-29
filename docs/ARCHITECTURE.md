@@ -107,6 +107,25 @@ While `inPlay`, every 1/120 s tick:
   contact shadow and trail, and the camera director. It holds no game logic.
 - Quality presets change pixel ratio, shadows, antialiasing, crowd size and effects.
 
+### Performance (Phase 9)
+
+- **Loading:** three.js and `@crease/sim` / `@crease/net` are separate chunks (rarely invalidated); the Match
+  Centre and field editor are dynamic imports prefetched on idle. The server keeps brotli and gzip copies of every
+  static file in memory and marks hashed assets immutable.
+- **Rendering:** each player is one skinned mesh (body + rigid kit weighted to single bones) plus a glossy helmet
+  mesh; a low-detail body shares the skeleton and is swapped in by camera distance with hysteresis. Skinned meshes
+  get a fixed pose-safe bounding sphere so they are culled. The crowd is 12 instanced sectors with bounding spheres
+  padded for the shader animation. Static tower geometry is merged per material.
+- **Network:** tick batches are packed (`packTicks`): an idle 50 ms batch is `{"t":"k","n":966}`, commands carry
+  their tick as an offset back from `n`. With `quantize` on, `MatchHost` rounds every non-integer command number to
+  1/1000 before applying it, so the server, the wire and every mirror use the same value. Clients rate-limit
+  continuous inputs (aim 15/s, steering 20/s, always sending the final value and flushing the aim before the
+  run-up). The WebSocket server compresses messages over 512 bytes (full-state resyncs, room updates) and counts
+  traffic for `/health`.
+- **Frame pacing:** `perf.ts` holds the pure pieces - `ResolutionGovernor` (one-second windows: -10% resolution
+  when slow, +5% after three good windows, hitches ignored), `FrameLimiter` (30/60 fps caps on any display) and
+  `detectDevice` (first-run quality and cap).
+
 ### Art and audio (Phase 8)
 
 - **Characters** (`render/rig.ts`, `render/players.ts`) are generated in code, not loaded. The body is one
@@ -151,7 +170,8 @@ While `inPlay`, every 1/120 s tick:
 browser client                          server (Node)
  input -> Command {at: tick seen} ----->  authorize(seat, role) -> MatchHost.submit
                                           MatchHost.step() at 120 Hz (AI included)
- Mirror.receive(ticks, cmds, hash) <----  batch of applied commands every 6 ticks (+ hash every 120)
+ Mirror.receive(ticks, cmds, hash) <----  batch of applied commands every 6 ticks (+ hash every 120),
+                                          as {t:'k', n, c?: [n - tick, team, role, cmd][], h?}
  Mirror.step(): replay cmds, m.step()
  hash mismatch -> {t:'resync'} -------->  serializeMatch -> {t:'state'}
 ```

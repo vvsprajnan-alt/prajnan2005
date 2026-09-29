@@ -43,6 +43,15 @@ export interface SessionCallbacks {
   onChat?(id: number, teamOnly: boolean): void;
 }
 
+/** Short hints for touch screens (the buttons carry their own labels). */
+function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean): string {
+  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Drag the pad to aim · tap a shot as the ball arrives';
+  if (fielding) return fielding === 'holding' ? 'Tap a throw, or drag to run it in' : 'Drag the pad to run · Dive · Catch';
+  if (phase === 'preDelivery') return 'Drag to move the marker · pick a delivery · tap Bowl';
+  if (phase === 'runUp') return 'Tap Release in the green zone';
+  return '';
+}
+
 const WICKET_LABEL: Record<string, string> = { bowled: 'Bowled', caught: 'Caught', lbw: 'LBW', runOut: 'Run out', stumped: 'Stumped', hitWicket: 'Hit wicket' };
 
 const TIMING_TEXT: Record<string, [string, string]> = {
@@ -303,9 +312,14 @@ export class GameSession {
     fwd.normalize();
     const x = -fwd.z * d.x + fwd.x * d.y;
     const z = fwd.x * d.x + fwd.z * d.y;
-    if (Math.abs(x - this.lastMove.x) > 0.04 || Math.abs(z - this.lastMove.z) > 0.04) {
-      this.lastMove = { x, z };
-      this.send({ type: 'field.move', x, z }, 'fielder');
+    if (Math.abs(x - this.lastMove.x) > 0.04 || Math.abs(z - this.lastMove.z) > 0.04 || (x === 0 && z === 0 && (this.lastMove.x || this.lastMove.z))) {
+      this.moveDirty = { x, z };
+    }
+    // Online, steering is sent at most 20 times a second (the last value always goes out).
+    if (this.moveDirty && this.due('move', 1 / 20)) {
+      this.lastMove = this.moveDirty;
+      this.send({ type: 'field.move', x: this.moveDirty.x, z: this.moveDirty.z }, 'fielder');
+      this.moveDirty = null;
     }
     const holding = m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled;
     for (const a of actions) {
@@ -368,6 +382,7 @@ export class GameSession {
         const i = vars.indexOf(this.intent.variation);
         pick(vars[(i + (a === 'varNext' ? 1 : vars.length - 1)) % vars.length]!);
       } else if (a === 'primary') {
+        this.flushAim();
         if (m.phase === 'preDelivery') this.send({ type: 'bowl.start' }, 'bowler');
         else if (m.phase === 'runUp') this.send({ type: 'bowl.release', at: m.tick }, 'bowler');
       }
@@ -384,9 +399,30 @@ export class GameSession {
       const key = JSON.stringify(this.intent);
       if (key !== this.lastAim) {
         this.lastAim = key;
-        this.send({ type: 'bowl.aim', intent: { ...this.intent } }, 'bowler');
+        this.aimDirty = true;
       }
+      // Online, the aim is sent at most 15 times a second (and always before the run-up starts).
+      if (this.aimDirty && this.due('aim', 1 / 15)) this.flushAim();
     }
+  }
+
+  private aimDirty = false;
+  private moveDirty: { x: number; z: number } | null = null;
+  private lastSent = new Map<string, number>();
+
+  /** Rate limit for continuous inputs; always true offline. */
+  private due(key: string, interval: number): boolean {
+    if (!this.driver.networked) return true;
+    const now = performance.now() / 1000;
+    if (now - (this.lastSent.get(key) ?? -1) < interval) return false;
+    this.lastSent.set(key, now);
+    return true;
+  }
+
+  private flushAim(): void {
+    if (!this.aimDirty) return;
+    this.aimDirty = false;
+    this.send({ type: 'bowl.aim', intent: { ...this.intent } }, 'bowler');
   }
 
   private requestReview(): void {
@@ -763,6 +799,7 @@ export class GameSession {
     }
     if (this.driver.networked && mode === 'batting' && !this.can('striker')) hint = 'You are the non-striker: call the runs (R / N / B) - your partner plays the shots';
     if (this.driver.networked && mode === 'bowling' && !this.can('bowler') && !fielding) hint = 'Your partner is bowling this over - you field when the ball is hit (G: set the field)';
+    if (this.input.device === 'touch' && hint) hint = touchHint(mode, m.phase, fielding, this.settings.autoRun);
     hud.setHint(hint);
 
     this.checkScreens(m);

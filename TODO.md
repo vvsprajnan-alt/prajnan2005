@@ -92,9 +92,19 @@
 - [x] Sound: mixer with effects / crowd / music buses, a compressor and a stadium reverb; layered bat, edge, pad, gloves, bounce and stumps sounds panned to the screen; an appeal; a crowd bed that hushes for the run-up and swells with the moment; roars, oohs, groans and applause; original music stings (intro, four, six, wicket, milestone, win); volume sliders
 - [x] Tests: rig geometry, skin weights and every animation, crowd seating, colours and waves, music data
 
+### Phase 9 - optimization
+- [x] Code-splitting: three.js and the simulation in their own long-cached chunks; Match Centre and field editor load on demand (prefetched when idle); an inline loading splash
+- [x] Server delivery: brotli / gzip precompressed files, immutable caching for hashed assets, `no-cache` for the page
+- [x] Draw calls: rigid kit merged into each player's skinned body (one call per player plus helmet shine), floodlight towers, bracing, lamp banks and light shafts merged - about half the draw calls in a match
+- [x] Level of detail: a light distant body sharing each player's skeleton (about a quarter of the triangles), skinned players frustum-culled with pose-safe bounds, the crowd split into 12 culled sectors, a simpler crowd and no light shafts / flashes on Low
+- [x] Throttled LED ribbon redraws (only when the message blinks)
+- [x] Network: compact tick batches (`{"t":"k","n":966}` when nothing happened, command ticks as small offsets), command numbers rounded to 1/1000 before they are applied (mirrors stay bit-identical), continuous inputs (aim, steering) rate-limited online, WebSocket compression for large messages, traffic counters on `/health`. A full AI match streams at ~430 B/s per client, down from ~990
+- [x] Mobile: first-run quality and frame cap from the device, adaptive resolution (trades pixels for frame rate), 30 fps battery saver, a performance overlay, touch prompts, a compact HUD for phones held sideways, a turn-your-phone hint, audio sleeps in a background tab
+- [x] Tests: bandwidth budget and mirror sync, packing, rounding, compression and static delivery, adaptive resolution, frame limiter, device profiles, crowd sectors, the distant body
+
 ## Current task
 
-- Phase 8 review: play on a real GPU and tune the look (proportions, crowd density per quality preset) and the mix before Phase 9 (optimization).
+- Phase 9 review: try it on a mid-range phone and a laptop's integrated GPU before Phase 10 (testing and bug fixing).
 
 ## Known bugs / limitations
 
@@ -106,14 +116,13 @@
 - Commentary is text only (no voice).
 - Fielding steering is camera-relative; the fielding camera can swing when the ball passes the fielder.
 - All audio is synthesized: there are no recorded voices, so the appeal and crowd are approximations.
-- The Ultra crowd (18,000 spectators) is heavy on integrated GPUs; Phase 9 adds level of detail.
+- The Ultra crowd (18,000 spectators) is heavy on integrated GPUs; use High or the adaptive resolution.
 - On very slow machines the sim runs slower than real time (frame delta is clamped to 0.1 s by design).
-- Single client bundle (~780 KB, ~220 KB gzip).
+- Client download ~790 KB (~230 KB gzipped, of which three.js is ~130 KB and cached separately).
 - Online: sessions and rooms live in the server's memory (a server restart ends them); matchmaking has no skill rating yet.
 - Online: the local player's own input is shown when the server echoes it (one round trip); shot timing itself is compensated.
 - Online: pausing only opens the menu; the match keeps running for everyone.
 
 ## Next tasks
 
-1. Phase 9: optimization - code-splitting, instancing/LOD, network bandwidth, mobile tuning
-2. Phase 10: testing and bug fixing - end-to-end multiplayer tests, soak tests, balancing
+1. Phase 10: testing and bug fixing - end-to-end multiplayer tests, soak tests, balancing

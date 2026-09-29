@@ -58,8 +58,8 @@ export function shirtColor(seed: number, home: string, away: string, neutral: st
 
 const NEUTRAL = ['#e8dcc2', '#ffffff', '#1d1d1d', '#2ec4b6', '#ff6b4a', '#9bd13b', '#f4f1ea', '#6c3ce0'];
 
-/** One spectator: torso, head and two arms (parts tagged for the shader). */
-function spectatorGeometry(): THREE.BufferGeometry {
+/** One spectator: torso, head and two arms (parts tagged for the shader); `simple` is torso and head only. */
+function spectatorGeometry(detail: 'full' | 'simple' = 'full'): THREE.BufferGeometry {
   const tag = (g: THREE.BufferGeometry, part: number) => {
     const n = g.getAttribute('position').count;
     g.setAttribute('aPart', new THREE.BufferAttribute(new Float32Array(n).fill(part), 1));
@@ -72,27 +72,31 @@ function spectatorGeometry(): THREE.BufferGeometry {
   const head = tag(new THREE.IcosahedronGeometry(0.12, 0).translate(0, 0.93, 0), 3);
   const armL = tag(new THREE.BoxGeometry(0.1, 0.46, 0.1).translate(0.26, 0.55, 0), 1);
   const armR = tag(new THREE.BoxGeometry(0.1, 0.46, 0.1).translate(-0.26, 0.55, 0), 2);
+  if (detail === 'simple') return mergeGeometries([tag(new THREE.BoxGeometry(0.44, 0.7, 0.3).translate(0, 0.45, 0.04), 0), head], false)!;
   return mergeGeometries([torso, legs, head, armL, armR], false)!;
 }
 
 export interface Crowd {
-  mesh: THREE.InstancedMesh;
+  /** One instanced mesh per sector of the ground, so stands behind the camera are culled. */
+  mesh: THREE.Group;
   setTeams(home: string, away: string): void;
   /** time (s), excitement 0..1, wave front angle (radians) or null. */
   update(time: number, excite: number, wave: number | null): void;
 }
 
-export function buildCrowd(count: number, tiers: Tier[]): Crowd {
-  const seats = crowdSeats(count, tiers);
-  const geo = spectatorGeometry();
-  const seedAttr = new Float32Array(seats.length);
-  const angAttr = new Float32Array(seats.length);
+/** Split seats into angular sectors (index lists), so each can be culled on its own. */
+export function sectorize(seats: Seat[], sectors: number): number[][] {
+  const out: number[][] = Array.from({ length: sectors }, () => []);
   seats.forEach((s, i) => {
-    seedAttr[i] = s.seed;
-    angAttr[i] = s.angle;
+    const a = ((s.angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    out[Math.min(sectors - 1, Math.floor((a / (Math.PI * 2)) * sectors))]!.push(i);
   });
-  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seedAttr, 1));
-  geo.setAttribute('aAngle', new THREE.InstancedBufferAttribute(angAttr, 1));
+  return out;
+}
+
+export function buildCrowd(count: number, tiers: Tier[], detail: 'full' | 'simple' = 'full', sectors = 12): Crowd {
+  const seats = crowdSeats(count, tiers);
+  const base = spectatorGeometry(detail);
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   const uniforms = { uTime: { value: 0 }, uExcite: { value: 0 }, uWave: { value: -100 } };
   mat.onBeforeCompile = (shader) => {
@@ -130,25 +134,40 @@ export function buildCrowd(count: number, tiers: Tier[]): Crowd {
         if (aPart > 2.5) vColor = mix(vec3(0.95, 0.72, 0.55), vec3(0.28, 0.17, 0.1), fract(aSeed * 7.13)) * 0.8;`,
       );
   };
-  const mesh = new THREE.InstancedMesh(geo, mat, seats.length);
+  const group = new THREE.Group();
+  const parts: { mesh: THREE.InstancedMesh; seats: Seat[] }[] = [];
   const m4 = new THREE.Matrix4();
-  seats.forEach((s, i) => {
-    m4.makeRotationY(-s.angle - Math.PI / 2);
-    m4.setPosition(s.x, s.y, s.z);
-    mesh.setMatrixAt(i, m4);
-  });
+  for (const idx of sectorize(seats, sectors)) {
+    if (!idx.length) continue;
+    const list = idx.map((i) => seats[i]!);
+    const geo = base.clone();
+    geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(new Float32Array(list.map((s) => s.seed)), 1));
+    geo.setAttribute('aAngle', new THREE.InstancedBufferAttribute(new Float32Array(list.map((s) => s.angle)), 1));
+    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+    list.forEach((s, i) => {
+      m4.makeRotationY(-s.angle - Math.PI / 2);
+      m4.setPosition(s.x, s.y, s.z);
+      mesh.setMatrixAt(i, m4);
+    });
+    mesh.computeBoundingSphere();
+    // Leave room for spectators standing up and raising their arms in the shader.
+    if (mesh.boundingSphere) mesh.boundingSphere.radius += 2;
+    group.add(mesh);
+    parts.push({ mesh, seats: list });
+  }
   const color = new THREE.Color();
   const setTeams = (home: string, away: string) => {
-    seats.forEach((s, i) => {
-      color.set(shirtColor(s.seed, home, away, NEUTRAL)).multiplyScalar(0.6 + 0.4 * ((s.seed * 13.7) % 1));
-      mesh.setColorAt(i, color);
-    });
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    for (const p of parts) {
+      p.seats.forEach((s, i) => {
+        color.set(shirtColor(s.seed, home, away, NEUTRAL)).multiplyScalar(0.6 + 0.4 * ((s.seed * 13.7) % 1));
+        p.mesh.setColorAt(i, color);
+      });
+      if (p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
+    }
   };
   setTeams('#0f4c81', '#7a1f2b');
-  mesh.frustumCulled = false;
   return {
-    mesh,
+    mesh: group,
     setTeams,
     update(time, excite, wave) {
       uniforms.uTime.value = time;

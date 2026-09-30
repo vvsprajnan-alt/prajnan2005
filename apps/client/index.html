@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0b1a2e" />
+    <title>Crease Clash</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      /* Shown until the game has started (inline so it paints before any script loads). */
+      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: #0b1a2e; color: #f3f6fb; font-family: 'Arial Black', system-ui, sans-serif; z-index: 10; transition: opacity .4s; }
+      #boot.done { opacity: 0; pointer-events: none; }
+      .boot-logo { font-size: clamp(30px, 7vw, 60px); letter-spacing: 1px; }
+      .boot-logo span { color: #ffb627; }
+      .boot-bar { width: min(260px, 60vw); height: 4px; background: rgba(255,255,255,.12); border-radius: 2px; overflow: hidden; }
+      .boot-bar i { display: block; width: 40%; height: 100%; background: #ffb627; animation: boot 1.1s ease-in-out infinite; }
+      @keyframes boot { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene"></canvas>
+      <div id="hud"></div>
+      <div id="screens"></div>
+    </div>
+    <div id="boot" aria-live="polite">
+      <div class="boot-logo">CREASE <span>CLASH</span></div>
+      <div class="boot-bar"><i></i></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@crease/sim": "0.1.0",
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "@crease/net": "0.1.0"
   },
   "devDependencies": {
     "@types/three": "^0.180.0",

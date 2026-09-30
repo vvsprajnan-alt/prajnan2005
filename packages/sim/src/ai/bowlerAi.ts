@@ -11,6 +11,7 @@ import { AI_SKILL } from './difficulty';
 export class BowlerAI {
   private plannedError = 0;
   private aimed = false;
+  private reacted = false;
   private lastTick = -1;
   /** Separate stream so AI "thinking" never perturbs the match RNG. */
   private rng: Rng;
@@ -32,9 +33,19 @@ export class BowlerAI {
         out.push({ type: 'bowl.start' });
       }
     } else if (m.phase === 'runUp') {
+      // Batter coming down the pitch: good bowlers drag it shorter and wider.
+      if (m.charged && !this.reacted) {
+        this.reacted = true;
+        const p = { easy: 0.15, normal: 0.4, hard: 0.65, expert: 0.85 }[m.cfg.difficulty];
+        if (this.rng.next() < p) {
+          const i = m.intent;
+          out.push({ type: 'bowl.aim', intent: { ...i, length: Math.min(11, i.length + 2.5), line: i.line + 0.45 } });
+        }
+      }
       if (m.runUpTime >= m.runUpDuration + this.plannedError) out.push({ type: 'bowl.release' });
     } else {
       this.aimed = false;
+      this.reacted = false;
     }
     this.lastTick = m.tick;
     return out;
@@ -53,7 +64,7 @@ export class BowlerAI {
       const roll = r.next();
       if (roll < (death ? 0.3 : 0.1)) variation = 'yorker';
       else if (roll < (death ? 0.42 : 0.2)) variation = 'slower';
-      else if (roll < (death ? 0.5 : 0.3)) variation = 'bouncer';
+      else if (roll < (death ? 0.5 : 0.3) && inn.bouncersThisOver < m.cfg.rules.bouncersPerOver) variation = 'bouncer';
       else if (roll < 0.5) variation = r.chance(0.6) ? 'outswing' : 'inswing';
       else if (roll < 0.6) variation = r.chance(0.5) ? 'offcutter' : 'legcutter';
       else variation = 'stock';
@@ -69,12 +80,15 @@ export class BowlerAI {
         line = r.range(-0.05, 0.15);
         break;
       case 'bouncer':
-        length = LENGTHS.short + r.range(-0.5, 1.2);
+        length = LENGTHS.bouncer + r.range(-0.7, 0.5);
         line = r.range(-0.1, 0.2);
         break;
       default:
         length = isSpin ? r.range(3.2, 5.2) : r.range(5.0, 7.5);
     }
-    return { variation, line, length };
+    // Right-armers often go round the wicket to left-handers (and vice versa).
+    const angleIn = m.strikerDef.batHand !== b.bowlArm && (b.bowlStyle !== 'legspin');
+    const side: 'over' | 'round' = angleIn && r.next() < 0.35 ? 'round' : 'over';
+    return { variation, line, length, side };
   }
 }

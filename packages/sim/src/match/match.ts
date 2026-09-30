@@ -1,3 +1,4 @@
+import { isWellFormedCommand } from './validate';
 import {
   BALL_RADIUS,
   BOUNDARY_RADIUS,
@@ -6,7 +7,6 @@ import {
   DT,
   STRIKER_CREASE_Z,
   STRIKER_STUMPS_Z,
-  STUMPS_HALF_WIDTH,
   WIDE_LINE_X,
 } from '../constants';
 import {
@@ -15,31 +15,38 @@ import {
   STROKES,
   SWING_TIME,
   ShotInput,
+  Footwork,
+  Stroke,
   bounceDistance,
   chooseStroke,
+  footworkFit,
+  isBackFoot,
   resolveContact,
 } from '../batting/shots';
-import { BowlIntent, DeliveryPlan, RUNUP_TIME, defaultIntent, planDelivery } from '../bowling/delivery';
+import { BowlIntent, DeliveryPlan, RUNUP_TIME, defaultIntent, deliverySide, planDelivery } from '../bowling/delivery';
+import { adaptField, chooseBowler, chooseField } from '../ai/captain';
 import { PlayerDef, offSign } from '../data/players';
 import { TeamDef, bowlingOptions, keeperIndex } from '../data/teams';
-import { PACE_FIELD, SPIN_FIELD } from '../fielding/fieldSettings';
+import { FieldKind, FieldSetting, fieldPreset, legalizeField, sanitizeField } from '../fielding/fieldSettings';
 import { Rng } from '../math/rng';
 import { Vec3, lengthXZ, lerp, v3 } from '../math/vec3';
 import { BallState, cloneBall, makeBall, predictTrajectory, segmentHitsStumps, stepBall } from '../physics/ball';
 import { PITCH_PRESETS, PitchConditions } from '../physics/surface';
-import { MatchRules, makeRules } from '../rules/config';
+import { MatchRules, makeRules, maxOutsideForOver } from '../rules/config';
+import { BallTracking, reviewedDecision, trackLbw, umpireDecision } from '../rules/tracking';
 import {
   BallOutcome,
   DismissalKind,
   InningsState,
   applyBall,
   canBowl,
+  substituteNewBatter,
   newInnings,
   oversString,
   startOver,
 } from '../rules/scorecard';
-import { FieldContext, FieldEvent, FieldingUnit } from './fielding';
-import { End, Running, inGroundAt, runnerStart } from './running';
+import { FieldContext, FieldEvent, FieldingControlMode, FieldingUnit, newHumanFielding } from './fielding';
+import { End, Running, STANCE_Z, inGroundAt, runnerStart } from './running';
 import {
   ActorSnapshot,
   Command,
@@ -62,6 +69,16 @@ export interface MatchConfig {
   assist: [number, number];
   /** Automatically start the second innings after the break (seconds), or wait for match.continue. */
   autoContinueAfter: number | null;
+  /** Optional batting orders (player indices) per team; default is squad order. */
+  battingOrders?: [number[] | null, number[] | null];
+  /** Human fielding control per team (default: AI fields). */
+  fieldingControl?: [FieldingControlMode, FieldingControlMode];
+  /** Team introductions before the first ball (seconds, 0 = none). Skippable with match.continue. */
+  introSeconds?: number;
+  /** Max seconds a timing-critical input may be back-dated (network latency compensation). */
+  maxInputRewind?: number;
+  /** Extra seconds before an unreleased delivery is released automatically (networked play). */
+  netGrace?: number;
 }
 
 export function defaultConfig(teams: [TeamDef, TeamDef], overs = 2, seed = 12345): MatchConfig {
@@ -83,10 +100,37 @@ interface Wicket {
   fielder?: number;
 }
 
-const FRONT_PLANE = STRIKER_CREASE_Z - 0.25;
-const BACK_PLANE = STRIKER_CREASE_Z + 0.3;
-const PAD_PLANE = STRIKER_CREASE_Z + 0.45;
-const BACK_FOOT: ReadonlySet<string> = new Set(['punch', 'cut', 'lateCut', 'pull', 'hook', 'glance']);
+// Contact planes relative to where the batter stands (z). At the crease these
+// are just in front of (front foot) and just behind (back foot) the popping crease.
+const FRONT_OFFSET = STRIKER_CREASE_Z - 0.25 - STANCE_Z;
+const BACK_OFFSET = STRIKER_CREASE_Z + 0.3 - STANCE_Z;
+const PAD_OFFSET = STRIKER_CREASE_Z + 0.45 - STANCE_Z;
+/** How far a batter charges down the pitch. */
+export const CHARGE_DISTANCE = 1.9;
+
+/** Seconds a side has to ask for a review. */
+export const REVIEW_WINDOW = 6;
+/** Seconds the ball-tracking replay is shown before the decision. */
+export const REVIEW_SHOW = 4.5;
+/** Height (m) above which a short ball counts as a bouncer at the popping crease. */
+const SHOULDER_HEIGHT = 1.45;
+
+/** A decision waiting on a possible review. */
+export interface PendingReview {
+  /** Team that may review. */
+  team: 0 | 1;
+  tracking: BallTracking;
+  onFieldOut: boolean;
+  reviewing: boolean;
+  startedAt: number;
+}
+
+/** Per-team field choice: automatic (AI captain) or a chosen setting per bowler type. */
+interface TeamField {
+  auto: boolean;
+  pace: FieldSetting | null;
+  spin: FieldSetting | null;
+}
 
 export class CricketMatch {
   readonly cfg: MatchConfig;
@@ -129,13 +173,41 @@ export class CricketMatch {
   running!: Running;
   private stumpsDown = { S: false, B: false };
   private lbwNote = '';
+  /** Fielder indices that have touched the ball this delivery. */
+  private touchers = new Set<number>();
+  /** The batter committed to advancing down the pitch this ball. */
+  charged = false;
+  /** Field in use for the current ball (after restrictions). */
+  activeField!: FieldSetting;
+  /** LBW appeal on this ball: tracking data and the on-field decision. */
+  lbwAppeal: { tracking: BallTracking; onFieldOut: boolean } | null = null;
+  pendingReview: PendingReview | null = null;
+  /** Reviews remaining this innings per team. */
+  reviewsLeft: [number, number] = [0, 0];
+  /** A throw has been made this ball (for overthrows). */
+  private thrown = false;
+  private throwMinDist = Infinity;
+  /** Sampled path of the delivery until it is played (for ball tracking). */
+  private deliveryPath: Vec3[] = [];
+  private bouncerCounted = false;
+  /** Number of super overs played (pairs). */
+  superOvers = 0;
+  /** Fielding control per team (initialised from the config, changed by admin commands). */
+  fieldingModes!: [FieldingControlMode, FieldingControlMode];
+  private teamFields: [TeamField, TeamField] = [
+    { auto: true, pace: null, spin: null },
+    { auto: true, pace: null, spin: null },
+  ];
 
   constructor(cfg: MatchConfig) {
     this.cfg = cfg;
     this.rng = new Rng(cfg.seed);
+    this.fieldingModes = [cfg.fieldingControl?.[0] ?? 'auto', cfg.fieldingControl?.[1] ?? 'auto'];
     const batting = cfg.battingFirst;
-    this.innings.push(newInnings(batting, this.pickBowler(null, 1 - batting), null));
+    this.innings.push(newInnings(batting, this.pickBowler(null, 1 - batting), null, cfg.rules, { order: this.orderFor(batting) }));
+    this.resetReviews();
     this.setupBall();
+    if ((cfg.introSeconds ?? 0) > 0) this.phase = 'intro';
   }
 
   // ---------------------------------------------------------------- queries
@@ -186,23 +258,75 @@ export class CricketMatch {
 
   // ---------------------------------------------------------------- set-up
 
+  private orderFor(team: number): number[] {
+    const n = this.cfg.teams[team]!.players.length;
+    const given = this.cfg.battingOrders?.[team];
+    const valid = given && given.length === n && new Set(given).size === n && given.every((p) => Number.isInteger(p) && p >= 0 && p < n);
+    return valid ? [...given] : Array.from({ length: n }, (_, i) => i);
+  }
+
+  private resetReviews(): void {
+    const r = this.cfg.rules.reviewsPerInnings;
+    this.reviewsLeft = [r, r];
+  }
+
   private pickBowler(inn: InningsState | null, bowlingTeam: number): number {
     const team = this.cfg.teams[bowlingTeam]!;
-    const opts = bowlingOptions(team);
-    if (!inn) return opts[0]!;
-    const legal = opts.filter((p) => canBowl(inn, p, this.cfg.rules));
-    const pool = legal.length ? legal : team.players.map((_, i) => i).filter((p) => p !== inn.lastOverBowler);
-    // Fewest balls bowled first, then best rating (already sorted by rating).
-    let best = pool[0]!;
-    let bestBalls = Infinity;
-    for (const p of pool) {
-      const balls = inn.bowlers.find((b) => b.player === p)?.balls ?? 0;
-      if (balls < bestBalls) {
-        bestBalls = balls;
-        best = p;
-      }
+    if (!inn) {
+      // Open with the best pace bowler.
+      const opts = bowlingOptions(team);
+      return opts.find((p) => team.players[p]!.bowlStyle === 'fast') ?? opts[0]!;
     }
-    return best;
+    return chooseBowler(team, inn, this.cfg.rules);
+  }
+
+  /** Bowlers the bowling side may pick for the next over. */
+  eligibleBowlers(): number[] {
+    const inn = this.inn;
+    return this.bowlingTeam.players.map((_, i) => i).filter((p) => canBowl(inn, p, this.cfg.rules));
+  }
+
+  get fieldKind(): FieldKind {
+    const st = this.bowlerDef.bowlStyle;
+    return st === 'offspin' || st === 'legspin' ? 'spin' : 'pace';
+  }
+
+  /** Max fielders allowed outside the circle right now. */
+  get maxOutside(): number {
+    return maxOutsideForOver(this.cfg.rules, Math.floor(this.inn.legalBalls / this.cfg.rules.ballsPerOver));
+  }
+
+  /** Whether the bowling side's field is chosen automatically. */
+  fieldIsAuto(team: 0 | 1): boolean {
+    return this.teamFields[team].auto;
+  }
+
+  /** The field the bowling side wants (before restrictions are enforced). */
+  private desiredField(): FieldSetting {
+    const tf = this.teamFields[this.inn.bowlingTeam as 0 | 1];
+    const kind = this.fieldKind;
+    const chosen = kind === 'pace' ? tf.pace : tf.spin;
+    if (!tf.auto && chosen) return chosen;
+    const inn = this.inn;
+    return adaptField(chooseField(kind, inn, this.cfg.rules), inn, inn.batters[inn.striker]!.player);
+  }
+
+  private buildFielding(): void {
+    const inn = this.inn;
+    const bowler = this.bowlerDef;
+    const side = deliverySide(bowler.bowlArm, this.intent.side);
+    this.activeField = legalizeField(this.desiredField(), this.maxOutside);
+    const bowlTeam = this.bowlingTeam;
+    this.fielding = new FieldingUnit(
+      bowlTeam.players,
+      inn.currentBowler,
+      keeperIndex(bowlTeam),
+      this.activeField,
+      this.strikerDef.batHand,
+      v3(0.9 * side, 0, BOWLER_CREASE_Z + 0.6),
+    );
+    const ctl = this.fieldingModes[inn.bowlingTeam as 0 | 1];
+    this.fielding.human = ctl === 'auto' ? null : newHumanFielding(ctl);
   }
 
   /** Prepare actors and ball for the next delivery. */
@@ -228,27 +352,25 @@ export class CricketMatch {
     this.contactTime = -Infinity;
     this.stumpsDown = { S: false, B: false };
     this.lbwNote = '';
-    const armSide = bowler.bowlArm === 'R' ? 1 : -1;
-    this.ball = makeBall(v3(0.32 * armSide, 1.0, BOWLER_STUMPS_Z - 12), v3());
+    this.touchers.clear();
+    this.charged = false;
+    this.lbwAppeal = null;
+    this.pendingReview = null;
+    this.thrown = false;
+    this.bouncerCounted = false;
+    this.deliveryPath = [];
+    const side = deliverySide(bowler.bowlArm, this.intent.side);
+    this.ball = makeBall(v3(0.32 * side, 1.0, BOWLER_STUMPS_Z - 12), v3());
     const inn = this.inn;
     const bat = this.battingTeam;
     const sp = inn.batters[inn.striker]!.player;
     const np = inn.batters[inn.nonStriker]!.player;
     this.running = new Running(
       { player: sp, def: bat.players[sp]!, pos: runnerStart.striker(this.offS) },
-      { player: np, def: bat.players[np]!, pos: runnerStart.nonStriker(armSide) },
+      { player: np, def: bat.players[np]!, pos: runnerStart.nonStriker(side) },
       this.offS,
     );
-    const isSpin = bowler.bowlStyle === 'offspin' || bowler.bowlStyle === 'legspin';
-    const bowlTeam = this.bowlingTeam;
-    this.fielding = new FieldingUnit(
-      bowlTeam.players,
-      inn.currentBowler,
-      keeperIndex(bowlTeam),
-      isSpin ? SPIN_FIELD : PACE_FIELD,
-      this.strikerDef.batHand,
-      v3(0.9 * armSide, 0, BOWLER_CREASE_Z + 0.6),
-    );
+    this.buildFielding();
   }
 
   private isIntentFor(p: PlayerDef): boolean {
@@ -262,9 +384,30 @@ export class CricketMatch {
 
   runUpStart(): Vec3 {
     const bowler = this.bowlerDef;
-    const armSide = bowler.bowlArm === 'R' ? 1 : -1;
+    const side = deliverySide(bowler.bowlArm, this.intent.side);
     const len = bowler.bowlStyle === 'fast' ? 20 : bowler.bowlStyle === 'medium' ? 14 : 6;
-    return v3(0.9 * armSide, 0, BOWLER_CREASE_Z - len);
+    return v3(0.9 * side, 0, BOWLER_CREASE_Z - len);
+  }
+
+  /** Where the striker will be standing when the ball arrives (accounts for a charge). */
+  batterZ(): number {
+    const s = this.running.striker;
+    return s.chargeTo ?? (this.charged ? s.pos.z : STANCE_Z);
+  }
+
+  /** Contact plane for a stroke and footwork, relative to the batter's position. */
+  planeFor(stroke: Stroke, footwork: Footwork = 'auto'): number {
+    return this.batterZ() + (isBackFoot(stroke, footwork) ? BACK_OFFSET : FRONT_OFFSET);
+  }
+
+  /** Front-foot contact plane (used to read the ball). */
+  get frontPlane(): number {
+    return this.batterZ() + FRONT_OFFSET;
+  }
+
+  /** Distance of a bounce point in front of where the batter is standing. */
+  private bounceFromBatter(bounceZ: number): number {
+    return bounceDistance(bounceZ) - (STANCE_Z - this.batterZ());
   }
 
   // ---------------------------------------------------------------- commands
@@ -275,6 +418,7 @@ export class CricketMatch {
    * local or networked, human or AI.
    */
   command(src: CommandSource, c: Command): boolean {
+    if (!isWellFormedCommand(c)) return false;
     const inn = this.inn;
     const batting = src.team === inn.battingTeam;
     const bowling = src.team === inn.bowlingTeam;
@@ -285,7 +429,15 @@ export class CricketMatch {
         if (!Number.isFinite(i.line) || !Number.isFinite(i.length)) return false;
         const allowed = this.isIntentAllowed(i);
         if (!allowed) return false;
-        this.intent = { variation: i.variation, line: Math.max(-2, Math.min(2, i.line)), length: Math.max(-1, Math.min(14, i.length)) };
+        const side = this.phase === 'runUp' ? this.intent.side ?? 'over' : i.side === 'round' ? 'round' : 'over';
+        this.intent = { variation: i.variation, line: Math.max(-2, Math.min(2, i.line)), length: Math.max(-1, Math.min(14, i.length)), side };
+        if (this.phase === 'preDelivery') {
+          // Non-striker backs up on the opposite side to the bowler.
+          const ns = this.running.nonStriker;
+          ns.pos.x = runnerStart.nonStriker(deliverySide(this.bowlerDef.bowlArm, side)).x;
+          this.fielding.bowler.pos.x = 0.9 * deliverySide(this.bowlerDef.bowlArm, side);
+          this.fielding.bowler.home.x = this.fielding.bowler.pos.x;
+        }
         return true;
       }
       case 'bowl.start':
@@ -295,10 +447,33 @@ export class CricketMatch {
         return true;
       case 'bowl.release':
         if (!bowling || this.phase !== 'runUp') return false;
-        this.release(this.runUpTime - this.runUpDuration);
+        this.release(Math.max(0, this.runUpTime - this.rewind(c.at)) - this.runUpDuration);
         return true;
       case 'bat.shot':
-        return batting && this.startSwing(c.shot);
+        return batting && this.startSwing(c.shot, this.rewind(c.at));
+      case 'bat.charge': {
+        if (!batting || this.charged) return false;
+        if (this.phase !== 'runUp' && !(this.phase === 'inPlay' && !this.swing && !this.batContact && this.ball.pos.z < -2)) return false;
+        this.charged = true;
+        this.running.charge(CHARGE_DISTANCE);
+        return true;
+      }
+      case 'field.set': {
+        if (!bowling || !(this.phase === 'preDelivery' || this.phase === 'dead' || this.phase === 'inningsBreak')) return false;
+        const tf = this.teamFields[src.team];
+        if (c.auto) {
+          tf.auto = true;
+        } else {
+          const kind: FieldKind = c.kind === 'spin' ? 'spin' : 'pace';
+          const f = c.preset ? fieldPreset(c.preset) : sanitizeField(c.field, kind);
+          if (!f || f.kind !== kind) return false;
+          tf.auto = false;
+          if (kind === 'pace') tf.pace = f;
+          else tf.spin = f;
+        }
+        if (this.phase === 'preDelivery') this.buildFielding();
+        return true;
+      }
       case 'run.call': {
         if (!batting || this.phase !== 'inPlay') return false;
         if (c.call !== 'run' && c.call !== 'wait' && c.call !== 'back') return false;
@@ -317,11 +492,90 @@ export class CricketMatch {
         return true;
       }
       case 'match.continue':
+        if (this.phase === 'intro') {
+          this.setPhase('preDelivery');
+          return true;
+        }
         if (this.phase !== 'inningsBreak') return false;
-        this.startSecondInnings();
+        this.startNextInnings();
+        return true;
+      case 'review': {
+        const pr = this.pendingReview;
+        if (this.phase !== 'review' || !pr || pr.reviewing || src.team !== pr.team) return false;
+        if (this.reviewsLeft[pr.team] <= 0) return false;
+        pr.reviewing = true;
+        pr.startedAt = this.phaseTime;
+        this.emit({ type: 'reviewStarted', team: pr.team, tracking: pr.tracking, onFieldOut: pr.onFieldOut });
+        return true;
+      }
+      case 'field.move':
+      case 'field.switch':
+      case 'field.dive':
+      case 'field.throw':
+      case 'field.catch':
+        return bowling && this.fieldingCommand(c);
+      case 'admin.fieldingControl': {
+        if (!src.admin) return false;
+        if ((c.team !== 0 && c.team !== 1) || !['auto', 'assisted', 'manual'].includes(c.mode)) return false;
+        this.fieldingModes[c.team] = c.mode;
+        // Takes effect immediately if that side is fielding now.
+        if (c.team === inn.bowlingTeam) {
+          if (c.mode === 'auto') this.fielding.human = null;
+          else if (!this.fielding.human) this.fielding.human = newHumanFielding(c.mode);
+          else this.fielding.human.mode = c.mode;
+        }
+        return true;
+      }
+      case 'batter.select': {
+        if (!batting || !(this.phase === 'dead' || this.phase === 'preDelivery' || this.phase === 'review')) return false;
+        if (!Number.isInteger(c.player)) return false;
+        if (!substituteNewBatter(inn, c.player)) return false;
+        if (this.phase === 'preDelivery') this.setupBall();
+        this.emit({ type: 'newBatter', player: c.player });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private fieldingCommand(c: Command): boolean {
+    const h = this.fielding.human;
+    if (!h || this.phase !== 'inPlay') return false;
+    switch (c.type) {
+      case 'field.move': {
+        const x = Number(c.x);
+        const z = Number(c.z);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) return false;
+        const m = Math.hypot(x, z);
+        h.move = m > 1 ? { x: x / m, z: z / m } : { x, z };
+        return true;
+      }
+      case 'field.switch':
+        if (c.to === 'nearest') this.fielding.switchToNearest(this.ball.pos);
+        else if (c.to === 'auto' && this.fielding.chaser >= 0) h.controlled = this.fielding.chaser;
+        else return false;
+        return true;
+      case 'field.dive':
+        return this.fielding.dive(this.ball.pos);
+      case 'field.throw':
+        if (c.end !== 'S' && c.end !== 'B' && c.end !== 'auto') return false;
+        h.throwRequest = c.end;
+        h.throwRequestAt = this.time;
+        return true;
+      case 'field.catch':
+        h.catchPressAt = this.time - this.rewind(c.at);
         return true;
     }
     return false;
+  }
+
+  /**
+   * Seconds to back-date an input stamped with tick `at` (the tick the player
+   * saw when pressing). Bounded so a client cannot reach far into the past.
+   */
+  private rewind(at: number | undefined): number {
+    if (at === undefined || !Number.isInteger(at) || at > this.tick) return 0;
+    return Math.min(this.cfg.maxInputRewind ?? 0.3, (this.tick - at) * DT);
   }
 
   private isIntentAllowed(i: BowlIntent): boolean {
@@ -335,15 +589,22 @@ export class CricketMatch {
   private release(releaseError: number): void {
     const bowler = this.bowlerDef;
     const bowlTeam = this.inn.bowlingTeam;
-    const plan = planDelivery(bowler, this.strikerDef.batHand, this.intent, releaseError, this.cfg.conditions, this.rng, this.cfg.assist[bowlTeam]);
+    const plan = planDelivery(bowler, this.strikerDef.batHand, this.intent, releaseError, this.cfg.conditions, this.rng, this.cfg.assist[bowlTeam], {
+      ballAge: this.ballAge,
+    });
     this.delivery = plan;
     this.ball = cloneBall(plan.ball);
     this.noBall = plan.noBall;
     this.setPhase('inPlay');
     this.fielding.onRelease();
     this.fielding.plan(this.fieldCtx());
-    this.emit({ type: 'release', speedKmh: plan.speedKmh, variation: plan.variation, noBall: plan.noBall, releaseError });
+    this.emit({ type: 'release', speedKmh: plan.speedKmh, variation: plan.variation, noBall: plan.noBall, releaseError, reverse: plan.reverse });
     if (plan.noBall) this.emit({ type: 'noBall', reason: 'Overstepped' });
+  }
+
+  /** Overs bowled with this ball (drives swing decay and reverse swing). */
+  get ballAge(): number {
+    return this.inn.legalBalls / this.cfg.rules.ballsPerOver;
   }
 
   /** Predict the ball as it will arrive at a given plane (from the current state). */
@@ -358,7 +619,7 @@ export class CricketMatch {
         const f = (planeZ - a.pos.z) / (b.pos.z - a.pos.z);
         const pos = lerp(a.pos, b.pos, f);
         const vel = v3((b.pos.x - a.pos.x) / DT, (b.pos.y - a.pos.y) / DT, (b.pos.z - a.pos.z) / DT);
-        return { pos, vel, bounceDist: bounceZ === null ? null : bounceDistance(bounceZ) };
+        return { pos, vel, bounceDist: bounceZ === null ? null : this.bounceFromBatter(bounceZ) };
       }
     }
     return null;
@@ -375,28 +636,27 @@ export class CricketMatch {
     return null;
   }
 
-  static planeFor(stroke: string): number {
-    return BACK_FOOT.has(stroke) ? BACK_PLANE : FRONT_PLANE;
-  }
 
-  private startSwing(shot: ShotInput): boolean {
+  private startSwing(shot: ShotInput, rewind = 0): boolean {
     if (this.phase !== 'inPlay' || this.swing || this.batContact || this.padContact || this.passedBatter) return false;
     if (!['defend', 'ground', 'lofted', 'sweep', 'reverseSweep'].includes(shot.family)) return false;
     const aimX = Math.max(-1, Math.min(1, Number(shot.aimX) || 0));
     const aimY = Math.max(-1, Math.min(1, Number(shot.aimY) || 0));
-    const input: ShotInput = { family: shot.family, aimX, aimY };
-    if (this.ball.pos.z > FRONT_PLANE) return false;
+    const footwork: Footwork = shot.footwork === 'front' || shot.footwork === 'back' ? shot.footwork : 'auto';
+    const input: ShotInput = { family: shot.family, aimX, aimY, footwork };
+    const front = this.frontPlane;
+    if (this.ball.pos.z > front) return false;
     // The batter commits to a stroke based on how they read the ball.
-    const read = this.predictAtPlane(FRONT_PLANE);
+    const read = this.predictAtPlane(front);
     if (!read) return false;
     const stroke = chooseStroke(input, this.strikerDef.batHand, read);
-    const planeZ = CricketMatch.planeFor(stroke);
-    const readAtPlane = planeZ === FRONT_PLANE ? read : this.predictAtPlane(planeZ) ?? read;
+    const planeZ = this.planeFor(stroke, footwork);
+    const readAtPlane = planeZ === front ? read : this.predictAtPlane(planeZ) ?? read;
     this.swing = {
       input,
       stroke,
-      pressTime: this.time,
-      contactTime: this.time + SWING_TIME[input.family],
+      pressTime: this.time - rewind,
+      contactTime: this.time - rewind + SWING_TIME[input.family],
       planeZ,
       resolved: false,
       read: { ...readAtPlane.pos },
@@ -413,22 +673,33 @@ export class CricketMatch {
     this.time += DT;
     this.phaseTime += DT;
     switch (this.phase) {
+      case 'intro':
+        if (this.phaseTime >= (this.cfg.introSeconds ?? 0)) this.setPhase('preDelivery');
+        break;
       case 'preDelivery':
         break;
       case 'runUp':
         this.runUpTime += DT;
+        if (this.charged) this.running.update(DT); // batter advancing while the bowler runs in
         // Nobody pressed release: auto-release late (legal, but inaccurate).
-        if (this.runUpTime >= this.runUpDuration + 0.1) this.release(0.1);
+        if (this.runUpTime >= this.runUpDuration + 0.1 + (this.cfg.netGrace ?? 0)) this.release(0.1);
         break;
       case 'inPlay':
         this.stepInPlay();
         break;
+      case 'review': {
+        const pr = this.pendingReview!;
+        if (pr.reviewing) {
+          if (this.phaseTime - pr.startedAt >= REVIEW_SHOW) this.resolveReview();
+        } else if (this.phaseTime >= REVIEW_WINDOW) this.finalizeBall(this.buildOutcome());
+        break;
+      }
       case 'dead':
         this.deadTimer -= DT;
         if (this.deadTimer <= 0) this.afterBall();
         break;
       case 'inningsBreak':
-        if (this.cfg.autoContinueAfter !== null && this.phaseTime >= this.cfg.autoContinueAfter) this.startSecondInnings();
+        if (this.cfg.autoContinueAfter !== null && this.phaseTime >= this.cfg.autoContinueAfter) this.startNextInnings();
         break;
       case 'complete':
         break;
@@ -448,6 +719,7 @@ export class CricketMatch {
       keeperOnly: !(this.batContact || this.padContact || this.passedBatter),
       catchesDismiss: !this.noBall && !freeHit,
       sinceContact: this.batContact ? this.time - this.contactTime : Infinity,
+      time: this.time,
     };
   }
 
@@ -472,8 +744,14 @@ export class CricketMatch {
           if (!this.batContact && !this.passedBatter) this.emit({ type: 'bounce', pos: e.pos, onPitch: e.onPitch });
         }
       }
+      if (!this.batContact && !this.padContact && this.tick % 2 === 0) this.deliveryPath.push({ ...p1 });
       this.deliveryChecks(p0, p1, t0);
       if (this.phase !== 'inPlay') return;
+      // A charging batter stops once the ball has been played or has gone past.
+      const st = this.running.striker;
+      if (st.chargeTo !== null && (this.batContact || this.padContact || this.touched || this.swing?.resolved || this.ball.pos.z > st.pos.z + 0.3)) {
+        this.running.endCharge(this.batContact ? 0.1 : 0.2);
+      }
       // Thrown ball hitting the stumps directly.
       if (f.throwEnd !== null) {
         for (const end of ['S', 'B'] as End[]) {
@@ -482,9 +760,15 @@ export class CricketMatch {
             if (this.phase !== 'inPlay') return;
           }
         }
+        // "Past" = it came to the stumps and is now clearly going away (throws can come from any direction).
         const target = v3(0, 0, f.throwEnd === 'S' ? STRIKER_STUMPS_Z : BOWLER_STUMPS_Z);
-        const past = f.throwEnd === 'S' ? ball.pos.z > target.z + 3 : ball.pos.z < target.z - 3;
-        if (past || ball.stopped || (ball.rolling && Math.hypot(ball.vel.x, ball.vel.z) < 4)) f.throwMissed(this.fieldCtx());
+        const dist = Math.hypot(ball.pos.x - target.x, ball.pos.z - target.z);
+        this.throwMinDist = Math.min(this.throwMinDist, dist);
+        const past = this.throwMinDist < 6 && dist > this.throwMinDist + 2.5;
+        if (past || ball.stopped || (ball.rolling && Math.hypot(ball.vel.x, ball.vel.z) < 4)) {
+          if (past && (this.running.inRun || this.running.wantRun)) this.emit({ type: 'overthrow' });
+          f.throwMissed(this.fieldCtx());
+        }
       }
       // Boundary.
       if (lengthXZ(ball.pos) >= BOUNDARY_RADIUS) {
@@ -526,6 +810,23 @@ export class CricketMatch {
       }
     }
 
+    // Short-pitched ball above shoulder height: only `bouncersPerOver` allowed.
+    if (!this.batContact && !this.bouncerCounted && ball.bounces >= 1) {
+      const fr = crossed(STRIKER_CREASE_Z);
+      if (fr !== null) {
+        const y = lerp(p0, p1, fr).y;
+        if (y > SHOULDER_HEIGHT && y <= 1.95) {
+          this.bouncerCounted = true;
+          const inn = this.inn;
+          inn.bouncersThisOver++;
+          const over = inn.bouncersThisOver > this.cfg.rules.bouncersPerOver && !this.noBall;
+          if (over) this.noBall = true;
+          this.emit({ type: 'bouncer', count: inn.bouncersThisOver, noBall: over });
+          if (over) this.emit({ type: 'noBall', reason: 'Second bouncer in the over' });
+        }
+      }
+    }
+
     // Bat-ball contact at the stroke's plane.
     const sw = this.swing;
     if (sw && !sw.resolved && !this.batContact && !this.padContact) {
@@ -537,7 +838,7 @@ export class CricketMatch {
         const atBat: BallAtBat = {
           pos,
           vel: { ...ball.vel },
-          bounceDist: this.firstBounce ? bounceDistance(this.firstBounce.z) : null,
+          bounceDist: this.firstBounce ? this.bounceFromBatter(this.firstBounce.z) : null,
         };
         const res = resolveContact({
           batter: this.strikerDef,
@@ -549,6 +850,7 @@ export class CricketMatch {
           assist: this.cfg.assist[this.inn.battingTeam],
           rng: this.rng,
           readError: { x: sw.read.x - pos.x, y: sw.read.y - pos.y },
+          footworkFit: footworkFit(sw.input.footwork, atBat),
         });
         this.contact = res;
         this.emit({ type: 'shot', result: res });
@@ -572,7 +874,7 @@ export class CricketMatch {
 
     // Pads (and LBW).
     if (!this.batContact && !this.padContact && !this.passedBatter) {
-      const fr = crossed(PAD_PLANE);
+      const fr = crossed(this.batterZ() + PAD_OFFSET);
       if (fr !== null) {
         const pos = lerp(p0, p1, fr);
         const stroke = this.swing?.stroke;
@@ -617,34 +919,22 @@ export class CricketMatch {
   private onPadHit(pos: Vec3): void {
     const ball = this.ball;
     this.padContact = true;
-    const offS = this.offS;
-    const played = !!this.swing;
-    let out = false;
-    let reason = '';
-    const half = STUMPS_HALF_WIDTH + BALL_RADIUS;
-    if (!this.cfg.rules.lbw) reason = 'LBW disabled';
-    else if (this.noBall || this.inn.freeHit) reason = this.noBall ? 'No ball' : 'Free hit';
-    else if (this.firstBounce && this.firstBounce.x * offS < -half) reason = 'Pitched outside leg';
-    else if (pos.x * offS < -half) reason = 'Impact outside leg';
-    else if (pos.x * offS > half && played) reason = 'Impact outside off';
-    else {
-      // Would it have gone on to hit the stumps?
-      const ghost = cloneBall(ball);
-      ghost.pos = { ...pos };
-      const traj = predictTrajectory(ghost, this.cfg.conditions, 0.3, DT);
-      let hit = false;
-      for (let i = 1; i < traj.length && !hit; i++) hit = !!segmentHitsStumps(traj[i - 1]!.pos, traj[i]!.pos, STRIKER_STUMPS_Z);
-      out = hit;
-      reason = hit ? 'Hitting the stumps' : 'Missing the stumps';
+    const canAppeal = this.cfg.rules.lbw && !this.noBall && !this.inn.freeHit;
+    if (canAppeal) {
+      const tracking = trackLbw(ball, pos, this.firstBounce, this.offS, !!this.swing, this.cfg.conditions, this.deliveryPath);
+      const onFieldOut = umpireDecision(tracking, this.rng);
+      this.lbwAppeal = { tracking, onFieldOut };
+      this.lbwNote = onFieldOut ? '' : 'LBW appeal turned down';
+      this.emit({ type: 'padHit', lbw: onFieldOut, reason: onFieldOut ? 'Given out LBW' : 'Not out', appeal: true });
+    } else {
+      this.emit({ type: 'padHit', lbw: false, reason: this.noBall ? 'No ball' : 'Free hit', appeal: false });
     }
-    this.lbwNote = reason;
-    this.emit({ type: 'padHit', lbw: out, reason });
     ball.pos = { ...pos };
     ball.vel = v3(this.rng.gauss() * 1.6, 0.6 + this.rng.next(), 1.2 + this.rng.next() * 1.5);
     ball.spin = v3();
     ball.swing = 0;
     ball.rolling = false;
-    if (out) {
+    if (this.lbwAppeal?.onFieldOut) {
       this.wicket = { kind: 'lbw', who: 'striker' };
       this.ballDead();
       return;
@@ -657,6 +947,7 @@ export class CricketMatch {
     switch (e.type) {
       case 'catch':
         this.touched = true;
+        this.touchers.add(f.idx);
         this.wicket = { kind: 'caught', who: 'striker', fielder: f.player };
         this.emit({ type: 'catchTaken', fielder: f.player, name: f.name });
         this.bumpCatch(this.inn.bowlingTeam, f.player);
@@ -664,13 +955,17 @@ export class CricketMatch {
         return;
       case 'drop':
         this.touched = true;
+        this.touchers.add(f.idx);
         this.emit({ type: 'dropped', fielder: f.player, name: f.name });
         return;
       case 'collect':
         this.touched = true;
+        this.touchers.add(f.idx);
         this.emit({ type: 'fielded', fielder: f.player });
         return;
       case 'throw':
+        this.thrown = true;
+        this.throwMinDist = Infinity;
         this.emit({ type: 'throw', fielder: f.player, end: e.end === 'S' ? 'striker' : 'bowler' });
         return;
       case 'breakStumps':
@@ -689,28 +984,81 @@ export class CricketMatch {
     this.stumpsDown[end] = true;
     this.emit({ type: 'stumpsHit', end: end === 'S' ? 'striker' : 'bowler' });
     const fielder = this.fielding.fielders[fielderIdx];
+    // Stumping: the keeper alone takes the ball and breaks the wicket while the
+    // striker is out of ground and not attempting a run (possible off a wide, not a no-ball).
+    const s = this.running.striker;
+    const keeperOnly = this.touchers.size === 1 && this.touchers.has(0);
+    if (
+      end === 'S' && fielder?.role === 'keeper' && keeperOnly && !this.batContact && !this.running.inRun &&
+      !this.running.wantRun && !inGroundAt(s, 'S') && !this.noBall && !direct
+    ) {
+      this.wicket = { kind: 'stumped', who: 'striker', fielder: fielder.player };
+      this.ballDead();
+      return;
+    }
     const r = this.running.runnerForEnd(end);
     if (r && !inGroundAt(r, end)) {
       this.wicket = { kind: 'runOut', who: r.who, fielder: fielder?.player };
       if (fielder) this.bumpCatch(this.inn.bowlingTeam, fielder.player);
-      this.ballDead();
-      return;
-    }
-    // Stumping: keeper takes a missed delivery with the striker out of ground.
-    const s = this.running.striker;
-    if (end === 'S' && fielder?.role === 'keeper' && !this.batContact && !this.running.inRun && !inGroundAt(s, 'S') && !this.noBall) {
-      this.wicket = { kind: 'stumped', who: 'striker', fielder: fielder.player };
       this.ballDead();
     }
   }
 
   // ---------------------------------------------------------------- ball end
 
+  /** The ball is dead: open a review window if a decision can be challenged, else score it. */
   private ballDead(): void {
     if (this.phase !== 'inPlay') return;
+    const a = this.lbwAppeal;
+    const inn = this.inn;
+    let team: 0 | 1 | null = null;
+    if (a && a.onFieldOut && this.wicket?.kind === 'lbw') team = inn.battingTeam as 0 | 1;
+    else if (a && !a.onFieldOut && !this.wicket) team = inn.bowlingTeam as 0 | 1;
+    if (team !== null && a && this.reviewsLeft[team] > 0) {
+      this.pendingReview = { team, tracking: a.tracking, onFieldOut: a.onFieldOut, reviewing: false, startedAt: 0 };
+      this.setPhase('review');
+      this.emit({ type: 'reviewAvailable', team, onFieldOut: a.onFieldOut });
+      return;
+    }
+    this.finalizeBall(this.buildOutcome());
+  }
+
+  private resolveReview(): void {
+    const pr = this.pendingReview!;
+    const out = reviewedDecision(pr.tracking, pr.onFieldOut);
+    const overturned = out !== pr.onFieldOut;
+    const umpiresCall = pr.tracking.verdict === 'umpiresCall';
+    if (!overturned && !umpiresCall) this.reviewsLeft[pr.team]--;
+    this.emit({ type: 'reviewResult', team: pr.team, out, overturned, umpiresCall, tracking: pr.tracking, reviewsLeft: this.reviewsLeft[pr.team] });
+    let outcome = this.buildOutcome();
+    if (overturned) {
+      // Either way the ball was dead at the moment of the LBW decision: nothing after it counts.
+      const extra: BallOutcome['extra'] = this.noBall ? 'noBall' : this.wide ? 'wide' : 'none';
+      if (out) {
+        this.wicket = { kind: 'lbw', who: 'striker' };
+        outcome = { batRuns: 0, extra, extraRuns: 0, boundary: 0, wicket: { kind: 'lbw', who: 'striker' }, atStrikerEnd: 'striker' };
+      } else {
+        this.wicket = null;
+        this.lbwNote = 'Overturned on review';
+        outcome = { batRuns: 0, extra, extraRuns: 0, boundary: 0, atStrikerEnd: 'striker' };
+      }
+    }
+    this.finalizeBall(outcome);
+  }
+
+  /** Apply a ball's outcome to the scorecard and start the between-balls pause. */
+  private finalizeBall(outcome: BallOutcome): void {
+    // Record the delivery and shot for charts and commentary.
+    // Balls played on the full use the intended pitching point.
+    const pitched = this.firstBounce ?? this.delivery?.aim;
+    if (pitched) outcome.pitch = { line: pitched.x * this.offS, length: STRIKER_STUMPS_Z - pitched.z, ...(this.firstBounce ? {} : { full: true }) };
+    if (this.delivery) {
+      outcome.speedKmh = this.delivery.speedKmh;
+      outcome.variation = this.delivery.variation;
+    }
+    if (this.contact) outcome.shot = { stroke: this.contact.stroke, timing: this.contact.timing, outcome: this.contact.outcome, lofted: this.contact.lofted };
     this.setPhase('dead');
     this.deadTimer = this.cfg.rules.betweenBallsDelay + (this.wicket ? 1.2 : 0) + (this.boundary ? 0.6 : 0);
-    const outcome = this.buildOutcome();
     const inn = this.inn;
     const text = this.wicket ? this.dismissalText(this.wicket) : undefined;
     const outBatter = this.wicket ? inn.batters[this.wicket.who === 'striker' ? inn.striker : inn.nonStriker]!.player : -1;
@@ -723,8 +1071,11 @@ export class CricketMatch {
   }
 
   private buildOutcome(): BallOutcome {
+    // Overthrow boundaries add the runs completed (and the one in progress if the batters have crossed).
+    const crossed = this.running.crossedInProgress() ? 1 : 0;
+    const overthrowRuns = this.boundary === 4 && this.thrown ? this.running.completed + crossed : 0;
     const runs = this.boundary ? 0 : this.running.completed;
-    const scored = this.boundary || runs;
+    const scored = this.boundary ? this.boundary + overthrowRuns : runs;
     let extra: BallOutcome['extra'] = 'none';
     if (this.noBall) extra = 'noBall';
     else if (this.wide) extra = 'wide';
@@ -732,7 +1083,7 @@ export class CricketMatch {
     const batRuns = this.batContact ? scored : 0;
     const extraRuns = this.batContact ? 0 : scored;
     let atStrikerEnd: 'striker' | 'nonStriker';
-    if (this.boundary) atStrikerEnd = this.running.completed % 2 === 0 ? 'striker' : 'nonStriker';
+    if (this.boundary) atStrikerEnd = overthrowRuns % 2 === 0 ? 'striker' : 'nonStriker';
     else atStrikerEnd = this.running.atStrikerEnd();
     let wicket: BallOutcome['wicket'];
     if (this.wicket) {
@@ -743,7 +1094,12 @@ export class CricketMatch {
         atStrikerEnd = outR.to === 'S' ? this.wicket.who : survivor;
       }
     }
-    return { batRuns, extra, extraRuns, boundary: this.boundary, wicket, atStrikerEnd };
+    let shotAngle: number | undefined;
+    if (this.batContact && this.contact?.vel) {
+      const v = this.contact.vel;
+      shotAngle = (Math.atan2(v.x * this.offS, -v.z) * 180) / Math.PI;
+    }
+    return { batRuns, extra, extraRuns, boundary: this.boundary, wicket, atStrikerEnd, shotAngle };
   }
 
   private dismissalText(w: Wicket): string {
@@ -773,12 +1129,13 @@ export class CricketMatch {
       return `OUT! ${label}`;
     }
     if (o.boundary === 6) return `SIX! ${stroke}`.trim();
+    if (o.boundary === 4 && this.thrown && total > 4) return `Overthrows! ${total} runs`;
     if (o.boundary === 4) return o.extra === 'none' ? `FOUR! ${stroke}`.trim() : `FOUR ${o.extra === 'wide' ? 'wides' : o.extra === 'legBye' ? 'leg byes' : 'byes'}`;
     if (o.extra === 'wide') return total > 1 ? `Wide + ${total - 1}` : 'Wide';
     if (o.extra === 'noBall') return total > 1 ? `No ball + ${total - 1}` : 'No ball';
     if (o.extra === 'bye') return `${o.extraRuns} bye${o.extraRuns > 1 ? 's' : ''}`;
     if (o.extra === 'legBye') return `${o.extraRuns} leg bye${o.extraRuns > 1 ? 's' : ''}`;
-    if (total === 0) return this.lbwNote ? `Not out - ${this.lbwNote}` : 'Dot ball';
+    if (total === 0) return this.lbwNote ? `Dot ball - ${this.lbwNote}` : 'Dot ball';
     return `${total} run${total > 1 ? 's' : ''}`;
   }
 
@@ -787,9 +1144,9 @@ export class CricketMatch {
     const inn = this.inn;
     if (inn.complete) {
       this.emit({ type: 'inningsComplete', innings: this.inningsIndex });
-      if (this.inningsIndex === 0) {
-        this.setPhase('inningsBreak');
-      } else this.finishMatch();
+      // Even-numbered innings (0, 2, 4...) are followed by the chase.
+      if (this.inningsIndex % 2 === 0) this.setPhase('inningsBreak');
+      else this.finishMatch();
       return;
     }
     if (inn.thisOver.length > 0 && inn.legalBalls % this.cfg.rules.ballsPerOver === 0 && inn.log[inn.log.length - 1] && this.overJustEnded()) {
@@ -806,32 +1163,89 @@ export class CricketMatch {
     return last.outcome.extra !== 'wide' && last.outcome.extra !== 'noBall';
   }
 
-  private startSecondInnings(): void {
-    const first = this.innings[0]!;
-    const batting = first.bowlingTeam;
-    this.innings.push(newInnings(batting, this.pickBowler(null, 1 - batting), first.runs + 1));
-    this.inningsIndex = 1;
+  /** Whether the next innings (after a break) is a super over. */
+  get nextIsSuperOver(): boolean {
+    return this.innings.length >= 2 && this.innings.length % 2 === 0;
+  }
+
+  private startNextInnings(): void {
+    const prev = this.inn;
+    const rules = this.cfg.rules;
+    let inn: InningsState;
+    if (this.innings.length % 2 === 1) {
+      // The chase (of the match or of a super over).
+      const batting = prev.bowlingTeam;
+      const opener = prev.superOver ? this.bestBowler(1 - batting) : this.pickBowler(null, 1 - batting);
+      inn = newInnings(batting, opener, prev.runs + 1, rules, {
+        order: prev.superOver ? this.superOverOrder(batting) : this.orderFor(batting),
+        overs: prev.overs,
+        wicketLimit: prev.wicketLimit,
+        superOver: prev.superOver,
+      });
+    } else {
+      // Super over: the side that batted second in the tied pair bats first.
+      this.superOvers++;
+      const batting = prev.battingTeam;
+      inn = newInnings(batting, this.bestBowler(1 - batting), null, rules, {
+        order: this.superOverOrder(batting),
+        overs: 1,
+        wicketLimit: 2,
+        superOver: true,
+      });
+      this.emit({ type: 'superOver', index: this.superOvers });
+    }
+    this.innings.push(inn);
+    this.inningsIndex = this.innings.length - 1;
+    this.resetReviews();
+    if (inn.superOver) this.reviewsLeft = [Math.min(1, rules.reviewsPerInnings), Math.min(1, rules.reviewsPerInnings)];
     this.intent = undefined as unknown as BowlIntent;
     this.setupBall();
     this.setPhase('preDelivery');
   }
 
+  private bestBowler(team: number): number {
+    const t = this.cfg.teams[team]!;
+    const opts = bowlingOptions(t);
+    return opts.find((p) => t.players[p]!.bowlStyle === 'fast') ?? opts[0]!;
+  }
+
+  /** Three batters for a super over: the team's order, best batters first. */
+  private superOverOrder(team: number): number[] {
+    const t = this.cfg.teams[team]!;
+    const order = this.orderFor(team);
+    const top = [...order].sort((a, b) => t.players[b]!.attrs.batting + t.players[b]!.attrs.power * 0.5 - (t.players[a]!.attrs.batting + t.players[a]!.attrs.power * 0.5)).slice(0, 3);
+    return [...top, ...order.filter((p) => !top.includes(p))];
+  }
+
   private finishMatch(): void {
-    const [a, b] = this.innings as [InningsState, InningsState];
+    const b = this.inn;
+    const a = this.innings[this.inningsIndex - 1]!;
     const teamA = this.cfg.teams[a.battingTeam]!;
     const teamB = this.cfg.teams[b.battingTeam]!;
+    const so = b.superOver;
     if (b.runs >= (b.target ?? Infinity)) {
-      const wk = this.cfg.rules.playersPerSide - 1 - b.wickets;
-      const balls = this.cfg.rules.overs * this.cfg.rules.ballsPerOver - b.legalBalls;
       this.winner = b.battingTeam as 0 | 1;
-      this.result = `${teamB.name} won by ${wk} wicket${wk === 1 ? '' : 's'}${balls > 0 ? ` (${balls} ball${balls === 1 ? '' : 's'} left)` : ''}`;
+      if (so) this.result = `${teamB.name} won the Super Over`;
+      else {
+        const wk = b.wicketLimit - b.wickets;
+        const balls = b.overs * this.cfg.rules.ballsPerOver - b.legalBalls;
+        this.result = `${teamB.name} won by ${wk} wicket${wk === 1 ? '' : 's'}${balls > 0 ? ` (${balls} ball${balls === 1 ? '' : 's'} left)` : ''}`;
+      }
     } else if (b.runs === a.runs) {
+      if (this.cfg.rules.superOver && this.superOvers < 3) {
+        // Tied: decide it with a super over.
+        this.setPhase('inningsBreak');
+        return;
+      }
       this.winner = null;
-      this.result = 'Match tied';
+      this.result = so ? 'Match tied (Super Over tied)' : 'Match tied';
     } else {
-      const margin = a.runs - b.runs;
       this.winner = a.battingTeam as 0 | 1;
-      this.result = `${teamA.name} won by ${margin} run${margin === 1 ? '' : 's'}`;
+      if (so) this.result = `${teamA.name} won the Super Over`;
+      else {
+        const margin = a.runs - b.runs;
+        this.result = `${teamA.name} won by ${margin} run${margin === 1 ? '' : 's'}`;
+      }
     }
     this.playerOfMatch = this.computePlayerOfMatch();
     this.setPhase('complete');
@@ -871,6 +1285,15 @@ export class CricketMatch {
 
   // ---------------------------------------------------------------- views
 
+  private controlSnapshot(): MatchSnapshot['control'] {
+    const f = this.fielding;
+    const h = f.human;
+    if (!h || h.controlled < 0 || this.phase !== 'inPlay') return null;
+    const c = f.fielders[h.controlled]!;
+    const airborne = this.batContact && this.ball.bounces === this.bouncesAtContact && !this.ball.rolling && f.holder < 0;
+    return { pos: c.pos, heading: c.heading, holding: f.holder === c.idx, diving: c.diveT > 0, landing: airborne ? f.landing : null, mode: h.mode };
+  }
+
   /** Plain-data view of everything a renderer needs this tick. */
   snapshot(): MatchSnapshot {
     const inn = this.inn;
@@ -891,7 +1314,7 @@ export class CricketMatch {
       const isStriker = i === 0;
       let anim = moving ? 'run' : isStriker ? 'stance' : 'backup';
       if (isStriker && this.swing && !moving && (this.phase === 'inPlay' || this.phase === 'dead') && this.time - this.swing.pressTime < 1.4) anim = 'swing';
-      const heading = moving ? (r.to === 'S' ? 0 : Math.PI) : isStriker ? Math.PI : 0;
+      const heading = moving ? (r.vz >= 0 ? 0 : Math.PI) : isStriker ? Math.PI : 0;
       return { pos: r.pos, heading, anim, t: isStriker && this.swing ? this.time - this.swing.contactTime : 0 };
     };
     const held = this.fielding.holder >= 0;
@@ -911,12 +1334,16 @@ export class CricketMatch {
       swing: this.swing ? { stroke: this.swing.stroke, family: this.swing.input.family, contactTime: this.swing.contactTime } : null,
       fielders: this.fielding.fielders
         .filter((f) => f.role !== 'bowler')
-        .map((f) => ({ pos: f.pos, heading: f.heading, anim: f.anim, t: f.animT, keeper: f.role === 'keeper', name: f.name })),
+        .map((f) => ({ pos: f.pos, heading: f.heading, anim: f.anim, t: f.animT, keeper: f.role === 'keeper', name: f.name, player: f.player })),
       runUp: { t: this.runUpTime, duration: this.runUpDuration },
       delivery: this.delivery
         ? { speedKmh: this.delivery.speedKmh, variation: this.delivery.variation, aim: this.delivery.aim, bounce: this.firstBounce }
         : null,
       stumpsDown: { ...this.stumpsDown },
+      bowlSide: deliverySide(this.bowlerDef.bowlArm, this.intent.side),
+      charged: this.charged,
+      hit: this.batContact,
+      control: this.controlSnapshot(),
       score: {
         runs: inn.runs,
         wickets: inn.wickets,
@@ -937,10 +1364,17 @@ export interface MatchSnapshot {
   nonStriker: ActorSnapshot;
   strikerHand: 'R' | 'L';
   swing: { stroke: string; family: string; contactTime: number } | null;
-  fielders: (ActorSnapshot & { keeper: boolean; name: string })[];
+  fielders: (ActorSnapshot & { keeper: boolean; name: string; player: number })[];
   runUp: { t: number; duration: number };
   delivery: { speedKmh: number; variation: string; aim: { x: number; z: number }; bounce: Vec3 | null } | null;
   stumpsDown: { S: boolean; B: boolean };
+  /** World-x sign of the side the bowler delivers from. */
+  bowlSide: 1 | -1;
+  charged: boolean;
+  /** The bat has touched the ball this delivery. */
+  hit: boolean;
+  /** Human fielding: the controlled fielder, whether they hold the ball, and where a catch will come down. */
+  control: { pos: Vec3; heading: number; holding: boolean; diving: boolean; landing: Vec3 | null; mode: FieldingControlMode } | null;
   score: { runs: number; wickets: number; overs: string };
 }
 

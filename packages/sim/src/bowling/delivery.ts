@@ -60,6 +60,21 @@ export interface BowlIntent {
   variation: Variation;
   line: number;
   length: number;
+  /** Delivery side: over the wicket (default) or round the wicket. */
+  side?: 'over' | 'round';
+}
+
+/** World-x sign of the side of the stumps the bowler delivers from. */
+export function deliverySide(arm: BatHand, side: BowlIntent['side']): 1 | -1 {
+  const armSide = arm === 'R' ? 1 : -1;
+  return (side === 'round' ? -armSide : armSide) as 1 | -1;
+}
+
+/** Release point for a bowler and intent. */
+export function releasePoint(bowler: PlayerDef, side: BowlIntent['side']): Vec3 {
+  const s = deliverySide(bowler.bowlArm, side);
+  const x = side === 'round' ? 0.62 * s : 0.32 * s;
+  return v3(x, 2.05 + 0.1 * a01(bowler.attrs.pace), BOWLER_CREASE_Z + 0.35);
 }
 
 /** Suggested length (m from striker's stumps) for a named length. */
@@ -69,6 +84,8 @@ export const LENGTHS = {
   good: 6.0,
   back: 8.0,
   short: 10.5,
+  /** Pitched short enough to reach head height (counts towards the bouncer limit). */
+  bouncer: 11.8,
 } as const;
 
 export interface DeliveryPlan {
@@ -83,6 +100,19 @@ export interface DeliveryPlan {
   noBall: boolean;
   /** Release timing error (s): negative early, positive late. */
   releaseError: number;
+  /** The older ball is reversing (swinging the "wrong" way). */
+  reverse: boolean;
+}
+
+/**
+ * How the ball's age changes movement. Conventional swing fades as the ball
+ * wears; from around the 12th over a scuffed ball can reverse for pace bowlers.
+ */
+export function ballAgeEffect(overs: number, style: BowlStyle): { conventional: number; reverse: number; seam: number } {
+  const conventional = Math.max(0.25, 1 - overs / 20);
+  const pace = style === 'fast' ? 1 : style === 'medium' ? 0.55 : 0;
+  const reverse = overs >= 12 ? Math.min(0.75, ((overs - 12) / 8) * 0.75) * pace : 0;
+  return { conventional, reverse, seam: Math.max(0.4, 1 - overs / 25) };
 }
 
 export const RUNUP_TIME: Record<BowlStyle, number> = { fast: 1.5, medium: 1.3, offspin: 0.95, legspin: 0.95 };
@@ -116,11 +146,12 @@ export function planDelivery(
   cond: PitchConditions,
   rng: Rng,
   assist = 1,
+  opts: { preview?: boolean; ballAge?: number } = {},
 ): DeliveryPlan {
   const skill = a01(bowler.attrs.bowling);
   const armSide = bowler.bowlArm === 'R' ? 1 : -1;
-  // Right-arm over the wicket releases on world +x side of the stumps.
-  const release = v3(0.32 * armSide, 2.05 + 0.1 * a01(bowler.attrs.pace), BOWLER_CREASE_Z + 0.35);
+  // Right-arm over the wicket releases on the world +x side of the stumps.
+  const release = releasePoint(bowler, intent.side);
 
   let speed = baseSpeed(bowler);
   let swing = 0;
@@ -129,7 +160,12 @@ export function planDelivery(
   let length = intent.length;
   const offS = batHand === 'R' ? 1 : -1; // world x sign of batter's off side
   const isSpin = bowler.bowlStyle === 'offspin' || bowler.bowlStyle === 'legspin';
-  const swingPower = (bowler.bowlStyle === 'fast' ? 2.2 : 2.6) * (0.5 + 0.5 * skill);
+  const age = ballAgeEffect(opts.ballAge ?? 0, bowler.bowlStyle);
+  seam *= age.seam;
+  // Net swing: conventional minus reverse (reverse swings the other way).
+  const swingNet = age.conventional - age.reverse;
+  const swingPower = (bowler.bowlStyle === 'fast' ? 2.2 : 2.6) * (0.5 + 0.5 * skill) * swingNet;
+  const reverse = swingNet < 0 && (intent.variation === 'outswing' || intent.variation === 'inswing');
   // Spinners impart rotation mostly about the direction of travel (z).
   const spinRate = 140 + 60 * a01(bowler.attrs.spin);
 
@@ -199,8 +235,10 @@ export function planDelivery(
   // Accuracy scatter (metres) grows with poor timing, lower skill, less assist.
   const baseErr = (0.08 + 0.22 * (1 - skill)) * (1.25 - 0.25 * assist);
   const errSd = baseErr + 0.9 * timingPenalty;
-  const lineErr = rng.gauss() * errSd * 0.8;
-  const lenErr = rng.gauss() * errSd * 1.6 + (releaseError < 0 ? -1 : 1) * timingPenalty * 1.2;
+  // A preview (aiming guide) shows the intended ball: no scatter, no seam.
+  const lineErr = opts.preview ? 0 : rng.gauss() * errSd * 0.8;
+  const lenErr = opts.preview ? 0 : rng.gauss() * errSd * 1.6 + (releaseError < 0 ? -1 : 1) * timingPenalty * 1.2;
+  if (opts.preview) seam = 0;
 
   length = clamp(length + lenErr, -3, 16);
   const line = clamp(intent.line + lineErr, -PITCH_HALF_WIDTH - 0.5, PITCH_HALF_WIDTH + 0.5);
@@ -220,6 +258,7 @@ export function planDelivery(
     predictedBounce: sol.landing,
     noBall,
     releaseError,
+    reverse,
   };
 }
 

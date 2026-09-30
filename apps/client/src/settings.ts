@@ -41,13 +41,15 @@ export interface QualityPreset {
   ballTrail: boolean;
   /** Night extras: light shafts and camera flashes. */
   atmosphere: boolean;
+  /** Players nearer the camera than this (m) use the detailed body (faces, fingers); others the light one. */
+  playerDetail: number;
 }
 
 export const QUALITY: Record<Quality, QualityPreset> = {
-  low: { pixelRatio: 0.75, shadows: false, shadowMapSize: 512, antialias: false, crowd: 2500, crowdDetail: 'simple', ballTrail: false, atmosphere: false },
-  medium: { pixelRatio: 1, shadows: true, shadowMapSize: 1024, antialias: true, crowd: 6000, crowdDetail: 'full', ballTrail: true, atmosphere: true },
-  high: { pixelRatio: 1.5, shadows: true, shadowMapSize: 2048, antialias: true, crowd: 10000, crowdDetail: 'full', ballTrail: true, atmosphere: true },
-  ultra: { pixelRatio: 2, shadows: true, shadowMapSize: 4096, antialias: true, crowd: 18000, crowdDetail: 'full', ballTrail: true, atmosphere: true },
+  low: { pixelRatio: 0.75, shadows: false, shadowMapSize: 512, antialias: false, crowd: 2500, crowdDetail: 'simple', ballTrail: false, atmosphere: false, playerDetail: 14 },
+  medium: { pixelRatio: 1, shadows: true, shadowMapSize: 1024, antialias: true, crowd: 6000, crowdDetail: 'full', ballTrail: true, atmosphere: true, playerDetail: 32 },
+  high: { pixelRatio: 1.5, shadows: true, shadowMapSize: 2048, antialias: true, crowd: 10000, crowdDetail: 'full', ballTrail: true, atmosphere: true, playerDetail: 42 },
+  ultra: { pixelRatio: 2, shadows: true, shadowMapSize: 4096, antialias: true, crowd: 18000, crowdDetail: 'full', ballTrail: true, atmosphere: true, playerDetail: 60 },
 };
 
 /** Assist 0..1 fed to the simulation (timing windows / bowling accuracy). */

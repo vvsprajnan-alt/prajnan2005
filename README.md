@@ -7,7 +7,8 @@ An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two
 > fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
 > affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 10 complete - testing and bug fixing: soak tests over complete matches with scorecard and
+**Status:** Phase 10 complete, and the players have since been rebuilt as animated people (sculpted faces, hair,
+hands with fingers, natural walking and running, hands that grip the bat). Phase 10 was testing and bug fixing: soak tests over complete matches with scorecard and
 physics invariants, a balance pass against real T20 numbers, end-to-end multiplayer tests (whole 2v2 matches,
 chaos, hostile clients, many rooms), a browser suite and CI - and the crashes, stalls and rule bugs they found
 are fixed. Phase 9 brought optimization: split and compressed downloads, about half the draw calls, level of

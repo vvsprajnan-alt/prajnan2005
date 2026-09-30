@@ -84,7 +84,7 @@
 - [x] Tests: intro phase, recorded ball data, chart data, commentary and milestones, replay recording/planning, SVG charts
 
 ### Phase 8 - art and audio
-- [x] Skinned cricketers generated in code: one continuous body mesh on an 11-bone skeleton (smooth elbows, knees, waist), kit in vertex colours, faces and hair, shirt numbers, merged rigid kit (helmet with grille, cap, umpire's hat, gloves, pads, spikes), a bat with grip and sticker
+- [x] Skinned cricketers generated in code: one continuous body mesh on an 11-bone skeleton (17 since the human-looking rebuild) (smooth elbows, knees, waist), kit in vertex colours, faces and hair, shirt numbers, merged rigid kit (helmet with grille, cap, umpire's hat, gloves, pads, spikes), a bat with grip and sticker
 - [x] Animation: cross-fades between animations, speed-driven walk / jog / sprint, a fuller running action and bowling action, head (and chest) tracking the ball, breathing and weight shift, characters cached per roster
 - [x] Reactions: bowler and fielders celebrate wickets, the dismissed batter stands dejected, appeals, hands on heads for drops and sixes, the non-striker applauds boundaries, bat raised for fifties and hundreds, winners celebrate at the end
 - [x] Crowd: instanced spectators in both teams' colours, seated on the stand treads, animated in the vertex shader (sway, clap, stand and raise arms with the excitement), Mexican waves in quiet spells, camera flashes at night
@@ -115,13 +115,18 @@
 - [x] Fixed: maidens counted byes and leg byes against the bowler
 - [x] AI batting sides promote a big hitter at the death
 
+### After release - human-looking players
+- [x] Players rebuilt as animated people: an anatomically shaped body (shoulders, chest, waist, seat, thighs, calves) lofted from cross-sections on a 17-bone skeleton (spine, neck, hands and feet added), a sculpted head with eyes, lids, brows, nose, lips and ears, hair styles and facial hair, hands with fingers and a thumb, shaped shoes; each player keeps their own look (hair, beard, build, eyes)
+- [x] Animation: walk and run from gait curves (heel strike, push-off, pelvis turn and dip, counter-rotating chest, arm swing), the hips settle so feet stay planted and flat, relaxed idle with weight shifts, two-bone arm IK so both hands grip the bat handle, and the spine leans into shots the arms can't reach alone
+- [x] Body geometry shared between identical looks (a fielder who comes on to bowl costs nothing to rebuild)
+
 ## Current task
 
 - All ten phases are complete. Next: play-testing with real players, then the items below.
 
 ## Known bugs / limitations
 
-- Players are procedural low-poly models; animation is procedural (keyframed poses and IK), not motion-captured.
+- Players are procedural (stylised) models; animation is procedural (gait curves, keyframed poses and IK), not motion-captured.
 - About 3-4 drops per AI T20 (roughly 70% of chances held; real T20 is closer to 80%).
 - Reviews cover LBW only (not caught-behind / edges).
 - Replays are not available on a gamepad as an instant-replay button (keyboard I or the on-screen ⟲); automatic replays and skipping work on every device.

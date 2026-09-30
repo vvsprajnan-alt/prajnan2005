@@ -38,11 +38,13 @@ export class World {
   private reactions = new Map<string, { anim: string; from: number; until: number }>();
   private lastPos = new Map<string, { x: number; z: number; v: number }>();
   private cast = new Map<string, Cricketer>();
+  private playerDetail: number;
   private batterIds: string[] = [];
   private fielderPlayers: number[] = [];
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     const q = QUALITY[settings.quality];
+    this.playerDetail = q.playerDetail;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q.antialias, powerPreference: 'high-performance' });
     this.basePixelRatio = Math.min(window.devicePixelRatio || 1, q.pixelRatio);
     this.renderer.setPixelRatio(this.basePixelRatio);
@@ -346,7 +348,7 @@ export class World {
 
     // Level of detail for every character from the last frame's camera position.
     const camPos = this.cams.camera.position;
-    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.setDistance(c.root.position.distanceTo(camPos));
+    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.setDistance(c.root.position.distanceTo(camPos), this.playerDetail);
 
     // Crowd and camera.
     this.excitement *= Math.exp(-0.5 * dt);

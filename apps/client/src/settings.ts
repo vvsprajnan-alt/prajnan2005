@@ -28,6 +28,8 @@ export interface Settings {
   /** Frame-rate cap: 60, 30 (battery saver) or 0 (every display frame). */
   fpsCap: number;
   showFps: boolean;
+  /** On phones and tablets: go full screen (and hold landscape) when a button is tapped. */
+  autoFullscreen: boolean;
 }
 
 export interface QualityPreset {
@@ -58,7 +60,7 @@ export const ASSIST_LEVEL: Record<Assist, number> = { beginner: 1, standard: 0.5
 const KEY = 'crease-clash-settings-v1';
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { adaptiveResolution: true, fpsCap: 60, showFps: false, quality: 'medium', timeOfDay: 'night', assist: 'beginner', autoRun: false, sound: true, showPitchGuide: true, fielding: 'assisted', playerName: '', replays: 'key', captions: true, volMaster: 80, volEffects: 100, volCrowd: 80, volMusic: 70 };
+  const defaults: Settings = { autoFullscreen: true, adaptiveResolution: true, fpsCap: 60, showFps: false, quality: 'medium', timeOfDay: 'night', assist: 'beginner', autoRun: false, sound: true, showPitchGuide: true, fielding: 'assisted', playerName: '', replays: 'key', captions: true, volMaster: 80, volEffects: 100, volCrowd: 80, volMusic: 70 };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...defaults, ...JSON.parse(raw) };

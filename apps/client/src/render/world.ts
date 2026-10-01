@@ -44,7 +44,9 @@ export class World {
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     const q = QUALITY[settings.quality];
-    this.playerDetail = q.playerDetail;
+    // Phones and tablets keep the detailed players (faces, fingers) to the near ones.
+    const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    this.playerDetail = touch ? Math.min(q.playerDetail, 20) : q.playerDetail;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q.antialias, powerPreference: 'high-performance' });
     this.basePixelRatio = Math.min(window.devicePixelRatio || 1, q.pixelRatio);
     this.renderer.setPixelRatio(this.basePixelRatio);

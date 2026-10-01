@@ -56,6 +56,24 @@ Other scripts:
 | `npx tsx scripts/physics-probe.ts` | Print delivery and shot characteristics (for tuning) |
 | `node scripts/smoke.mjs [url] [outDir] [bat\|bowl]` | Browser smoke test with Playwright: plays a few balls and saves screenshots |
 
+## Playing on a phone or tablet
+
+Run the server on a computer (`npm run server`), make sure the phone is on the same Wi-Fi, and open
+`http://<computer's-IP>:8787` in the phone's browser (Chrome on Android, Safari on iPhone/iPad).
+
+- **Hold the phone sideways.** Menus work upright too; a match asks you to turn the phone (or tap
+  **Play upright** to keep it vertical with a compact layout).
+- **Full screen.** On Android the first tap on a button takes the game full screen and locks it sideways
+  (turn this off in **Settings > Full screen (phones)**). iPhone Safari has no full screen for web pages, so the
+  menu shows a tip: tap **Share > Add to Home Screen** and open Crease Clash from the home-screen icon - it then
+  runs full screen like an app. The same works on Android (browser menu > **Install app** / **Add to Home screen**).
+- **Touch controls.** Drag the round pad on the left to aim (shots, bowling marker, fielder) and tap the buttons
+  on the right: Ground / Lofted / Defend and Run / Stay / Back when batting; pick a delivery at the top and tap
+  **Bowl**, then **Release** when bowling; Catch / Dive / Throw when fielding.
+- **Performance.** Phones start on Medium (Low with a 30 fps cap on low-memory phones), resolution adapts to
+  keep the frame rate up, and only nearby players use the detailed models. Switching apps pauses a match
+  against the AI.
+
 ## How to play
 
 From the main menu choose **Play**, pick teams, overs and difficulty, then call the toss.

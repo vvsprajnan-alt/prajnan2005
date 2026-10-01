@@ -12,6 +12,7 @@ import {
 } from '@crease/sim';
 import { Sfx } from './audio/sfx';
 import { FrameLimiter, ResolutionGovernor } from './perf';
+import { MobileProfile, currentEnv, enterFullscreen, mobileProfile } from './mobile';
 import { GameSession } from './game/session';
 import { Input } from './input/input';
 import { World } from './render/world';
@@ -54,8 +55,11 @@ export class App {
   private fpsFrames = 0;
   private fpsSince = performance.now();
   private setup: MatchSetup = { myOrder: null, myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
+  private root: HTMLElement;
+  private mobile: MobileProfile = mobileProfile(currentEnv());
 
   constructor(root: HTMLElement) {
+    this.root = root;
     this.applyAudio();
     this.world = new World(root.querySelector('#scene') as HTMLCanvasElement, this.settings);
     this.screens = root.querySelector('#screens') as HTMLElement;
@@ -68,8 +72,19 @@ export class App {
     this.fpsEl = h('div', { class: 'fps' });
     this.fpsEl.style.display = this.settings.showFps ? '' : 'none';
     root.append(this.fpsEl, this.rotateHint());
-    // Save battery and CPU in the background: audio sleeps while the tab is hidden.
-    document.addEventListener('visibilitychange', () => this.sfx.setSuspended(document.hidden));
+    // Save battery and CPU in the background: audio sleeps while the tab is hidden, and a match
+    // against the AI pauses (a call or a switch to another app shouldn't cost a wicket).
+    document.addEventListener('visibilitychange', () => {
+      this.sfx.setSuspended(document.hidden);
+      const s = this.session;
+      if (document.hidden && s && s.humanTeam !== null && !s.driver.networked && !s.paused) this.pauseMenu();
+    });
+    // Phones: the first tap on any button takes the game full screen and holds landscape
+    // (browsers only allow it from a tap). iPhone Safari has no full screen: see the home screen tip.
+    root.addEventListener('click', (e) => {
+      if (this.mobile.fullscreen && this.settings.autoFullscreen && (e.target as HTMLElement | null)?.closest?.('button')) void enterFullscreen();
+    }, true);
+    root.classList.toggle('touch', this.mobile.touch);
     this.startAttract();
     const idle = (window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 2000));
     idle(() => void Promise.all([loadCentre(), loadFieldEditor()]).catch(() => {}));
@@ -107,6 +122,27 @@ export class App {
     }
   };
 
+  /** iPhone Safari cannot go full screen; from the home screen the game gets the whole screen. */
+  private homeScreenTip(): HTMLElement | null {
+    const KEY = 'crease-clash-tip-home';
+    try {
+      if (!this.mobile.homeScreenTip || localStorage.getItem(KEY)) return null;
+    } catch {
+      return null;
+    }
+    const el = h('div', { class: 'home-tip' },
+      h('span', {}, 'Play full screen: tap ', h('b', {}, 'Share'), ' then ', h('b', {}, 'Add to Home Screen'), ', and open Crease Clash from there.'),
+      h('button', { class: 'ctrl', 'aria-label': 'Dismiss tip', onclick: () => {
+        try {
+          localStorage.setItem(KEY, '1');
+        } catch {
+          /* ignore */
+        }
+        el.remove();
+      } }, '✕'));
+    return el;
+  }
+
   /** Phones held upright get a hint to turn sideways (dismissable). */
   private rotateHint(): HTMLElement {
     const el = h('div', { class: 'rotate-hint' },
@@ -124,6 +160,7 @@ export class App {
 
   private startAttract(): void {
     this.session?.dispose();
+    this.root.classList.remove('in-match');
     const cfg = defaultConfig([TEAMS[2]!, TEAMS[3]!], 20, (Math.random() * 1e9) | 0);
     this.session = new GameSession(cfg, null, this.world, this.input, this.sfx, this.settings, {
       onInningsBreak: () => {},
@@ -146,6 +183,7 @@ export class App {
     cfg.battingOrders = [setup.myOrder, null];
     cfg.introSeconds = practice ? 0 : 12;
     this.clearScreens();
+    this.root.classList.add('in-match');
     this.session = new GameSession(cfg, 0, this.world, this.input, this.sfx, this.settings, {
       onInningsBreak: (m) => this.inningsBreak(m),
       onComplete: (m) => this.results(m, setup),
@@ -196,6 +234,7 @@ export class App {
         this.tile('Settings', 'Graphics quality, time of day, assists, sound.', () => this.settingsScreen()),
         this.tile('Controls', 'Keyboard, controller and touch.', () => this.controlsScreen()),
       ),
+      this.homeScreenTip(),
       h('p', { class: 'muted', style: 'margin-top:18px;font-size:12px' }, `${GAME_NAME} is an original game. All teams, players, sponsors and stadiums are fictional.`),
     );
     this.show(card);
@@ -334,6 +373,7 @@ export class App {
         field('Frame rate', h('select', { onchange: (e: Event) => { s.fpsCap = Number((e.target as HTMLSelectElement).value); } },
           ...[[60, '60 fps'], [30, '30 fps (battery saver)'], [0, 'Unlimited (display rate)']].map(([v, l]) => h('option', { value: String(v), selected: s.fpsCap === v }, String(l))))),
         field('Performance overlay', sel('showFps', [['false', 'Off'], ['true', 'On']])),
+        this.mobile.fullscreen ? field('Full screen (phones)', sel('autoFullscreen', [['true', 'On tap'], ['false', 'Off']])) : null,
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
         field('Assistance', sel('assist', [['beginner', 'Beginner (wide timing, full guide)'], ['standard', 'Standard'], ['pro', 'Pro (no guide during run-up)']])),
@@ -690,6 +730,7 @@ export class App {
   private startOnline(c: NetClient, m: Extract<ServerMsg, { t: 'start' }>): void {
     this.session?.dispose();
     this.clearScreens();
+    this.root.classList.add('in-match');
     const driver = new NetDriver(c, m.match, m.you);
     const seat: Seat | null = m.you;
     this.session = new GameSession(driver.match.cfg, seat ? seat.team : null, this.world, this.input, this.sfx, this.settings, {

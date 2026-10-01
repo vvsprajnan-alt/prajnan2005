@@ -464,6 +464,8 @@ export class Hud {
     if (this.trackData && this.trackBox.querySelector('.tb-result') === null) this.renderTracking(now, null);
     this.toast.style.display = now < this.toastUntil ? '' : 'none';
     if (now > this.captionUntil) this.caption.style.display = 'none';
+    // On short screens the caption and the control hint share a spot: the caption wins while it shows.
+    this.el.classList.toggle('has-caption', this.caption.style.display !== 'none');
     if (now > this.cardUntil) this.infoCard.style.display = 'none';
     if (now > this.milestoneUntil) this.milestone.style.display = 'none';
     const inn = m.inn;

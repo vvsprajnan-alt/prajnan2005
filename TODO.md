@@ -120,6 +120,13 @@
 - [x] Animation: walk and run from gait curves (heel strike, push-off, pelvis turn and dip, counter-rotating chest, arm swing), the hips settle so feet stay planted and flat, relaxed idle with weight shifts, two-bone arm IK so both hands grip the bat handle, and the spine leans into shots the arms can't reach alone
 - [x] Body geometry shared between identical looks (a fielder who comes on to bowl costs nothing to rebuild)
 
+### After release - phones and tablets
+- [x] Layout for phones held sideways (down to 568 x 320): menus fit without scrolling, match messages stacked so the result banner, shot feedback, timing bar, commentary and control hints never overlap each other or the touch buttons, compact online room
+- [x] Upright play: menus work upright; in a match a dismissable "turn sideways" hint, and a compact upright layout if you keep playing vertically
+- [x] Full screen and landscape lock on the first tap (Android; setting), installable web app (manifest, icons, home-screen meta) with an "Add to Home Screen" tip on iPhone, notch-safe edges, no pull-to-refresh / long-press menus / tap highlights, keyboard labels hidden on touch
+- [x] Matches against the AI pause when you switch apps; detailed player models limited to nearby players on touch devices
+- [x] Tests: phone / tablet detection (Android, iPhone, iPad with a Mac user agent, home-screen mode, desktop)
+
 ## Current task
 
 - All ten phases are complete. Next: play-testing with real players, then the items below.

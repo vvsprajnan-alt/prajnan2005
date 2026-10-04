@@ -45,7 +45,7 @@ export interface SessionCallbacks {
 
 /** Short hints for touch screens (the buttons carry their own labels). */
 function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean): string {
-  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Drag the pad to aim · tap a shot as the ball arrives';
+  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Drag to aim · pick your feet · Push, Stroke or Loft as the ball arrives';
   if (fielding) return fielding === 'holding' ? 'Tap a throw, or drag to run it in' : 'Drag the pad to run · Dive · Catch';
   if (phase === 'preDelivery') return 'Drag to move the marker · pick a delivery · tap Bowl';
   if (phase === 'runUp') return 'Tap Release in the green zone';
@@ -79,6 +79,8 @@ export class GameSession {
   private followUntil = 0;
   private cutUntil = 0;
   private lastCall: string | null = null;
+  /** The delivery the picked footwork belongs to (it resets every ball). */
+  private ballKey = '';
   private breakShownFor = -1;
   private trackUntil = 0;
   private completeShown = false;
@@ -267,10 +269,26 @@ export class GameSession {
     }
   }
 
+  /**
+   * Batting: three shots (Push, Stroke, Loft - the stroke itself follows the aim, the ball and the
+   * footwork) and four actions (front foot, back foot, advance, leave).
+   */
   private battingAction(a: Action): void {
-    const fam: Partial<Record<Action, ShotFamily>> = { primary: 'ground', lofted: 'lofted', defend: 'defend', sweep: 'sweep', reverseSweep: 'reverseSweep' };
+    const fam: Partial<Record<Action, ShotFamily>> = { primary: 'ground', lofted: 'lofted', defend: 'defend' };
     const f = fam[a];
     const m = this.match;
+    const beforeTheBall = (m.phase === 'preDelivery' || m.phase === 'runUp' || m.phase === 'inPlay') && !m.swing && !m.batContact && !m.padContact && !m.passedBatter;
+    if ((a === 'sweep' || a === 'reverseSweep') && beforeTheBall) {
+      // Front foot / back foot for this ball; press again to go back to automatic.
+      const want = a === 'sweep' ? 'front' : 'back';
+      this.input.pickedFootwork = this.input.pickedFootwork === want ? 'auto' : want;
+      return;
+    }
+    // Leave: the Leave button, or "Stay" before the ball arrives (D-pad down on a controller).
+    if ((a === 'leave' || a === 'wait') && beforeTheBall && m.phase !== 'preDelivery' && m.leaveTime === null) {
+      if (this.can('striker')) this.send({ type: 'bat.leave' });
+      return;
+    }
     if (f) {
       if (m.phase === 'inPlay' && !m.swing && !m.batContact) {
         if (!this.can('striker')) return;
@@ -486,6 +504,9 @@ export class GameSession {
       case 'bounce':
         if (e.onPitch) this.world.ball.pitchMark(e.pos.x, e.pos.z, now);
         this.sfx.bounce(e.onPitch, this.panOf(e.pos));
+        break;
+      case 'leave':
+        if (humanBatting) hud.showFeedback('LEFT ALONE', 'good', now);
         break;
       case 'shot': {
         const r = e.result;
@@ -767,7 +788,12 @@ export class GameSession {
       hud.setRole(label, this.driver.backlog());
     }
     const fielding = this.fieldingActive(m) ? (m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled ? 'holding' : 'chasing') : null;
-    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding });
+    const ballKey = `${m.inningsIndex}|${m.inn.log.length}`;
+    if (ballKey !== this.ballKey) {
+      this.ballKey = ballKey;
+      this.input.pickedFootwork = 'auto';
+    }
+    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding, charged: m.charged, left: m.leaveTime !== null });
     if (mode === 'bowling') {
       hud.setVariations(m.phase === 'preDelivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => {
         this.intent = { ...this.intent, variation: v };
@@ -787,7 +813,7 @@ export class GameSession {
     let hint = '';
     if (mode === 'batting') {
       if (m.phase === 'preDelivery' || m.phase === 'runUp' || (m.phase === 'inPlay' && !m.swing && !m.batContact && !m.passedBatter))
-        hint = pad ? 'Stick: aim · A ground · X lofted · B defend · RT/LT front/back foot · D-pad ▲ charge' : 'Aim WASD · Space ground · K lofted · L defend · hold Shift/V front/back foot · F charge';
+        hint = pad ? 'Stick: aim · B push · A stroke · X loft · LB/RB front/back foot · D-pad ▲ advance · ▼ leave' : 'Aim WASD · L push · Space stroke · K loft · Q/E front/back foot · F advance · O leave';
       else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'Y run · RT stay · LT back' : 'R/Y run · N stay · B back';
     } else if (mode === 'bowling' && fielding) {
       hint = fielding === 'holding'

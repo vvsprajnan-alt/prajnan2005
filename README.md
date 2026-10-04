@@ -68,7 +68,7 @@ Run the server on a computer (`npm run server`), make sure the phone is on the s
   menu shows a tip: tap **Share > Add to Home Screen** and open Crease Clash from the home-screen icon - it then
   runs full screen like an app. The same works on Android (browser menu > **Install app** / **Add to Home screen**).
 - **Touch controls.** Drag the round pad on the left to aim (shots, bowling marker, fielder) and tap the buttons
-  on the right: Ground / Lofted / Defend and Run / Stay / Back when batting; pick a delivery at the top and tap
+  on the right: Push / Stroke / Loft, Front foot / Back foot / Advance / Leave and Run / Stay / Back when batting; pick a delivery at the top and tap
   **Bowl**, then **Release** when bowling; Catch / Dive / Throw when fielding.
 - **Performance.** Phones start on Medium (Low with a 30 fps cap on low-memory phones), resolution adapts to
   keep the frame rate up, and only nearby players use the detailed models. Switching apps pauses a match
@@ -84,12 +84,12 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Action | Keyboard | Controller | Touch / mouse |
 | --- | --- | --- | --- |
 | Aim shot / move bowling marker | WASD or arrows | Left stick | Direction pad (bottom left) |
-| Ground shot | Space or J | A | Ground |
-| Lofted shot | K | X | Lofted |
-| Defend | L | B | Defend |
-| Sweep / reverse sweep | Q / E | LB / RB | Sweep / Rev Sweep |
-| Front foot / back foot (hold) | Shift / V | RT / LT | Feet toggle |
-| Charge down the pitch | F (during the run-up) | D-pad up | Charge |
+| **Push** (block, or soft hands into the gap) | L | B | Push |
+| **Stroke** (along the ground) | Space or J | A | Stroke |
+| **Loft** (over the top) | K | X | Loft |
+| Front foot / back foot (for this ball) | Q / E (or hold Shift / V) | LB / RB (or hold RT / LT) | Front foot / Back foot |
+| Advance down the pitch | F (during the run-up) | D-pad up | Advance |
+| Leave the ball | O | D-pad down (before the ball arrives) | Leave |
 | Run ("YES") / Stay ("NO") / Go back | R or Y / N / B | Y / D-pad down / L3 | Run / Stay / Back |
 | Pick delivery | 1-8, Z / X | D-pad left/right | Delivery buttons |
 | Over / round the wicket | T | R3 | Over / Round |
@@ -105,16 +105,20 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Instant replay of the last ball | I | - | ⟲ |
 | Skip a replay / the team intros | Space | A | Skip |
 
-**Batting.** Hold a direction for where you want to hit it (up = straight, left/right = that side of the
-screen, down = behind) and press a shot as the ball arrives. The stroke (drive, cut, pull, flick, glance...)
-is chosen from your aim and the length and line of the ball, so the same button plays a cover drive to a
-full ball and a cut to a short one. Timing is graded perfect / good / early / late. Early timing drags the
+**Batting.** There are three shots - **Push**, **Stroke** and **Loft** - and four actions - **Front foot**,
+**Back foot**, **Advance** and **Leave**. Hold a direction for where you want to hit it (up = straight,
+left/right = that side of the screen, down = behind) and press a shot as the ball arrives: the batter plays
+the right cricket shot for your choice, your aim and the ball. A Stroke through the covers is a cover drive
+to a full ball and a back-foot punch to a short one; to the leg side it is a flick or a pull; a Push into a
+gap is a soft single (with no aim it is a solid block); a Loft behind the wicket is a scoop or an upper cut.
+Front foot against spin or gentle pace, aimed square or fine on the leg side, sweeps (a slog sweep with Loft),
+and fine on the off side reverse-sweeps. Leave lets the ball go - safe outside off stump, out if it hits the
+stumps or traps you LBW. Timing is graded perfect / good / early / late. Early timing drags the
 ball to the leg side, late timing to the off side. Movement off the seam after you commit can beat the bat
 or find the edge. When the ball is in the field, your partner shouts **YES / NO / WAIT**; press Run to go.
-Footwork is automatic unless you hold a modifier: getting forward to full balls and back to short ones
-improves contact, the wrong foot costs you. Charge (F) during the run-up to turn good-length spin into a
-half-volley - but if you miss, a keeper standing up will stump you. Lofted + aim behind plays the scoop (full
-balls) or the upper cut (short, wide ones). After each shot a timing bar shows how many milliseconds early or
+Footwork is automatic unless you pick it for the ball (it resets every delivery): getting forward to full
+balls and back to short ones improves contact, the wrong foot costs you. Advance (F) during the run-up to turn
+good-length spin into a half-volley - but if you miss, a keeper standing up will stump you. After each shot a timing bar shows how many milliseconds early or
 late you were; on Beginner a closing ring on the pitch shows when to play.
 
 **Bowling.** Move the marker to choose line and length (the coloured bands show yorker, full, good and short

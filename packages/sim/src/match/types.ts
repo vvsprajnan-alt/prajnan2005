@@ -30,6 +30,8 @@ export type Command =
   | { type: 'bat.shot'; shot: ShotInput; at?: number }
   /** Advance down the pitch (during the run-up or early in the ball's flight). */
   | { type: 'bat.charge' }
+  /** Shoulder arms: let the ball go (no shot this delivery). */
+  | { type: 'bat.leave' }
   | { type: 'run.call'; call: RunCall }
   | { type: 'bowler.select'; player: number }
   /** Set the field for a bowler type: a preset id, custom spots, or back to automatic. */
@@ -68,6 +70,7 @@ export type MatchEvent =
   | { type: 'bounce'; pos: Vec3; onPitch: boolean }
   | { type: 'shot'; result: ContactResult }
   | { type: 'swing'; stroke: Stroke; family: ShotInput['family'] }
+  | { type: 'leave' }
   | { type: 'padHit'; lbw: boolean; reason: string; appeal: boolean }
   | { type: 'reviewAvailable'; team: number; onFieldOut: boolean }
   | { type: 'reviewStarted'; team: number; tracking: BallTracking; onFieldOut: boolean }

@@ -54,6 +54,7 @@ export function roleFor(cmd: Command): Role | 'any' | 'server' {
       return 'server';
     case 'bat.shot':
     case 'bat.charge':
+    case 'bat.leave':
       return 'striker';
     case 'bowl.aim':
     case 'bowl.start':

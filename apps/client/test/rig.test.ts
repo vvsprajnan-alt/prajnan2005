@@ -84,7 +84,7 @@ describe('skinned cricketer rig', () => {
 
   it('poses every animation without NaNs and cross-fades between them', () => {
     const c = new Cricketer(kit, false);
-    const anims = ['stance', 'swing', 'run', 'ready', 'dive', 'celebrate', 'dejected', 'raiseBat', 'appeal', 'fistPump', 'clap', 'handsOnHead', 'backup', 'signal-out', 'umpire'];
+    const anims = ['stance', 'leave', 'swing', 'run', 'ready', 'dive', 'celebrate', 'dejected', 'raiseBat', 'appeal', 'fistPump', 'clap', 'handsOnHead', 'backup', 'signal-out', 'umpire'];
     for (const a of anims) {
       for (let f = 0; f < 20; f++) c.pose(a, -0.3 + f * 0.05, 1 / 60, { speed: 1 + f * 0.3, look: { x: 5, y: 1, z: 5 } });
       c.root.updateMatrixWorld(true);

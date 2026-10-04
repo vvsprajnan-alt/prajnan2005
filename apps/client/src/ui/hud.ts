@@ -412,8 +412,8 @@ export class Hud {
   }
 
   /** Context-sensitive on-screen buttons (also the touch controls). */
-  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null } = {}): void {
-    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}`;
+  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null; charged?: boolean; left?: boolean } = {}): void {
+    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}|${extra.charged}|${extra.left}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -423,16 +423,17 @@ export class Hud {
     const row = (...b: HTMLElement[]) => h('div', { class: 'ctrl-row' }, ...b);
     this.dpad.style.display = mode === 'watching' ? 'none' : '';
     if (mode === 'batting') {
+      // Actions (how you play it) above the three shots (what you play); the shot follows your aim.
       const fw = extra.footwork ?? 'auto';
-      const next = fw === 'auto' ? 'front' : fw === 'front' ? 'back' : 'auto';
-      const fwBtn = h('button', {
-        class: `ctrl toggle ${fw}`,
-        onpointerdown: (e: Event) => { e.preventDefault(); this.input.touchFootwork = next; this.controlsKey = ''; },
-      }, `Feet: ${fw === 'auto' ? 'Auto' : fw === 'front' ? 'Front' : 'Back'}`, h('kbd', {}, pad ? 'RT / LT hold' : 'Shift / V hold'));
       this.controls.append(
         row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
-        row(fwBtn, btn('Charge', 'F', 'D-pad ▲', 'charge'), btn('Sweep', 'Q', 'LB', 'sweep'), btn('Rev Sweep', 'E', 'RB', 'reverseSweep')),
-        row(btn('Defend', 'L', 'B', 'defend'), btn('Lofted', 'K', 'X', 'lofted', 'big'), btn('Ground', 'Space', 'A', 'primary', 'big')),
+        row(
+          btn('Front foot', 'Q', 'LB', 'sweep', `act${fw === 'front' ? ' on' : ''}`),
+          btn('Back foot', 'E', 'RB', 'reverseSweep', `act${fw === 'back' ? ' on' : ''}`),
+          btn('Advance', 'F', 'D-pad ▲', 'charge', `act${extra.charged ? ' on' : ''}`),
+          btn('Leave', 'O', 'D-pad ▼', 'leave', `act${extra.left ? ' on' : ''}`),
+        ),
+        row(btn('Push', 'L', 'B', 'defend', 'shot'), btn('Stroke', 'Space', 'A', 'primary', 'shot big'), btn('Loft', 'K', 'X', 'lofted', 'shot big')),
       );
     } else if (mode === 'bowling' && extra.fielding) {
       const holding = extra.fielding === 'holding';

@@ -19,6 +19,7 @@ export function isWellFormedCommand(c: unknown): c is Command {
     }
     case 'bowl.start':
     case 'bat.charge':
+    case 'bat.leave':
     case 'match.continue':
     case 'review':
     case 'field.dive':

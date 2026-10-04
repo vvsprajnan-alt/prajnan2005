@@ -108,6 +108,9 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .ctrl.on { border-color: var(--accent); background: rgba(255,182,39,.2); }
 .ctrl.big { padding: 14px 20px; font-size: 15px; }
 .ctrl.run { border-color: rgba(123,216,143,.6); }
+.ctrl.act { border-color: rgba(46,196,182,.45); }
+.ctrl.act.on { border-color: var(--accent-2); background: rgba(46,196,182,.28); }
+.ctrl.shot { border-color: rgba(255,182,39,.45); }
 .dpad { position: absolute; left: 16px; bottom: 90px; width: 150px; height: 150px; border-radius: 50%; background: rgba(9,20,38,.55); border: 1px solid var(--line); touch-action: none; }
 .dpad .knob { position: absolute; width: 56px; height: 56px; border-radius: 50%; background: rgba(255,255,255,.25); left: 47px; top: 47px; transition: transform .05s; pointer-events: none; }
 .dpad .lbl { position: absolute; font-size: 10px; color: var(--muted); font-weight: 700; letter-spacing: .08em; }

@@ -3,11 +3,12 @@
  * same abstract actions plus a 2D direction. Game code never reads devices.
  */
 export type Action =
-  | 'primary' // ground shot / start run-up / release
-  | 'lofted'
-  | 'defend'
-  | 'sweep'
-  | 'reverseSweep'
+  | 'primary' // batting: Stroke (along the ground) / bowling: start run-up, release
+  | 'lofted' // batting: Loft
+  | 'defend' // batting: Push (a block, or soft hands into the aimed gap)
+  | 'sweep' // batting: front foot / fielding: switch fielder
+  | 'reverseSweep' // batting: back foot / fielding: automatic fielder
+  | 'leave' // batting: shoulder arms
   | 'run'
   | 'wait'
   | 'back'
@@ -42,6 +43,7 @@ const KEYMAP: Record<string, Action> = {
   KeyP: 'pause',
   KeyC: 'camera',
   KeyF: 'charge',
+  KeyO: 'leave',
   KeyT: 'side',
   KeyG: 'field',
   KeyH: 'bowlers',
@@ -95,17 +97,17 @@ export class Input {
     target.addEventListener('touchstart', () => (this.device = 'touch'), { passive: true });
   }
 
-  /** Footwork chosen by touch UI (sticky toggle). */
-  touchFootwork: 'auto' | 'front' | 'back' = 'auto';
+  /** Footwork picked for this delivery (Front foot / Back foot buttons, Q / E, LB / RB); the game resets it each ball. */
+  pickedFootwork: 'auto' | 'front' | 'back' = 'auto';
 
-  /** Held footwork modifier: Shift / RT = front foot, V / LT = back foot. */
+  /** Footwork for the shot: a held modifier (Shift / RT front, V / LT back) wins, otherwise the picked one. */
   footwork(): 'auto' | 'front' | 'back' {
     const pad = this.pad();
     const lt = pad?.buttons[6]?.pressed ?? false;
     const rt = pad?.buttons[7]?.pressed ?? false;
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || rt) return 'front';
     if (this.keys.has('KeyV') || lt) return 'back';
-    return this.touchFootwork;
+    return this.pickedFootwork;
   }
 
   trigger(a: Action): void {

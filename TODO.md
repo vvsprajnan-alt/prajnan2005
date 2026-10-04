@@ -127,6 +127,12 @@
 - [x] Matches against the AI pause when you switch apps; detailed player models limited to nearby players on touch devices
 - [x] Tests: phone / tablet detection (Android, iPhone, iPad with a Mac user agent, home-screen mode, desktop)
 
+### After release - simpler batting controls
+- [x] Three shots: Push (a block, or soft hands into the aimed gap for a single), Stroke (along the ground) and Loft (over the top); the stroke played follows the aim, the ball and the footwork (drives, punches, cuts, flicks, pulls, glances, scoops, upper cuts; front foot to spin or gentle pace sweeps / slog sweeps / reverse sweeps)
+- [x] Four actions: Front foot, Back foot (picked per ball, highlighted, reset every delivery), Advance and Leave (shoulder arms: commits to no shot, with its own animation; bowled and LBW still apply)
+- [x] On every device: keyboard (L / Space / K, Q / E, F, O), controller (B / A / X, LB / RB, D-pad up / down), touch buttons; Controls screen, hints and README updated; protocol version 4 (new leave command)
+- [x] Tests: push direction and pace, sweeps from footwork, leave (validation, once per ball, blocks a shot, ball goes through unplayed, resets)
+
 ## Current task
 
 - All ten phases are complete. Next: play-testing with real players, then the items below.

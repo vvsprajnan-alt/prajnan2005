@@ -552,6 +552,10 @@ export class Cricketer {
         this.batStance();
         look = false;
         break;
+      case 'leave':
+        this.batLeave(t);
+        look = false;
+        break;
       case 'backup':
         this.apply({ lShoulder: [0.05, 0, 0.12], lElbow: [-0.3, 0, 0], lean: 0.12, lHip: [-0.25, 0, 0.03], rHip: [0, 0, -0.03], lKnee: [0.35, 0, 0], rKnee: [0.15, 0, 0] });
         if (this.kit.bat) {
@@ -789,6 +793,16 @@ export class Cricketer {
     const tap = Math.max(0, Math.sin(this.phase * 3)) * 0.03;
     const hands = new THREE.Vector3(0.02, 0.8 + tap, 0.3);
     this.placeBat(hands, new THREE.Vector3(-0.15, -1, 0.05));
+    this.gripBat();
+  }
+
+  /** Shouldering arms: bat lifted high and away from the line, eyes on the ball going through. */
+  private batLeave(t: number): void {
+    const k = smooth(t / 0.22);
+    this.apply({ lean: 0.38 - 0.18 * k, lHip: [-0.3 + 0.08 * k, 0, 0.16], rHip: [-0.28 + 0.06 * k, 0, -0.12], lKnee: [0.45 - 0.15 * k, 0, 0], rKnee: [0.42 - 0.12 * k, 0, 0], head: [0.1, 1.15 - 0.25 * k, 0], chest: [0, -0.15 * k, 0] });
+    const hands = new THREE.Vector3(0.02, 0.8, 0.3).lerp(new THREE.Vector3(-0.1, 1.42, 0.16), k);
+    const dir = new THREE.Vector3(-0.15, -1, 0.05).lerp(new THREE.Vector3(-0.3, 0.85, -0.45), k).normalize();
+    this.placeBat(hands, dir);
     this.gripBat();
   }
 

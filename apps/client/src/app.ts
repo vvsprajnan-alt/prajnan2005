@@ -418,17 +418,21 @@ export class App {
       <h3>Batting</h3>
       <table class="card"><tbody>
       <tr><td>Aim the shot (hold while playing)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
-      <tr><td>Ground shot</td><td>Space / J</td><td>A</td><td>Ground</td></tr>
-      <tr><td>Lofted shot</td><td>K / Shift+Space</td><td>X</td><td>Lofted</td></tr>
-      <tr><td>Defend</td><td>L</td><td>B</td><td>Defend</td></tr>
-      <tr><td>Sweep / Reverse sweep</td><td>Q / E</td><td>LB / RB</td><td>Sweep buttons</td></tr>
-      <tr><td>Front-foot / back-foot (hold while playing)</td><td>Shift / V</td><td>RT / LT</td><td>Feet toggle</td></tr>
-      <tr><td>Charge down the pitch (during the run-up)</td><td>F</td><td>D-pad up</td><td>Charge</td></tr>
-      <tr><td>Scoop / upper cut</td><td>Lofted + aim behind</td><td>X + stick down</td><td>Lofted + pad down</td></tr>
+      <tr><td><b>Push</b> - a block, or soft hands into the gap you aim at</td><td>L</td><td>B</td><td>Push</td></tr>
+      <tr><td><b>Stroke</b> - a full shot along the ground</td><td>Space / J</td><td>A</td><td>Stroke</td></tr>
+      <tr><td><b>Loft</b> - over the top</td><td>K</td><td>X</td><td>Loft</td></tr>
+      <tr><td>Front foot / Back foot (for this ball; press again for automatic)</td><td>Q / E (or hold Shift / V)</td><td>LB / RB (or hold RT / LT)</td><td>Front foot / Back foot</td></tr>
+      <tr><td>Advance down the pitch (during the run-up)</td><td>F</td><td>D-pad up</td><td>Advance</td></tr>
+      <tr><td>Leave the ball (shoulder arms)</td><td>O</td><td>D-pad down</td><td>Leave</td></tr>
       <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y / N / B</td><td>Y / D-pad down / L3</td><td>Run / Stay / Back</td></tr>
       </tbody></table>
-      <p class="muted">Footwork is automatic by default. Getting forward to full balls and back to short ones improves your contact; the wrong foot costs you. Charging makes good-length spin into a half-volley, but miss it and the keeper will stump you.</p>
-      <p class="muted">Up = straight down the ground, left/right = the side of the screen you want to hit to, down = behind the wicket. Timing is everything: start the shot as the ball arrives. The stroke (drive, pull, cut, flick...) is chosen from your aim and the length of the ball.</p>
+      <p class="muted">Pick <b>what</b> to play (Push, Stroke or Loft) and <b>where</b> (the aim), and the batter plays the right shot for the ball:
+      a Stroke aimed through the covers is a cover drive to a full ball and a back-foot punch to a short one; aimed to the leg side it is a flick or a pull;
+      a Loft aimed behind is a scoop or an upper cut. With no aim the batter plays with the line of the ball (a Push with no aim is a solid block).</p>
+      <p class="muted">Footwork is automatic unless you pick it: getting forward to full balls and back to short ones improves your contact, the wrong foot costs you.
+      <b>Front foot</b> against spin or gentle pace turns a Stroke or Loft aimed square or fine on the leg side into a sweep (a slog sweep when lofted), and fine on the off side into a reverse sweep.
+      <b>Advance</b> makes a good-length ball a half-volley, but miss it and the keeper will stump you. <b>Leave</b> lets the ball go - safe outside off stump, but not if it is hitting the stumps.</p>
+      <p class="muted">Up = straight down the ground, left/right = the side of the screen you want to hit to, down = behind the wicket. Timing is everything: start the shot as the ball arrives.</p>
       <h3>Bowling</h3>
       <table class="card"><tbody>
       <tr><td>Move the pitch marker (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>

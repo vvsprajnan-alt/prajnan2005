@@ -177,6 +177,8 @@ export class CricketMatch {
   private touchers = new Set<number>();
   /** The batter committed to advancing down the pitch this ball. */
   charged = false;
+  /** When the striker shouldered arms this delivery (null = not leaving). */
+  leaveTime: number | null = null;
   /** Field in use for the current ball (after restrictions). */
   activeField!: FieldSetting;
   /** LBW appeal on this ball: tracking data and the on-field decision. */
@@ -354,6 +356,7 @@ export class CricketMatch {
     this.lbwNote = '';
     this.touchers.clear();
     this.charged = false;
+    this.leaveTime = null;
     this.lbwAppeal = null;
     this.pendingReview = null;
     this.thrown = false;
@@ -451,6 +454,13 @@ export class CricketMatch {
         return true;
       case 'bat.shot':
         return batting && this.startSwing(c.shot, this.rewind(c.at));
+      case 'bat.leave':
+        // Decide to let it go: during the run-up or while the ball is on its way, before playing at it.
+        if (!batting || this.leaveTime !== null || this.swing || this.batContact || this.padContact || this.passedBatter) return false;
+        if (this.phase !== 'runUp' && this.phase !== 'inPlay') return false;
+        this.leaveTime = this.time;
+        this.emit({ type: 'leave' });
+        return true;
       case 'bat.charge': {
         if (!batting || this.charged) return false;
         if (this.phase !== 'runUp' && !(this.phase === 'inPlay' && !this.swing && !this.batContact && this.ball.pos.z < -2)) return false;
@@ -638,7 +648,7 @@ export class CricketMatch {
 
 
   private startSwing(shot: ShotInput, rewind = 0): boolean {
-    if (this.phase !== 'inPlay' || this.swing || this.batContact || this.padContact || this.passedBatter) return false;
+    if (this.phase !== 'inPlay' || this.swing || this.leaveTime !== null || this.batContact || this.padContact || this.passedBatter) return false;
     if (!['defend', 'ground', 'lofted', 'sweep', 'reverseSweep'].includes(shot.family)) return false;
     const aimX = Math.max(-1, Math.min(1, Number(shot.aimX) || 0));
     const aimY = Math.max(-1, Math.min(1, Number(shot.aimY) || 0));
@@ -1314,8 +1324,10 @@ export class CricketMatch {
       const isStriker = i === 0;
       let anim = moving ? 'run' : isStriker ? 'stance' : 'backup';
       if (isStriker && this.swing && !moving && (this.phase === 'inPlay' || this.phase === 'dead') && this.time - this.swing.pressTime < 1.4) anim = 'swing';
+      const leaving = isStriker && this.leaveTime !== null && !moving && (this.phase === 'runUp' || this.phase === 'inPlay' || this.phase === 'dead') && this.time - this.leaveTime < 2.2;
+      if (leaving) anim = 'leave';
       const heading = moving ? (r.vz >= 0 ? 0 : Math.PI) : isStriker ? Math.PI : 0;
-      return { pos: r.pos, heading, anim, t: isStriker && this.swing ? this.time - this.swing.contactTime : 0 };
+      return { pos: r.pos, heading, anim, t: leaving ? this.time - this.leaveTime! : isStriker && this.swing ? this.time - this.swing.contactTime : 0 };
     };
     const held = this.fielding.holder >= 0;
     const ballVisible = this.phase === 'inPlay' || this.phase === 'dead' || this.phase === 'runUp';

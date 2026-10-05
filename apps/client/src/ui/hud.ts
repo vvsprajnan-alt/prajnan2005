@@ -56,6 +56,7 @@ export class Hud {
   private milestone = h('div', { class: 'milestone' });
   private milestoneUntil = 0;
   private dpad: HTMLElement;
+  private dpadLabels: [HTMLElement, HTMLElement] = [h('div', { class: 'lbl', style: 'top:6px;left:50%;transform:translateX(-50%)' }, 'STRAIGHT'), h('div', { class: 'lbl', style: 'bottom:6px;left:50%;transform:translateX(-50%)' }, 'BEHIND')];
   private bannerUntil = 0;
   private feedbackUntil = 0;
   private toastUntil = 0;
@@ -83,9 +84,7 @@ export class Hud {
 
   private makeDpad(): HTMLElement {
     const knob = h('div', { class: 'knob' });
-    const pad = h('div', { class: 'dpad', 'aria-label': 'Direction pad' }, knob,
-      h('div', { class: 'lbl', style: 'top:6px;left:50%;transform:translateX(-50%)' }, 'STRAIGHT'),
-      h('div', { class: 'lbl', style: 'bottom:6px;left:50%;transform:translateX(-50%)' }, 'BEHIND'));
+    const pad = h('div', { class: 'dpad', 'aria-label': 'Direction pad' }, knob, ...this.dpadLabels);
     const set = (e: PointerEvent) => {
       const r = pad.getBoundingClientRect();
       let x = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
@@ -394,12 +393,14 @@ export class Hud {
       <div class="needle" style="left:${pct(t)}"></div></div>`;
   }
 
-  setVariations(style: Parameters<typeof variationsFor>[0] | null, selected: Variation | null, onPick: (v: Variation) => void): void {
-    const key = `${style}|${selected}`;
+  /** The bowler's deliveries, offered once the target is set (style null hides them). */
+  setVariations(style: Parameters<typeof variationsFor>[0] | null, selected: Variation | null, onPick: (v: Variation) => void, bowler = ''): void {
+    const key = `${style}|${selected}|${bowler}`;
     if (key === this.varKey) return;
     this.varKey = key;
     this.variations.innerHTML = '';
     if (!style) return;
+    this.variations.append(h('div', { class: 'var-title' }, bowler ? `Choose ${bowler}'s delivery` : 'Choose a delivery'));
     variationsFor(style).forEach((v, i) => {
       const b = h('button', { class: `ctrl${v === selected ? ' on' : ''}`, onclick: () => onPick(v) }, VARIATION_LABEL[v], h('kbd', {}, String(i + 1)));
       this.variations.append(b);
@@ -412,8 +413,13 @@ export class Hud {
   }
 
   /** Context-sensitive on-screen buttons (also the touch controls). */
-  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null; charged?: boolean; left?: boolean } = {}): void {
-    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}|${extra.charged}|${extra.left}`;
+  setControls(
+    mode: HudMode,
+    phase: string,
+    device: string,
+    extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null; charged?: boolean; left?: boolean; stage?: 'aim' | 'delivery' } = {},
+  ): void {
+    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}|${extra.charged}|${extra.left}|${extra.stage}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -421,7 +427,12 @@ export class Hud {
     const btn = (label: string, kb: string, gp: string, a: Action, cls = '') =>
       h('button', { class: `ctrl ${cls}`, onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger(a); } }, label, h('kbd', {}, pad ? gp : kb));
     const row = (...b: HTMLElement[]) => h('div', { class: 'ctrl-row' }, ...b);
-    this.dpad.style.display = mode === 'watching' ? 'none' : '';
+    // Bowling: the joystick moves the target until OK sets it, then it goes away until the ball is in the field.
+    const placing = mode === 'bowling' && !extra.fielding && extra.stage === 'aim';
+    this.dpad.style.display = mode === 'watching' || (mode === 'bowling' && !extra.fielding && !placing) ? 'none' : '';
+    this.dpad.classList.toggle('target', placing);
+    this.dpadLabels[0].textContent = placing ? 'FULLER' : 'STRAIGHT';
+    this.dpadLabels[1].textContent = placing ? 'SHORTER' : 'BEHIND';
     if (mode === 'batting') {
       // Actions (how you play it) above the three shots (what you play); the shot follows your aim.
       const fw = extra.footwork ?? 'auto';
@@ -442,13 +453,18 @@ export class Hud {
         row(btn(holding ? 'Throw: bowler' : '—', 'K', 'X', 'lofted'), btn(holding ? 'Throw: keeper' : 'Dive', 'Space', 'A', 'primary', 'big')),
       );
     } else if (mode === 'bowling') {
-      const label = phase === 'runUp' ? 'Release' : 'Bowl';
       const sideLbl = extra.side === 'round' ? 'Round' : 'Over';
-      this.controls.append(
-        row(btn('Field', 'G', 'Back', 'field'), btn('Bowler', 'H', '—', 'bowlers'), btn(`${sideLbl} the wkt`, 'T', 'R3', 'side')),
-        row(btn('Prev', 'Z', '◀', 'varPrev'), btn('Next', 'X', '▶', 'varNext')),
-        row(btn(label, 'Space', 'A', 'primary', 'big')),
-      );
+      if (phase === 'runUp') this.controls.append(row(btn('Release', 'Space', 'A', 'primary', 'big')));
+      else if (extra.stage === 'delivery') {
+        // Step 2: a delivery from the panel at the top, then Bowl.
+        this.controls.append(row(btn('Move target', 'B', 'B', 'back', 'act')), row(btn('Bowl', 'Space', 'A', 'primary', 'big')));
+      } else if (extra.stage === 'aim') {
+        // Step 1: place the target with the joystick and set it with OK.
+        this.controls.append(
+          row(btn('Field', 'G', 'Back', 'field'), btn('Bowler', 'H', '—', 'bowlers'), btn(`${sideLbl} the wkt`, 'T', 'R3', 'side')),
+          row(btn('OK', 'Space', 'A', 'primary', 'big ok')),
+        );
+      } else this.controls.append(row(btn('Field', 'G', 'Back', 'field')));
     }
   }
 

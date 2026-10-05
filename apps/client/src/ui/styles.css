@@ -124,6 +124,14 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .meter .cap { text-align: center; font-size: 12px; color: var(--muted); margin-bottom: 4px; letter-spacing: .1em; text-transform: uppercase; }
 
 .variations { position: absolute; left: 50%; top: 52px; transform: translateX(-50%); display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; max-width: 92vw; }
+/* Bowling step 2: the bowler's deliveries as a panel once the target is set. */
+.variations:not(:empty) { background: rgba(9,20,38,.82); border: 1px solid var(--line); border-radius: 14px; padding: 8px 10px 10px; }
+.variations .var-title { flex-basis: 100%; text-align: center; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--accent-2); }
+/* Bowling step 1: the joystick moves the target; OK sets it. */
+.dpad.target { border-color: rgba(255,182,39,.6); box-shadow: 0 0 0 3px rgba(255,182,39,.15); }
+.dpad.target .knob { background: rgba(255,182,39,.45); }
+.dpad.target .lbl { color: #ffd27a; }
+.ctrl.ok { min-width: 120px; border-color: var(--accent); background: rgba(255,182,39,.22); font-size: 18px; }
 .hint { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: rgba(0,0,0,.45); padding: 6px 12px; border-radius: 8px; font-size: 13px; color: #dfe7f2; max-width: 70vw; text-align: center; }
 .toast { position: absolute; left: 50%; bottom: 190px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 8px 14px; border-radius: 10px; font-weight: 700; }
 .pause-btn { position: absolute; right: 16px; top: 84px; }

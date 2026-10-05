@@ -435,13 +435,14 @@ export class App {
       <p class="muted">Up = straight down the ground, left/right = the side of the screen you want to hit to, down = behind the wicket. Timing is everything: start the shot as the ball arrives.</p>
       <h3>Bowling</h3>
       <table class="card"><tbody>
-      <tr><td>Move the pitch marker (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
-      <tr><td>Choose delivery</td><td>1-8, Z / X</td><td>D-pad left/right</td><td>Delivery buttons</td></tr>
+      <tr><td>1. Move the target on the pitch (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Joystick</td></tr>
+      <tr><td>2. Set the target</td><td>Space</td><td>A</td><td>OK</td></tr>
+      <tr><td>3. Choose a delivery (B: move the target again)</td><td>1-8, Z / X</td><td>D-pad left/right</td><td>Delivery buttons</td></tr>
       <tr><td>Over / round the wicket</td><td>T</td><td>R3</td><td>Over / Round</td></tr>
       <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field</td></tr>
       <tr><td>Choose the bowler (start of an over)</td><td>H</td><td>—</td><td>Bowler</td></tr>
       <tr><td>Review an LBW decision (when offered)</td><td>U</td><td>Y</td><td>Review</td></tr>
-      <tr><td>Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
+      <tr><td>4. Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
       </tbody></table>
       <p class="muted">One bouncer (above shoulder height) is allowed per over; the second is a no-ball. From about the 12th over a pace bowler's swing deliveries can reverse. LBW decisions can be reviewed with ball tracking: you keep the review if it is overturned or umpire's call. Tied matches go to a Super Over.</p>
       <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. On Beginner and Standard assistance a dashed line previews the delivery's path including swing and turn. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>

@@ -3,7 +3,6 @@ import {
   BowlIntent,
   CricketMatch,
   DT,
-  LENGTHS,
   MatchConfig,
   MatchEvent,
   MatchHost,
@@ -31,6 +30,7 @@ import { Hud, HudMode } from '../ui/hud';
 import { describeBall } from '../ui/commentary';
 import { BallRecorder, ReplayFrame, ReplayInfo, ReplayShot, frameAt, planReplay } from './replay';
 import { LocalDriver, MatchDriver } from './driver';
+import { BowlStage, chooseVariation, confirmAim, moveTarget } from './bowlFlow';
 import { QUICK_CHAT } from '@crease/net';
 
 export interface SessionCallbacks {
@@ -44,10 +44,10 @@ export interface SessionCallbacks {
 }
 
 /** Short hints for touch screens (the buttons carry their own labels). */
-function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean): string {
+function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean, stage: BowlStage): string {
   if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Drag to aim · pick your feet · Push, Stroke or Loft as the ball arrives';
   if (fielding) return fielding === 'holding' ? 'Tap a throw, or drag to run it in' : 'Drag the pad to run · Dive · Catch';
-  if (phase === 'preDelivery') return 'Drag to move the marker · pick a delivery · tap Bowl';
+  if (phase === 'preDelivery') return stage === 'aim' ? 'Move the target with the joystick · tap OK' : 'Choose a delivery · tap Bowl';
   if (phase === 'runUp') return 'Tap Release in the green zone';
   return '';
 }
@@ -75,6 +75,11 @@ export class GameSession {
   paused = false;
   private intent: BowlIntent;
   private intentBowler = -1;
+  /** Bowling before the run-up: place the target and press OK, then choose the delivery (it starts again every ball). */
+  private bowlStage: BowlStage = 'aim';
+  private stageKey = '';
+  /** The length set with OK, for going back to after a yorker or bouncer is swapped out. */
+  private aimedLength: number | null = null;
   private lastAim = '';
   private followUntil = 0;
   private cutUntil = 0;
@@ -366,14 +371,8 @@ export class GameSession {
       this.intentBowler = bowlerIdx;
       this.intent = defaultIntent(style);
     }
+    this.syncBowlStage(m);
     const vars = variationsFor(style);
-    const pick = (v: Variation) => {
-      this.intent = { ...this.intent, variation: v };
-      if (v === 'yorker') this.intent.length = LENGTHS.yorker;
-      else if (v === 'bouncer') this.intent.length = LENGTHS.bouncer;
-      else if (this.intent.length < 2 || this.intent.length > 9.5) this.intent.length = style === 'fast' || style === 'medium' ? LENGTHS.good : LENGTHS.full + 0.5;
-      this.sfx.ui();
-    };
     for (const a of actions) {
       if (a === 'field') {
         if (m.phase === 'preDelivery' || m.phase === 'dead') this.cb.onFieldEditor();
@@ -393,27 +392,27 @@ export class GameSession {
         this.hud.hidePicker();
         continue;
       }
-      if (a.startsWith('var') && a !== 'varPrev' && a !== 'varNext') {
-        const v = vars[Number(a.slice(3)) - 1];
-        if (v) pick(v);
-      } else if (a === 'varPrev' || a === 'varNext') {
+      if (m.phase === 'preDelivery' && /^var\d+$|^varPrev$|^varNext$/.test(a)) {
+        // Choosing a delivery while still placing the target also sets the target where it is.
+        if (this.bowlStage === 'aim') this.confirmTarget(m);
         const i = vars.indexOf(this.intent.variation);
-        pick(vars[(i + (a === 'varNext' ? 1 : vars.length - 1)) % vars.length]!);
+        const v = a === 'varPrev' || a === 'varNext' ? vars[(i + (a === 'varNext' ? 1 : vars.length - 1)) % vars.length] : vars[Number(a.slice(3)) - 1];
+        if (v) this.pickVariation(v);
+      } else if ((a === 'back' || a === 'defend') && m.phase === 'preDelivery' && this.bowlStage === 'delivery') {
+        // B: back to the target to move it again.
+        this.bowlStage = 'aim';
+        this.sfx.ui();
       } else if (a === 'primary') {
-        this.flushAim();
-        if (m.phase === 'preDelivery') this.send({ type: 'bowl.start' }, 'bowler');
-        else if (m.phase === 'runUp') this.send({ type: 'bowl.release', at: m.tick }, 'bowler');
+        if (m.phase === 'preDelivery' && this.bowlStage === 'aim') this.confirmTarget(m);
+        else if (m.phase === 'preDelivery') {
+          this.flushAim();
+          this.send({ type: 'bowl.start' }, 'bowler');
+        } else if (m.phase === 'runUp') this.send({ type: 'bowl.release', at: m.tick }, 'bowler');
       }
     }
     if (m.phase === 'preDelivery' || m.phase === 'runUp') {
-      const d = this.input.dir();
-      const dt = 1 / 60;
-      const hand = m.strikerDef.batHand;
-      // Bowling camera looks down +z, so screen-right is world -x.
-      const dxWorld = -d.x * 1.3 * dt;
-      const dLine = hand === 'R' ? dxWorld : -dxWorld;
-      this.intent.line = Math.max(-1.2, Math.min(1.4, this.intent.line + dLine));
-      this.intent.length = Math.max(0.3, Math.min(12.5, this.intent.length - d.y * 6 * dt));
+      // The joystick moves the target only while it is being placed; after OK it stays where it was set.
+      if (m.phase === 'preDelivery' && this.bowlStage === 'aim') this.intent = moveTarget(this.intent, this.input.dir(), m.strikerDef.batHand, 1 / 60);
       const key = JSON.stringify(this.intent);
       if (key !== this.lastAim) {
         this.lastAim = key;
@@ -422,6 +421,31 @@ export class GameSession {
       // Online, the aim is sent at most 15 times a second (and always before the run-up starts).
       if (this.aimDirty && this.due('aim', 1 / 15)) this.flushAim();
     }
+  }
+
+  /** A new ball (or a new bowler) starts with placing the target. */
+  private syncBowlStage(m: CricketMatch): void {
+    const key = `${m.inningsIndex}|${m.inn.log.length}|${m.inn.currentBowler}`;
+    if (key === this.stageKey) return;
+    this.stageKey = key;
+    this.bowlStage = 'aim';
+    this.aimedLength = null;
+  }
+
+  /** OK: the target is set; the bowler's deliveries come up next. */
+  private confirmTarget(m: CricketMatch): void {
+    const r = confirmAim(this.intent, m.bowlerDef.bowlStyle);
+    this.intent = r.intent;
+    this.aimedLength = r.aimedLength;
+    this.bowlStage = 'delivery';
+    this.aimDirty = true;
+    this.flushAim();
+    this.sfx.ui();
+  }
+
+  private pickVariation(v: Variation): void {
+    this.intent = chooseVariation(this.intent, v, this.match.bowlerDef.bowlStyle, this.aimedLength);
+    this.sfx.ui();
   }
 
   private aimDirty = false;
@@ -756,8 +780,13 @@ export class GameSession {
     // Bowling guide.
     const guide = this.settings.showPitchGuide && mode === 'bowling';
     const assist = ASSIST_LEVEL[this.settings.assist];
-    const showMarker = guide && (m.phase === 'preDelivery' || (m.phase === 'runUp' && assist > 0));
+    // While the bowler places it, the target is always shown (it is the control), pulsing until OK sets it.
+    const bowlingNow = mode === 'bowling' && this.can('bowler') && !this.fieldingActive(m);
+    if (bowlingNow) this.syncBowlStage(m);
+    const placing = bowlingNow && m.phase === 'preDelivery';
+    const showMarker = placing || (guide && (m.phase === 'preDelivery' || (m.phase === 'runUp' && assist > 0)));
     this.world.stadium.marker.visible = showMarker;
+    this.world.stadium.setMarker(placing && this.bowlStage === 'aim' ? 'aim' : 'set', now);
     this.world.stadium.lengthGuide.visible = showMarker && assist >= 0.5;
     if (showMarker) {
       const hand = m.strikerDef.batHand;
@@ -793,13 +822,11 @@ export class GameSession {
       this.ballKey = ballKey;
       this.input.pickedFootwork = 'auto';
     }
-    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding, charged: m.charged, left: m.leaveTime !== null });
+    const stage = bowlingNow && m.phase === 'preDelivery' ? this.bowlStage : undefined;
+    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding, charged: m.charged, left: m.leaveTime !== null, stage });
     if (mode === 'bowling') {
-      hud.setVariations(m.phase === 'preDelivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => {
-        this.intent = { ...this.intent, variation: v };
-        if (v === 'yorker') this.intent.length = LENGTHS.yorker;
-        if (v === 'bouncer') this.intent.length = LENGTHS.bouncer;
-      });
+      // The bowler's deliveries come up once the target is set.
+      hud.setVariations(stage === 'delivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => this.pickVariation(v), m.bowlerDef.shortName);
       const w = timingWindows(m.bowlerDef, assist);
       hud.setMeter(m.phase === 'runUp', m.runUpTime, m.runUpDuration, 0.03 + 0.02 * assist, w.good);
     } else {
@@ -820,12 +847,13 @@ export class GameSession {
         ? pad ? 'A: throw to keeper · X: throw to bowler · stick: run it in' : 'Space: throw to keeper · K: throw to bowler · WASD: run it in'
         : pad ? 'Stick: run · A: dive · B: catch · LB: switch · RB: auto' : 'WASD: run · Space: dive · L: catch · Q: switch fielder · E: auto';
     } else if (mode === 'bowling') {
-      if (m.phase === 'preDelivery') hint = pad ? 'Stick: marker · D-pad: variation · R3: over/round · Back: field · A: run in' : 'WASD: marker · 1-8: variation · T: over/round · G: field · H: bowler · Space: run in';
+      if (m.phase === 'preDelivery' && this.bowlStage === 'aim') hint = pad ? 'Stick: move the target · A: OK · R3: over/round · Back: field' : 'WASD: move the target · Space: OK · T: over/round · G: field · H: bowler';
+      else if (m.phase === 'preDelivery') hint = pad ? 'D-pad: choose a delivery · A: bowl · B: move the target again' : '1-8 or Z/X: choose a delivery · Space: bowl · B: move the target again';
       else if (m.phase === 'runUp') hint = pad ? 'Press A in the green zone' : 'Press Space in the green zone to release';
     }
     if (this.driver.networked && mode === 'batting' && !this.can('striker')) hint = 'You are the non-striker: call the runs (R / N / B) - your partner plays the shots';
     if (this.driver.networked && mode === 'bowling' && !this.can('bowler') && !fielding) hint = 'Your partner is bowling this over - you field when the ball is hit (G: set the field)';
-    if (this.input.device === 'touch' && hint) hint = touchHint(mode, m.phase, fielding, this.settings.autoRun);
+    if (this.input.device === 'touch' && hint) hint = touchHint(mode, m.phase, fielding, this.settings.autoRun, this.bowlStage);
     hud.setHint(hint);
 
     this.checkScreens(m);

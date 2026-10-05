@@ -67,9 +67,9 @@ Run the server on a computer (`npm run server`), make sure the phone is on the s
   (turn this off in **Settings > Full screen (phones)**). iPhone Safari has no full screen for web pages, so the
   menu shows a tip: tap **Share > Add to Home Screen** and open Crease Clash from the home-screen icon - it then
   runs full screen like an app. The same works on Android (browser menu > **Install app** / **Add to Home screen**).
-- **Touch controls.** Drag the round pad on the left to aim (shots, bowling marker, fielder) and tap the buttons
-  on the right: Push / Stroke / Loft, Front foot / Back foot / Advance / Leave and Run / Stay / Back when batting; pick a delivery at the top and tap
-  **Bowl**, then **Release** when bowling; Catch / Dive / Throw when fielding.
+- **Touch controls.** Drag the round pad on the left to aim (shots, the bowling target, fielder) and tap the buttons
+  on the right: Push / Stroke / Loft, Front foot / Back foot / Advance / Leave and Run / Stay / Back when batting; when bowling,
+  move the target with the joystick and tap **OK**, pick a delivery at the top, tap **Bowl**, then **Release**; Catch / Dive / Throw when fielding.
 - **Performance.** Phones start on Medium (Low with a 30 fps cap on low-memory phones), resolution adapts to
   keep the frame rate up, and only nearby players use the detailed models. Switching apps pauses a match
   against the AI.
@@ -83,7 +83,7 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 
 | Action | Keyboard | Controller | Touch / mouse |
 | --- | --- | --- | --- |
-| Aim shot / move bowling marker | WASD or arrows | Left stick | Direction pad (bottom left) |
+| Aim shot / move the bowling target | WASD or arrows | Left stick | Direction pad / joystick (bottom left) |
 | **Push** (block, or soft hands into the gap) | L | B | Push |
 | **Stroke** (along the ground) | Space or J | A | Stroke |
 | **Loft** (over the top) | K | X | Loft |
@@ -91,7 +91,8 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Advance down the pitch | F (during the run-up) | D-pad up | Advance |
 | Leave the ball | O | D-pad down (before the ball arrives) | Leave |
 | Run ("YES") / Stay ("NO") / Go back | R or Y / N / B | Y / D-pad down / L3 | Run / Stay / Back |
-| Pick delivery | 1-8, Z / X | D-pad left/right | Delivery buttons |
+| Bowling: set the target | Space or Enter | A | OK |
+| Bowling: pick a delivery (after OK; B moves the target again) | 1-8, Z / X | D-pad left/right | Delivery buttons |
 | Over / round the wicket | T | R3 | Over / Round |
 | Set the field | G | Back / Select | Field |
 | Choose the bowler (start of an over) | H | - | Bowler |
@@ -121,8 +122,10 @@ balls and back to short ones improves contact, the wrong foot costs you. Advance
 good-length spin into a half-volley - but if you miss, a keeper standing up will stump you. After each shot a timing bar shows how many milliseconds early or
 late you were; on Beginner a closing ring on the pitch shows when to play.
 
-**Bowling.** Move the marker to choose line and length (the coloured bands show yorker, full, good and short
-lengths), pick a delivery, press Space to run in and press again in the green zone of the release meter.
+**Bowling.** Move the circle target on the pitch with the joystick (WASD, the left stick or the on-screen joystick)
+to choose line and length - the coloured bands show yorker, full, good and short lengths - and press **OK** (Space / A)
+to set it. The bowler's deliveries then come up: pick one (a yorker or bouncer moves the target to its length; B moves
+the target again), press Space to run in and press again in the green zone of the release meter.
 Early releases lose pace and accuracy; late ones overstep for a no-ball and a free hit. On Beginner and
 Standard assistance a dotted line previews the delivery's path, including swing and turn. Press T to switch
 between over and round the wicket.

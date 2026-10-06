@@ -381,6 +381,7 @@ export class App {
         field('Fielding', sel('fielding', [['assisted', 'Assisted (recommended)'], ['manual', 'Manual'], ['auto', 'Automatic (AI fields)']])),
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
+        field('Camera', sel('camera', [['tv', 'TV (from the bowler\'s end, like a broadcast)'], ['behind', 'Behind the batter / bowler']])),
         field('Bowling pitch guide', sel('showPitchGuide', [['true', 'On'], ['false', 'Off']])),
         field('Sound', sel('sound', [['true', 'On'], ['false', 'Off']])),
       ),
@@ -432,7 +433,7 @@ export class App {
       <p class="muted">Footwork is automatic unless you pick it: getting forward to full balls and back to short ones improves your contact, the wrong foot costs you.
       <b>Front foot</b> against spin or gentle pace turns a Stroke or Loft aimed square or fine on the leg side into a sweep (a slog sweep when lofted), and fine on the off side into a reverse sweep.
       <b>Advance</b> makes a good-length ball a half-volley, but miss it and the keeper will stump you. <b>Leave</b> lets the ball go - safe outside off stump, but not if it is hitting the stumps.</p>
-      <p class="muted">Up = straight down the ground, left/right = the side of the screen you want to hit to, down = behind the wicket. Timing is everything: start the shot as the ball arrives.</p>
+      <p class="muted">Aim where you want the ball to go on the screen: in the TV view the batter faces you, so down = straight back past the bowler and up = behind the wicket (the joystick is labelled). Timing is everything: start the shot as the ball arrives.</p>
       <h3>Bowling</h3>
       <table class="card"><tbody>
       <tr><td>1. Move the target on the pitch (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Joystick</td></tr>
@@ -445,7 +446,7 @@ export class App {
       <tr><td>4. Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
       </tbody></table>
       <p class="muted">One bouncer (above shoulder height) is allowed per over; the second is a no-ball. From about the 12th over a pace bowler's swing deliveries can reverse. LBW decisions can be reviewed with ball tracking: you keep the review if it is overturned or umpire's call. Tied matches go to a Super Over.</p>
-      <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. On Beginner and Standard assistance a dashed line previews the delivery's path including swing and turn. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
+      <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
       <h3>Fielding (when your side is bowling)</h3>
       <table class="card"><tbody>
       <tr><td>Run with the highlighted fielder</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>

@@ -20,7 +20,7 @@ export interface Stadium {
   /** Bowling target: a circle cursor on the pitch where the ball is aimed to land. */
   marker: THREE.Mesh;
   lengthGuide: THREE.Group;
-  /** 'aim': being placed (amber, pulsing); 'set': fixed with OK (teal, still). */
+  /** 'aim': being placed (dark red, pulsing); 'set': fixed with OK (dark blue, still). */
   setMarker(state: 'aim' | 'set', time: number): void;
   update(time: number, excitement: number): void;
   /** Dress the crowd in the two teams' colours. */
@@ -422,21 +422,22 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
   root.add(S.group, B.group);
 
   // Bowling guide: target cursor (ring, centre dot, cross-hair ticks and a pulse while it is placed) and length bands.
-  const markerMat = new THREE.MeshBasicMaterial({ color: '#ffb627', transparent: true, opacity: 0.95, depthWrite: false });
-  const marker = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.3, 32), markerMat);
+  // Dark so it stands out on the light pitch.
+  const markerMat = new THREE.MeshBasicMaterial({ color: '#7a1c00', transparent: true, opacity: 1, depthWrite: false });
+  const marker = new THREE.Mesh(new THREE.RingGeometry(0.14, 0.32, 32), markerMat);
   marker.rotation.x = -Math.PI / 2;
   marker.position.y = 0.012;
   marker.visible = false;
   // Viewed at a grazing angle from the bowler's end, so stretch it along the pitch.
   marker.scale.set(1.9, 4.0, 1);
-  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.07, 16), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.9, depthWrite: false }));
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.07, 16), markerMat);
   marker.add(dot);
   for (const [x, y, w, hgt] of [[0, 0.4, 0.035, 0.13], [0, -0.4, 0.035, 0.13], [0.4, 0, 0.13, 0.035], [-0.4, 0, 0.13, 0.035]] as const) {
     const tick = new THREE.Mesh(new THREE.PlaneGeometry(w, hgt), markerMat);
     tick.position.set(x, y, 0);
     marker.add(tick);
   }
-  const pulseMat = new THREE.MeshBasicMaterial({ color: '#ffb627', transparent: true, opacity: 0.6, depthWrite: false });
+  const pulseMat = new THREE.MeshBasicMaterial({ color: '#7a1c00', transparent: true, opacity: 0.6, depthWrite: false });
   const pulse = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.36, 40), pulseMat);
   marker.add(pulse);
   root.add(marker);
@@ -468,7 +469,7 @@ export function buildStadium(scene: THREE.Scene, q: QualityPreset, tod: TimeOfDa
     lengthGuide,
     setMarker(state, time) {
       const aiming = state === 'aim';
-      markerMat.color.set(aiming ? '#ffb627' : '#2ec4b6');
+      markerMat.color.set(aiming ? '#7a1c00' : '#0a2f45');
       pulse.visible = aiming;
       if (aiming) {
         const k = (time * 1.2) % 1;

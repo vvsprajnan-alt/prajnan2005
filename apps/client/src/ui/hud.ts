@@ -429,9 +429,9 @@ export class Hud {
     mode: HudMode,
     phase: string,
     device: string,
-    extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null; charged?: boolean; left?: boolean; stage?: 'aim' | 'delivery' } = {},
+    extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null; charged?: boolean; left?: boolean; stage?: 'aim' | 'delivery'; tv?: boolean } = {},
   ): void {
-    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}|${extra.charged}|${extra.left}|${extra.stage}`;
+    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}|${extra.charged}|${extra.left}|${extra.stage}|${extra.tv}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -443,8 +443,10 @@ export class Hud {
     const placing = mode === 'bowling' && !extra.fielding && extra.stage === 'aim';
     this.dpad.style.display = mode === 'watching' || (mode === 'bowling' && !extra.fielding && !placing) ? 'none' : '';
     this.dpad.classList.toggle('target', placing);
-    this.dpadLabels[0].textContent = placing ? 'FULLER' : 'STRAIGHT';
-    this.dpadLabels[1].textContent = placing ? 'SHORTER' : 'BEHIND';
+    // Batting in the TV view: the batter faces the camera, so straight is at the bottom.
+    const flip = mode === 'batting' && !!extra.tv;
+    this.dpadLabels[0].textContent = placing ? 'FULLER' : flip ? 'BEHIND' : 'STRAIGHT';
+    this.dpadLabels[1].textContent = placing ? 'SHORTER' : flip ? 'STRAIGHT' : 'BEHIND';
     if (mode === 'batting') {
       // Actions (how you play it) above the three shots (what you play); the shot follows your aim.
       const fw = extra.footwork ?? 'auto';

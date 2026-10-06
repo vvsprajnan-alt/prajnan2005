@@ -13,7 +13,6 @@ export type UmpireSignal = 'out' | 'four' | 'six' | 'wide' | 'noBall' | 'bye' | 
  * Owns the three.js renderer and scene, and turns simulation snapshots into
  * pictures. Holds no game logic.
  */
-const PREVIEW_DOTS = 80;
 
 export class World {
   readonly renderer: THREE.WebGLRenderer;
@@ -28,7 +27,6 @@ export class World {
   private rosterKey = '';
   private excitement = 0;
   private stumpsBrokenAt: { S: number | null; B: number | null } = { S: null, B: null };
-  private preview: THREE.InstancedMesh;
   private cue: THREE.Mesh;
   readonly tracking = new TrackingView();
   private controlRing: THREE.Mesh;
@@ -65,15 +63,6 @@ export class World {
       this.umpires.push(u);
       this.scene.add(u.root);
     }
-    // Bowling guide: predicted path of the delivery, drawn as a trail of glowing dots.
-    this.preview = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.05, 8, 6),
-      new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.9, depthWrite: false }),
-      PREVIEW_DOTS,
-    );
-    this.preview.frustumCulled = false;
-    this.preview.visible = false;
-    this.scene.add(this.preview);
     // Batting cue: a ring at the contact point that closes as the moment to play arrives.
     this.cue = new THREE.Mesh(
       new THREE.RingGeometry(0.16, 0.2, 40),
@@ -99,33 +88,6 @@ export class World {
     this.scene.add(this.controlRing, this.landingMark);
     this.resize();
     window.addEventListener('resize', () => this.resize());
-  }
-
-  setPathPreview(points: { x: number; y: number; z: number }[] | null): void {
-    if (!points || points.length < 2) {
-      this.preview.visible = false;
-      return;
-    }
-    // Resample to evenly spaced dots.
-    const m = new THREE.Matrix4();
-    let n = 0;
-    let carry = 0;
-    for (let i = 1; i < points.length && n < PREVIEW_DOTS; i++) {
-      const a = points[i - 1]!;
-      const b = points[i]!;
-      const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-      let d = carry;
-      while (d < seg && n < PREVIEW_DOTS) {
-        const t = d / seg;
-        m.makeTranslation(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
-        this.preview.setMatrixAt(n++, m);
-        d += 0.45;
-      }
-      carry = d - seg;
-    }
-    this.preview.count = n;
-    this.preview.instanceMatrix.needsUpdate = true;
-    this.preview.visible = true;
   }
 
   /** `k` = 1 far from the moment to play, 0 = play now. */

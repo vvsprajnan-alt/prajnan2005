@@ -107,8 +107,9 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Skip a replay / the team intros | Space | A | Skip |
 
 **Batting.** There are three shots - **Push**, **Stroke** and **Loft** - and four actions - **Front foot**,
-**Back foot**, **Advance** and **Leave**. Hold a direction for where you want to hit it (up = straight,
-left/right = that side of the screen, down = behind) and press a shot as the ball arrives: the batter plays
+**Back foot**, **Advance** and **Leave**. Hold a direction for where you want the ball to go on the screen (in the
+TV view the batter faces you, so down = straight back past the bowler, up = behind the wicket; with the camera
+behind the batter it is the other way round) and press a shot as the ball arrives: the batter plays
 the right cricket shot for your choice, your aim and the ball. A Stroke through the covers is a cover drive
 to a full ball and a back-foot punch to a short one; to the leg side it is a flick or a pull; a Push into a
 gap is a soft single (with no aim it is a solid block); a Loft behind the wicket is a scoop or an upper cut.
@@ -122,6 +123,10 @@ balls and back to short ones improves contact, the wrong foot costs you. Advance
 good-length spin into a half-volley - but if you miss, a keeper standing up will stump you. After each shot a timing bar shows how many milliseconds early or
 late you were; on Beginner a closing ring on the pitch shows when to play.
 
+**Camera.** Like a TV broadcast: before and during each delivery the picture is the long-lens view from high
+behind the bowler, with the batter facing you; when the ball is hit it cuts to a wide shot that follows the ball,
+and cuts back for the next ball. (Settings > Camera can put it behind the batter / bowler instead.)
+
 **Bowling.** Move the circle target on the pitch with the joystick (WASD, the left stick or the on-screen joystick)
 to choose line and length - the coloured bands show yorker, full, good and short lengths - and press **OK** (Space / A)
 to set it. The bowler's deliveries then come up: pick one (a yorker or bouncer moves the target to its length; B moves
@@ -131,7 +136,7 @@ Standard assistance a dotted line previews the delivery's path, including swing 
 between over and round the wicket.
 
 **The field.** The mini map in the top-left corner shows where every fielder is (and follows them, the batters and
-the ball during play). When your side is bowling, click or tap it between balls to set the field: choose a preset, or
+the ball during play: after a hit the ball leaves a dotted trail, so you can see where it went). When your side is bowling, click or tap it between balls to set the field: choose a preset, or
 tap a fielder and then tap where you want them (or drag them). The circle and leg-side limits are counted for you.
 
 **Captaincy.** At the start of each over you pick the bowler (or keep the captain's choice). Press G between

@@ -19,6 +19,9 @@ export class MiniMap {
   readonly el: HTMLElement;
   private dots: SVGCircleElement[] = [];
   private layer = svg('g', {});
+  /** Where the ball has been since it was hit (cleared for the next ball). */
+  private trail: { x: number; z: number }[] = [];
+  private trailLine = svg('polyline', { fill: 'none', stroke: '#ffe14d', 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': '2.5 1.5' });
   private label = h('div', { class: 'mm-label' });
   private lastDraw = -1;
   private editable = false;
@@ -32,6 +35,7 @@ export class MiniMap {
       svg('circle', { cx: 0, cy: 0, r: BOUNDARY_RADIUS, fill: 'rgba(47,107,42,.85)', stroke: 'rgba(255,255,255,.85)', 'stroke-width': 1.2 }),
       svg('path', { d: `M ${-r} ${-L} A ${r} ${r} 0 0 1 ${r} ${-L} L ${r} ${L} A ${r} ${r} 0 0 1 ${-r} ${L} Z`, fill: 'none', stroke: 'rgba(255,255,255,.5)', 'stroke-width': 0.8, 'stroke-dasharray': '3 3' }),
       svg('rect', { x: -1.6, y: -L - 1, width: 3.2, height: 2 * L + 2, fill: '#d8c48e' }),
+      this.trailLine,
       this.layer,
     );
     this.el = h('button', { class: 'minimap', 'aria-label': 'Field map', onclick: () => onClick(this.editable) }, map as unknown as HTMLElement, this.label);
@@ -54,7 +58,16 @@ export class MiniMap {
     for (const f of snap.fielders) marks.push({ x: f.pos.x, z: f.pos.z, r: 3.4, fill: f.keeper ? '#ffb627' : teamColor, stroke: '#fff' });
     marks.push({ x: snap.bowler.pos.x, z: snap.bowler.pos.z, r: 3.4, fill: teamColor, stroke: '#ffb627' });
     for (const b of [snap.striker, snap.nonStriker]) marks.push({ x: b.pos.x, z: b.pos.z, r: 2.8, fill: '#ffffff', stroke: '#1b2a40' });
-    if (snap.ball.visible && snap.phase === 'inPlay') marks.push({ x: snap.ball.pos.x, z: snap.ball.pos.z, r: 2.2, fill: '#ff5a4e', stroke: '#fff' });
+    // The ball: a bright dot while it is live, and after a hit a trail of where it went (kept until the next ball).
+    if (snap.phase === 'preDelivery' || snap.phase === 'runUp') this.trail = [];
+    const live = snap.phase === 'inPlay' || (snap.phase === 'dead' && snap.hit);
+    if (snap.ball.visible && live) {
+      const b = { x: snap.ball.pos.x, z: snap.ball.pos.z };
+      const last = this.trail[this.trail.length - 1];
+      if (snap.hit && (!last || Math.hypot(b.x - last.x, b.z - last.z) > 0.8)) this.trail.push(b);
+      marks.push({ ...b, r: 3.2, fill: '#ffe14d', stroke: '#1b1300' });
+    }
+    this.trailLine.setAttribute('points', this.trail.map((p) => { const q = toMap(p.x, p.z); return `${q.x.toFixed(1)},${q.y.toFixed(1)}`; }).join(' '));
     while (this.dots.length < marks.length) {
       const c = svg('circle', { 'stroke-width': 0.8 }) as SVGCircleElement;
       this.layer.append(c);

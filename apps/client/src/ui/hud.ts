@@ -2,6 +2,7 @@ import {
   BallTracking,
   CricketMatch,
   InningsState,
+  MatchSnapshot,
   TimingWindows,
   VARIATION_LABEL,
   Variation,
@@ -13,6 +14,7 @@ import {
 import { QUICK_CHAT } from '@crease/net';
 import { Action, Input } from '../input/input';
 import { esc, h } from './dom';
+import { MiniMap } from './miniMap';
 
 export type HudMode = 'batting' | 'bowling' | 'watching';
 
@@ -56,6 +58,12 @@ export class Hud {
   private milestone = h('div', { class: 'milestone' });
   private milestoneUntil = 0;
   private dpad: HTMLElement;
+  private now = 0;
+  /** Where the fielders are; clicking it (when the field can be changed) opens the field editor. */
+  private miniMap = new MiniMap((editable) => {
+    if (editable) this.input.trigger('field');
+    else this.showToast('You can change the field when your team is bowling, between balls', this.now);
+  });
   private dpadLabels: [HTMLElement, HTMLElement] = [h('div', { class: 'lbl', style: 'top:6px;left:50%;transform:translateX(-50%)' }, 'STRAIGHT'), h('div', { class: 'lbl', style: 'bottom:6px;left:50%;transform:translateX(-50%)' }, 'BEHIND')];
   private bannerUntil = 0;
   private feedbackUntil = 0;
@@ -68,7 +76,7 @@ export class Hud {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
     const replay = h('button', { class: 'ctrl replay-btn', onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger('replay'); }, 'aria-label': 'Instant replay', title: 'Instant replay (I)' }, '⟲');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.dpad, pause, replay);
+    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.miniMap.el, this.dpad, pause, replay);
     this.chatMenu.style.display = 'none';
     this.roleBox.style.display = 'none';
     this.reviewBox.style.display = 'none';
@@ -407,6 +415,10 @@ export class Hud {
     });
   }
 
+  setMiniMap(snap: MatchSnapshot, editable: boolean, teamColor: string): void {
+    this.miniMap.update(snap, editable, teamColor, this.now);
+  }
+
   setHint(text: string): void {
     this.hint.style.display = text ? '' : 'none';
     this.hint.textContent = text;
@@ -469,6 +481,7 @@ export class Hud {
   }
 
   update(m: CricketMatch, now: number, mode: HudMode): void {
+    this.now = now;
     if (now > this.bannerUntil) this.banner.innerHTML = '';
     if (now > this.feedbackUntil) this.feedback.textContent = '';
     this.timing.style.display = now < this.timingUntil ? '' : 'none';

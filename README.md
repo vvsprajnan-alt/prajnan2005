@@ -94,7 +94,7 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Bowling: set the target | Space or Enter | A | OK |
 | Bowling: pick a delivery (after OK; B moves the target again) | 1-8, Z / X | D-pad left/right | Delivery buttons |
 | Over / round the wicket | T | R3 | Over / Round |
-| Set the field | G | Back / Select | Field |
+| Set the field (or click the mini map, top left) | G | Back / Select | Field / mini map |
 | Choose the bowler (start of an over) | H | - | Bowler |
 | Review an LBW decision (when offered) | U | Y | Review |
 | Fielding: run / dive / catch | WASD / Space / L | Stick / A / B | Pad / Dive / Catch |
@@ -129,6 +129,10 @@ the target again), press Space to run in and press again in the green zone of th
 Early releases lose pace and accuracy; late ones overstep for a no-ball and a free hit. On Beginner and
 Standard assistance a dotted line previews the delivery's path, including swing and turn. Press T to switch
 between over and round the wicket.
+
+**The field.** The mini map in the top-left corner shows where every fielder is (and follows them, the batters and
+the ball during play). When your side is bowling, click or tap it between balls to set the field: choose a preset, or
+tap a fielder and then tap where you want them (or drag them). The circle and leg-side limits are counted for you.
 
 **Captaincy.** At the start of each over you pick the bowler (or keep the captain's choice). Press G between
 balls to set the field: pick a preset or drag fielders on the map. T20 restrictions are enforced by the rules

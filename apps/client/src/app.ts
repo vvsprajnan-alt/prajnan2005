@@ -439,7 +439,7 @@ export class App {
       <tr><td>2. Set the target</td><td>Space</td><td>A</td><td>OK</td></tr>
       <tr><td>3. Choose a delivery (B: move the target again)</td><td>1-8, Z / X</td><td>D-pad left/right</td><td>Delivery buttons</td></tr>
       <tr><td>Over / round the wicket</td><td>T</td><td>R3</td><td>Over / Round</td></tr>
-      <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field</td></tr>
+      <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field, or tap the mini map</td></tr>
       <tr><td>Choose the bowler (start of an over)</td><td>H</td><td>—</td><td>Bowler</td></tr>
       <tr><td>Review an LBW decision (when offered)</td><td>U</td><td>Y</td><td>Review</td></tr>
       <tr><td>4. Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>

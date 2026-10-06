@@ -860,6 +860,9 @@ export class GameSession {
     this.updateBigScreen(m);
     if (this.humanTeam !== null || this.driver.networked) this.sfx.update(this.world.excitementLevel, m.phase);
     const snap = m.snapshot();
+    // Mini map: the field can be changed from it by the bowling side between balls.
+    const canSetField = this.humanTeam !== null && mode === 'bowling' && !fielding && (m.phase === 'preDelivery' || m.phase === 'dead');
+    hud.setMiniMap(snap, canSetField, m.bowlingTeam.colors.primary);
     this.world.render(snap, dt, this.time);
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WaveDirector, crowdSeats, shirtColor } from '../src/render/crowd';
+import { AISLE_SEATS, BLOCK_SEATS, SEAT_BLOCKS, WaveDirector, crowdSeats, shirtColor } from '../src/render/crowd';
 import { STINGS, midi } from '../src/audio/sfx';
 
 const tiers = [
@@ -32,6 +32,25 @@ describe('crowd', () => {
     expect(home).toBeGreaterThan(0.3);
     expect(away).toBeGreaterThan(0.3);
     expect(home + away).toBeLessThan(0.85);
+  });
+
+  it('seats fans in blocks clear of the aisles, filling the lower tier first, with each side sitting together', () => {
+    const seats = crowdSeats(6000, tiers);
+    const per = BLOCK_SEATS + AISLE_SEATS;
+    const cols = SEAT_BLOCKS * per;
+    for (const s of seats) {
+      const c = (s.angle / (2 * Math.PI)) * cols - 0.5;
+      expect(Math.abs(c - Math.round(c))).toBeLessThan(1e-6);
+      expect(Math.round(c) % per).toBeGreaterThanOrEqual(AISLE_SEATS);
+    }
+    const lower = seats.filter((s) => Math.hypot(s.x, s.z) < tiers[0]!.r1 + 2).length;
+    expect(lower / seats.length).toBeGreaterThan(0.55);
+    // Blocks alternate two leaning to the home side, two to the away side.
+    const share = (homeBlocks: boolean) => {
+      const inSide = seats.filter((s) => (Math.floor(s.angle / ((2 * Math.PI) / SEAT_BLOCKS)) % 4 < 2) === homeBlocks);
+      return inSide.filter((s) => shirtColor(s.seed, 'H', 'A', ['n']) === 'H').length / inSide.length;
+    };
+    expect(share(true)).toBeGreaterThan(share(false) + 0.15);
   });
 
   it('starts a Mexican wave after a quiet spell and sends it once round the ground', () => {

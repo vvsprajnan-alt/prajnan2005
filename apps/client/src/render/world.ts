@@ -153,7 +153,8 @@ export class World {
       const k = `${team.id}|${id}|${role}`;
       let c = this.cast.get(k);
       if (!c) {
-        c = new Cricketer(kitFor(team.colors, id, role), this.renderer.shadowMap.enabled);
+        const name = team.players.find((p) => p.id === id)?.name;
+        c = new Cricketer(kitFor(team.colors, id, role, { name, team: team.shortName }), this.renderer.shadowMap.enabled);
         this.cast.set(k, c);
       }
       return c;
@@ -257,7 +258,9 @@ export class World {
       const heading = stance ? (offS > 0 ? Math.PI / 2 : -Math.PI / 2) : s.striker.heading;
       st.setTransform(s.striker.pos.x, s.striker.pos.z, heading);
       const stroke = (s.swing?.stroke ?? 'straightDrive') as Stroke;
-      st.pose(a.anim, a.t, dt, { speed: Math.max(v, s.striker.anim === 'run' ? 3 : 0), stroke, shotAngle: STROKES[stroke]?.natural ?? 0, look: ballAt });
+      // Backlift: the bat goes up as the bowler reaches the crease and stays up while the ball comes down.
+      const backlift = s.phase === 'runUp' ? Math.max(0, Math.min(1, (s.runUp.t - 0.62) / 0.33)) : s.phase === 'inPlay' && !s.hit && s.ball.pos.z < 9.6 ? 1 : 0;
+      st.pose(a.anim, a.t, dt, { speed: Math.max(v, s.striker.anim === 'run' ? 3 : 0), stroke, shotAngle: STROKES[stroke]?.natural ?? 0, look: ballAt, backlift });
     }
     if (ns) {
       ns.setMirror(1);
@@ -271,7 +274,8 @@ export class World {
       const v = this.speedOf('bowler', s.bowler.pos.x, s.bowler.pos.z, dt);
       const a = this.animFor('bowler', s.bowler.anim, s.bowler.t, v, time);
       this.bowler.setTransform(s.bowler.pos.x, s.bowler.pos.z, s.bowler.heading);
-      this.bowler.pose(a.anim, a.t, dt, { speed: a.anim === 'runup' ? 4 + 3 * s.bowler.t : Math.max(v, a.anim === 'run' ? 3 : 0), look: ballAt });
+      const toRelease = a.anim === 'runup' ? (1 - s.runUp.t) * s.runUp.duration : undefined;
+      this.bowler.pose(a.anim, a.t, dt, { speed: a.anim === 'runup' ? 4 + 3 * s.bowler.t : Math.max(v, a.anim === 'run' ? 3 : 0), look: ballAt, toRelease });
     }
     // Fielders (snapshot excludes the bowler; first is the keeper).
     this.fielderPlayers = s.fielders.map((f) => f.player);

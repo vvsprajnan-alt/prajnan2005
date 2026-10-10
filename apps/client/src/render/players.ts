@@ -40,19 +40,71 @@ const MATTE = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.
 const GLOSS = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.05 });
 
 const numberTex = new Map<string, THREE.Texture>();
-function shirtNumber(n: number, color: string): THREE.Texture | null {
+/** The back of the shirt: the surname over the number, in the team colour. */
+function backPrint(n: number, name: string, color: string): THREE.Texture | null {
   if (typeof document === 'undefined' || n <= 0) return null;
-  const key = `${n}:${color}`;
+  const key = `${n}:${name}:${color}`;
+  let t = numberTex.get(key);
+  if (!t) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (name) {
+      ctx.font = 'bold 19px Arial, sans-serif';
+      const text = name.toUpperCase().slice(0, 12);
+      // Squeeze long names to the shirt's width.
+      const w = ctx.measureText(text).width;
+      ctx.save();
+      ctx.translate(64, 22);
+      if (w > 112) ctx.scale(112 / w, 1);
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(0,0,0,.45)';
+      ctx.strokeText(text, 0, 0);
+      ctx.fillText(text, 0, 0);
+      ctx.restore();
+    }
+    ctx.font = 'bold 74px Arial Black, Arial, sans-serif';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(0,0,0,.35)';
+    ctx.strokeText(String(n), 64, name ? 82 : 70);
+    ctx.fillText(String(n), 64, name ? 82 : 70);
+    t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    numberTex.set(key, t);
+  }
+  return t;
+}
+
+/** The chest badge: a small shield with the team's short name. */
+function badgeTex(text: string, fill: string, ink: string): THREE.Texture | null {
+  if (typeof document === 'undefined' || !text) return null;
+  const key = `badge:${text}:${fill}:${ink}`;
   let t = numberTex.get(key);
   if (!t) {
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const ctx = c.getContext('2d')!;
-    ctx.fillStyle = color;
-    ctx.font = 'bold 44px Arial Black, Arial, sans-serif';
+    ctx.beginPath();
+    ctx.moveTo(8, 6);
+    ctx.lineTo(56, 6);
+    ctx.lineTo(56, 34);
+    ctx.quadraticCurveTo(56, 52, 32, 60);
+    ctx.quadraticCurveTo(8, 52, 8, 34);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = ink;
+    ctx.stroke();
+    ctx.fillStyle = ink;
+    ctx.font = `bold ${text.length > 3 ? 13 : 17}px Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(n), 32, 35);
+    ctx.fillText(text.slice(0, 4), 32, 30);
     t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     numberTex.set(key, t);
@@ -66,7 +118,8 @@ function shirtNumber(n: number, color: string): THREE.Texture | null {
  */
 const GEO_CACHE = new Map<string, { high: THREE.BufferGeometry; low: THREE.BufferGeometry; gloss: THREE.BufferGeometry | null }>();
 function bodyGeometry(kit: Kit): { high: THREE.BufferGeometry; low: THREE.BufferGeometry; gloss: THREE.BufferGeometry | null } {
-  const key = JSON.stringify({ ...kit, number: 0 });
+  // The printing (number, name, badge) is separate from the mesh, so players share bodies.
+  const key = JSON.stringify({ ...kit, number: 0, backName: undefined, badge: undefined });
   let g = GEO_CACHE.get(key);
   if (!g) {
     g = { high: buildBodyGeometry(kit, 'high', true), low: buildBodyGeometry(kit, 'low', true), gloss: buildGlossGeometry(kit) };
@@ -139,6 +192,10 @@ export interface PoseExtra {
   stroke?: string;
   /** World point to look at (x, z), e.g. the ball. */
   look?: { x: number; y: number; z: number } | null;
+  /** Bowler's run-up: seconds left until the ball is released (the last strides become the delivery stride). */
+  toRelease?: number;
+  /** Batter in the stance: how far the bat is lifted (0 = grounded, 1 = full backlift as the ball is bowled). */
+  backlift?: number;
 }
 
 interface Grip {
@@ -157,6 +214,7 @@ export class Cricketer {
   private kit: Kit;
   private phase = Math.random() * 10;
   private numberPlane: THREE.Mesh | null = null;
+  private badgePlane: THREE.Mesh | null = null;
   private near: THREE.SkinnedMesh;
   private far: THREE.SkinnedMesh;
   private distant = false;
@@ -174,6 +232,8 @@ export class Cricketer {
   private fromHipsY = 0.95;
   private fromBody = { px: 0, py: 0, rz: 0 };
   private fromBat = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
+  private inStride = false;
+  private backlift = 0;
 
   constructor(kit: Kit, castShadow = true) {
     this.kit = kit;
@@ -217,13 +277,20 @@ export class Cricketer {
       gloss.bind(skeleton, this.near.bindMatrix);
     }
 
-    // Shirt number on the back.
-    const tex = shirtNumber(kit.number, kit.trim);
+    // Name and number on the back, badge on the chest.
+    const tex = backPrint(kit.number, kit.backName ?? '', kit.accent && kit.accent !== kit.shirt ? kit.accent : kit.trim);
     if (tex) {
-      this.numberPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.15), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.8, depthWrite: false }));
-      this.numberPlane.position.set(0, 0.07, -0.118);
+      this.numberPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.2), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.8, depthWrite: false }));
+      this.numberPlane.position.set(0, 0.075, -0.121);
       this.numberPlane.rotation.y = Math.PI;
       this.j.chest.add(this.numberPlane);
+    }
+    const badge = kit.badge ? badgeTex(kit.badge, kit.trim, kit.shirt) : null;
+    if (badge) {
+      this.badgePlane = new THREE.Mesh(new THREE.PlaneGeometry(0.055, 0.055), new THREE.MeshStandardMaterial({ map: badge, transparent: true, roughness: 0.6, depthWrite: false }));
+      this.badgePlane.position.set(0.075, 0.105, 0.121);
+      this.badgePlane.rotation.y = 0.32;
+      this.j.chest.add(this.badgePlane);
     }
     // Bat (pivot at the top of the handle; blade points along -y of the pivot).
     if (kit.bat) {
@@ -243,6 +310,7 @@ export class Cricketer {
     this.near.visible = !distant;
     this.far.visible = distant;
     if (this.numberPlane) this.numberPlane.visible = !distant;
+    if (this.badgePlane) this.badgePlane.visible = !distant;
   }
 
   get lod(): 'high' | 'low' {
@@ -253,6 +321,7 @@ export class Cricketer {
     this.root.scale.x = m;
     // Keep the shirt number readable on a mirrored (left-handed) rig.
     if (this.numberPlane) this.numberPlane.scale.x = m;
+    if (this.badgePlane) this.badgePlane.scale.x = m;
   }
 
   setTransform(x: number, z: number, heading: number): void {
@@ -501,12 +570,22 @@ export class Cricketer {
     let look = true;
     let grounded = true;
     switch (anim) {
-      case 'run':
       case 'runup':
-        if (speed < 2.6 && anim === 'run') this.gait(speed, false);
-        else this.gait(anim === 'runup' ? Math.max(4, speed) : Math.max(3, speed), true);
+        // The last strides of the run-up are the delivery stride: gather, bound, back foot, front foot, release.
+        if (extra.toRelease !== undefined && extra.toRelease < Cricketer.STRIDE) {
+          if (!this.inStride) this.beginFade(0.1);
+          this.inStride = true;
+          this.bowl(-extra.toRelease);
+        } else {
+          this.inStride = false;
+          this.gait(Math.max(4, speed), true);
+        }
+        look = false;
+        break;
+      case 'run':
+        if (speed < 2.6) this.gait(speed, false);
+        else this.gait(Math.max(3, speed), true);
         if (this.kit.bat) this.holdBatRunning();
-        look = anim === 'run';
         break;
       case 'ready':
         this.idleReady();
@@ -549,7 +628,8 @@ export class Cricketer {
         look = false;
         break;
       case 'stance':
-        this.batStance();
+        this.backlift += ((extra.backlift ?? 0) - this.backlift) * (1 - Math.exp(-9 * dt));
+        this.batStance(this.backlift);
         look = false;
         break;
       case 'leave':
@@ -801,13 +881,25 @@ export class Cricketer {
     this.grip('r', this.batPivot.position.clone().addScaledVector(dir.normalize(), 0.09));
   }
 
-  private batStance(): void {
-    // Side-on stance, knees flexed, head turned towards the bowler (local +x).
+  /**
+   * Side-on stance, knees flexed, head turned towards the bowler (local +x). With `lift` the bat goes up behind
+   * as the bowler arrives (the backlift), with a small trigger: weight back, front shoulder in, knees a touch lower.
+   */
+  private batStance(lift = 0): void {
     const breathe = Math.sin(this.phase * 1.7) * 0.01;
-    this.apply({ lean: 0.38 + breathe, lHip: [-0.3, 0, 0.16], rHip: [-0.28, 0, -0.12], lKnee: [0.45, 0, 0], rKnee: [0.42, 0, 0], head: [0.1, 1.15, 0] });
-    const tap = Math.max(0, Math.sin(this.phase * 3)) * 0.03;
-    const hands = new THREE.Vector3(0.02, 0.8 + tap, 0.3);
-    this.placeBat(hands, new THREE.Vector3(-0.15, -1, 0.05));
+    const k = smooth(lift);
+    this.apply({
+      lean: 0.38 + breathe - 0.04 * k,
+      lHip: [-0.3 + 0.04 * k, 0, 0.16], rHip: [-0.28 - 0.06 * k, 0, -0.12],
+      lKnee: [0.45 + 0.08 * k, 0, 0], rKnee: [0.42 + 0.1 * k, 0, 0],
+      chest: [0, -0.12 * k, 0],
+      head: [0.1, 1.15 + 0.1 * k, 0],
+    });
+    // Tapping the bat while waiting; still once it is lifted.
+    const tap = Math.max(0, Math.sin(this.phase * 3)) * 0.03 * (1 - k);
+    const hands = new THREE.Vector3(0.02, 0.8 + tap, 0.3).lerp(new THREE.Vector3(-0.05, 1.1, 0.16), k);
+    const dir = new THREE.Vector3(-0.15, -1, 0.05).lerp(new THREE.Vector3(-0.38, 0.55, -0.55), k).normalize();
+    this.placeBat(hands, dir);
     this.gripBat();
   }
 
@@ -885,32 +977,52 @@ export class Cricketer {
   }
 
   /** Bowling action; t = seconds since release. */
+  /** Seconds before release that the delivery stride starts. */
+  static readonly STRIDE = 0.55;
+
+  /**
+   * The bowling action, timed from release (t = 0): the gather and bound (airborne, knee up, arms coiled at the
+   * chin), back-foot contact side-on with the front arm reaching high, the front foot landing on a braced leg as
+   * the bowling arm comes over the top, then the follow-through (arm across the body, trunk bent, back leg
+   * swinging through) into a jog.
+   */
   private bowl(t: number): void {
-    if (t > 0.35) {
-      // Follow-through turns into a jog.
-      this.gait(3.5, true);
+    if (t > 0.45) {
+      this.gait(3.2, true);
       return;
     }
-    // Windmill of the bowling (right) arm around release (t=0), front arm pulling down, hips driving through.
-    const arm = Math.PI * 1.1 + Math.max(-0.35, Math.min(0.45, t)) * 6.0;
-    const k = clamp01((t + 0.35) / 0.5);
-    const drive = smooth(t / 0.3);
+    const seg = (a: number, b: number) => smooth((t - a) / (b - a));
+    // Key poses, blended in order.
+    const P = {
+      gather: { lHip: -1.25, lKnee: 1.45, rHip: 0.25, rKnee: 0.95, lSh: -2.3, lEl: -1.1, rSh: -1.5, rEl: -1.7, chestY: 0.75, hipsY: 0.45, lean: -0.05, headY: -0.55 },
+      back: { lHip: -1.1, lKnee: 1.05, rHip: -0.02, rKnee: 0.28, lSh: -2.95, lEl: -0.15, rSh: 0.65, rEl: -0.15, chestY: 0.8, hipsY: 0.5, lean: -0.22, headY: -0.6 },
+      release: { lHip: -0.55, lKnee: 0.08, rHip: 0.4, rKnee: 0.5, lSh: -0.55, lEl: -0.7, rSh: -3.45, rEl: -0.05, chestY: 0.0, hipsY: 0.05, lean: 0.38, headY: -0.05 },
+      follow: { lHip: -0.35, lKnee: 0.45, rHip: -0.65, rKnee: 1.05, lSh: 0.35, lEl: -0.8, rSh: -5.85, rEl: -0.3, chestY: -0.55, hipsY: -0.35, lean: 0.8, headY: 0.2 },
+    };
+    type K = typeof P.gather;
+    const lerpPose = (a: K, b: K, k: number): K => Object.fromEntries((Object.keys(a) as (keyof K)[]).map((n) => [n, a[n] + (b[n] - a[n]) * k])) as K;
+    let q: K;
+    if (t < -0.38) q = P.gather;
+    else if (t < -0.12) q = lerpPose(P.gather, P.back, seg(-0.38, -0.28));
+    else if (t < 0) q = lerpPose(P.back, P.release, seg(-0.12, 0));
+    else q = lerpPose(P.release, P.follow, seg(0, 0.32));
+    // Coming out of the run-up into the gather.
+    if (t < -0.42) q = lerpPose({ ...P.gather, lHip: -0.6, lKnee: 0.9, rHip: 0.4, rKnee: 0.6, lSh: -0.9, rSh: -0.6, chestY: 0.2 }, P.gather, seg(-0.55, -0.42));
+    // The bowling arm goes across the body in the follow-through.
+    const across = t > 0 ? 0.55 * seg(0, 0.3) : 0;
     this.apply({
-      rShoulder: [-arm, 0, -0.1],
-      lShoulder: [-2.6 + 2.3 * k, 0, 0.25],
-      lElbow: [-0.3 * k - 0.1, 0, 0],
-      rElbow: [-0.05, 0, 0],
-      lean: -0.2 + 0.8 * drive,
-      chest: [0, 0.5 - 0.9 * drive, 0],
-      hips: [0, 0.3 - 0.5 * drive, 0],
-      lHip: [-0.6 + 0.2 * drive, 0, 0.05],
-      lKnee: [0.1, 0, 0],
-      rHip: [0.55 * drive, 0, -0.05],
-      rKnee: [0.8 * drive, 0, 0],
-      head: [0.1, 0, 0],
+      lHip: [q.lHip, 0, 0.06], lKnee: [q.lKnee, 0, 0],
+      rHip: [q.rHip, 0, -0.06], rKnee: [q.rKnee, 0, 0],
+      lShoulder: [q.lSh, 0, 0.25], lElbow: [q.lEl, 0, 0],
+      rShoulder: [q.rSh, 0, -0.08 + across], rElbow: [q.rEl, 0, 0],
+      chest: [0, q.chestY, 0], hips: [0, q.hipsY, 0],
+      lean: q.lean,
+      head: [0.08, q.headY, 0],
     });
-    // The back foot comes up onto its toes as the hips drive through.
-    this.heelLift.r = 0.7 * drive;
+    // In the air during the bound; up on the toes of the back foot as the hips drive through.
+    if (t > -0.5 && t < -0.3) this.lift = 0.2 * Math.sin((Math.PI * (t + 0.5)) / 0.2);
+    if (t > -0.08) this.heelLift.r = 0.75 * seg(-0.08, 0.1);
+    if (t < -0.3) this.feetFree = true;
   }
 }
 
@@ -929,10 +1041,20 @@ export function lookFor(id: string): Pick<Kit, 'hairStyle' | 'facialHair' | 'bui
   };
 }
 
-/** Factory for common kits. */
-export function kitFor(colors: { primary: string; secondary: string; accent: string }, id: string, role: 'batter' | 'keeper' | 'fielder' | 'bowler'): Kit {
+/** A team's shirt design, the same for every player in it (from its colours). */
+export function designFor(colors: { primary: string }): 0 | 1 | 2 {
+  return (mixOf(colors.primary) % 3) as 0 | 1 | 2;
+}
+
+/** Factory for common kits; `info` adds the surname on the back and the team badge. */
+export function kitFor(colors: { primary: string; secondary: string; accent: string }, id: string, role: 'batter' | 'keeper' | 'fielder' | 'bowler', info: { name?: string; team?: string } = {}): Kit {
   const trousers = new THREE.Color(colors.primary).multiplyScalar(0.55).getStyle();
+  const surname = info.name ? info.name.trim().split(/\s+/).slice(1).join(' ') || info.name : undefined;
   return {
+    accent: colors.accent,
+    design: designFor(colors),
+    backName: surname,
+    badge: info.team,
     shirt: colors.primary,
     trousers,
     trim: colors.secondary,

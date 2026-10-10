@@ -55,14 +55,14 @@ export class PreMatchScene {
     };
     const capt = (t: TeamDef, i: number) => (i === (t.captain ?? 0) ? ' (c)' : '');
     // Home side on one half, the officials in the middle, the away side on the other half.
-    home.players.forEach((p, i) => place(new Cricketer({ ...kitFor(home.colors, p.id, 'fielder'), headgear: 'none' }), 2.6 + (10 - i) * SPACING, `${p.name}${capt(home, i)} · ${home.name}`));
+    home.players.forEach((p, i) => place(new Cricketer({ ...kitFor(home.colors, p.id, 'fielder', { name: p.name, team: home.shortName }), headgear: 'none' }), 2.6 + (10 - i) * SPACING, `${p.name}${capt(home, i)} · ${home.name}`));
     const ref = new Cricketer(REFEREE_KIT);
     const u1 = new Cricketer(UMPIRE_KIT);
     const u2 = new Cricketer(UMPIRE_2);
     place(u1, SPACING, 'Umpire');
     place(ref, 0, 'Match referee');
     place(u2, -SPACING, 'Umpire');
-    away.players.forEach((p, i) => place(new Cricketer({ ...kitFor(away.colors, p.id, 'fielder'), headgear: 'none' }), -2.6 - i * SPACING, `${p.name}${capt(away, i)} · ${away.name}`));
+    away.players.forEach((p, i) => place(new Cricketer({ ...kitFor(away.colors, p.id, 'fielder', { name: p.name, team: away.shortName }), headgear: 'none' }), -2.6 - i * SPACING, `${p.name}${capt(away, i)} · ${away.name}`));
     // The umpires walking out are separate figures (the line-up has gone by then).
     this.umpires = [new Cricketer(UMPIRE_KIT), new Cricketer(UMPIRE_2)];
     for (const u of this.umpires) {

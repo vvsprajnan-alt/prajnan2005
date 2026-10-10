@@ -64,8 +64,8 @@ export class TossScene {
     const capt = (t: TeamDef) => t.players[t.captain ?? 0]!;
     const hc = capt(homeTeam);
     const ac = capt(awayTeam);
-    this.home = new Cricketer({ ...kitFor(homeTeam.colors, hc.id, 'fielder'), headgear: 'none' });
-    this.away = new Cricketer({ ...kitFor(awayTeam.colors, ac.id, 'fielder'), headgear: 'none' });
+    this.home = new Cricketer({ ...kitFor(homeTeam.colors, hc.id, 'fielder', { name: hc.name, team: homeTeam.shortName }), headgear: 'none' });
+    this.away = new Cricketer({ ...kitFor(awayTeam.colors, ac.id, 'fielder', { name: ac.name, team: awayTeam.shortName }), headgear: 'none' });
     this.referee = new Cricketer(REFEREE_KIT);
     // Facing the camera (at the bowler's end, looking down the pitch), the captains turned a little to each other.
     this.home.setTransform(0.95, 0.2, Math.PI - 0.45);

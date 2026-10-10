@@ -91,6 +91,13 @@ export interface Kit {
   build?: number;
   /** Iris colour. */
   eyes?: string;
+  /** Third team colour (piping, the name and number on the back). */
+  accent?: string;
+  /** Shirt design: 0 a sash across the chest, 1 a shoulder yoke, 2 a chevron; undefined = plain. */
+  design?: 0 | 1 | 2;
+  /** Surname over the number on the back, and the team's short name on the chest badge. */
+  backName?: string;
+  badge?: string;
 }
 
 const BI = Object.fromEntries(BONES.map((b, i) => [b, i])) as Record<BoneName, number>;
@@ -607,11 +614,23 @@ export function buildBodyGeometry(kit: Kit, detail: 'high' | 'low' = 'high', wit
       const k = y < 1.5 ? bw : 1;
       return { y, w: w * k, f: f * k, b: b * k, z, n };
     }),
-    lo ? 10 : 24,
-    lo ? 0.09 : 0.03,
+    lo ? 10 : 32,
+    lo ? 0.09 : 0.02,
   );
+  const panel = shirt.clone().multiplyScalar(0.72);
+  const accent = new THREE.Color(kit.accent ?? kit.trim);
+  // The shirt's design, painted on the vertices: darker side panels, then a sash, a yoke or a chevron.
+  const shirtAt = (p: THREE.Vector3): THREE.Color => {
+    if (kit.design === undefined) return shirt;
+    const ax = Math.abs(p.x);
+    if (kit.design === 1 && p.y > 1.375) return p.y < 1.392 ? accent : trim;
+    if (kit.design === 0 && p.z > 0 && Math.abs(p.y - 1.22 - 0.8 * p.x) < 0.036) return Math.abs(p.y - 1.22 - 0.8 * p.x) > 0.026 ? accent : trim;
+    if (kit.design === 2 && p.z > 0 && Math.abs(p.y - 1.25 - 0.95 * ax) < 0.03) return trim;
+    if (ax > 0.13 * bw && p.y < 1.36) return panel;
+    return shirt;
+  };
   parts.push(
-    finish(torso, (p) => (p.y < 0.998 ? trousers : p.y < 1.012 ? belt : p.y < 1.49 ? shirt : p.y < 1.518 ? trim : skin), (p) => {
+    finish(torso, (p) => (p.y < 0.998 ? trousers : p.y < 1.012 ? belt : p.y < 1.49 ? shirtAt(p) : p.y < 1.518 ? trim : skin), (p) => {
       if (p.y > 1.49) {
         const k = smooth((p.y - 1.5) / 0.06);
         const h = smooth((p.y - 1.61) / 0.05);
@@ -671,7 +690,7 @@ export function buildBodyGeometry(kit: Kit, detail: 'high' | 'low' = 'high', wit
     const E = `${side}Elbow` as BoneName;
     const H = `${side}Hand` as BoneName;
     parts.push(
-      finish(arm, (p) => (p.y > sleeveEnd + 0.025 ? shirt : p.y > sleeveEnd - 0.001 ? (kit.longSleeves ? shirt : trim) : skin), (p) => {
+      finish(arm, (p) => (p.y > sleeveEnd + 0.025 ? (kit.design === 1 && p.y > 1.375 ? trim : kit.design !== undefined && p.y < sleeveEnd + 0.045 ? accent : shirt) : p.y > sleeveEnd - 0.001 ? (kit.longSleeves ? shirt : trim) : skin), (p) => {
         if (p.y > 1.44) {
           const c = smooth((p.y - 1.44) / 0.09) * 0.55;
           return [[S, 1 - c], ['chest', c]];
@@ -712,11 +731,18 @@ export function buildBodyGeometry(kit: Kit, detail: 'high' | 'low' = 'high', wit
       [0.1, 0.053, 0.056, 0.055, 0.008],
       [0.085, 0.051, 0.054, 0.053, 0.008],
     ];
-    const leg = loft(L.map(([y, w, f, b, z]) => ({ y, w: w * lw, f: f * lw, b: b * lw, z, x: cx(y) })), lo ? 8 : 16, lo ? 0.12 : 0.04);
+    const leg = loft(L.map(([y, w, f, b, z]) => ({ y, w: w * lw, f: f * lw, b: b * lw, z, x: cx(y) })), lo ? 8 : 20, lo ? 0.12 : 0.04);
+    const legW = monotone([...L].reverse().map((r) => r[0]), [...L].reverse().map((r) => r[1] * lw));
+    const sx = side === 'l' ? 1 : -1;
     const Hb = `${side}Hip` as BoneName;
     const K = `${side}Knee` as BoneName;
     const F = `${side}Foot` as BoneName;
-    const legCol = (p: THREE.Vector3) => (p.y > 0.998 ? (p.y < 1.012 ? belt : trousers) : trousers);
+    const legCol = (p: THREE.Vector3) => {
+      if (p.y > 0.998 && p.y < 1.012) return belt;
+      // The stripe down the outside of the leg (team kits only).
+      if (kit.design !== undefined && p.y < 0.99 && p.y > 0.12 && (p.x - cx(p.y)) * sx > 0.93 * legW(p.y)) return trim;
+      return trousers;
+    };
     parts.push(
       finish(leg, legCol, (p) => {
         if (p.y > 0.8) {

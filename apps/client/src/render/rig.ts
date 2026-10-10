@@ -368,27 +368,120 @@ const FG = { x0: -0.09, y0: -0.13, step: 0.002, nx: 91, ny: 131 };
 /** Depth of the face surface (z from the skull centre) at (x, y) relative to it. */
 function faceZ(x: number, y: number): number {
   if (!faceGrid) {
+    // Solve for the point of the head surface straight in front of each grid node (Newton's method on the
+    // direction, starting from the neighbour's answer), so the depths are exact rather than rounded to the grid.
     faceGrid = new Float32Array(FG.nx * FG.ny).fill(-1);
     const u = new THREE.Vector3();
     const p = new THREE.Vector3();
-    for (let i = 0; i <= 240; i++) {
-      for (let k = 0; k <= 240; k++) {
-        u.set(-1 + (2 * i) / 240, -1 + (2 * k) / 240, 0);
-        const r = u.x * u.x + u.y * u.y;
-        if (r > 1) continue;
-        u.z = Math.sqrt(1 - r);
-        headPoint(u, p).sub(HEAD_CENTRE);
-        const gx = Math.round((p.x - FG.x0) / FG.step);
-        const gy = Math.round((p.y - FG.y0) / FG.step);
-        if (gx < 0 || gy < 0 || gx >= FG.nx || gy >= FG.ny) continue;
-        const j = gy * FG.nx + gx;
-        faceGrid[j] = Math.max(faceGrid[j]!, p.z);
+    const q = new THREE.Vector3();
+    const at = (a: number, b: number, out: THREE.Vector3) => {
+      const r = a * a + b * b;
+      u.set(a, b, Math.sqrt(Math.max(0, 1 - r)));
+      return headPoint(u, out).sub(HEAD_CENTRE);
+    };
+    const e = 1e-4;
+    for (let gy = 0; gy < FG.ny; gy++) {
+      let ua = 0;
+      let ub = 0;
+      let warm = false;
+      for (let gx = 0; gx < FG.nx; gx++) {
+        const x = FG.x0 + gx * FG.step;
+        const y = FG.y0 + gy * FG.step;
+        if (!warm) {
+          ua = Math.max(-0.95, Math.min(0.95, x / HR.x));
+          ub = Math.max(-0.95, Math.min(0.95, y / HR.y));
+        }
+        let ok = false;
+        for (let it = 0; it < 12; it++) {
+          at(ua, ub, p);
+          const rx = x - p.x;
+          const ry = y - p.y;
+          if (rx * rx + ry * ry < 1e-12) {
+            ok = true;
+            break;
+          }
+          at(ua + e, ub, q);
+          const j11 = (q.x - p.x) / e;
+          const j21 = (q.y - p.y) / e;
+          at(ua, ub + e, q);
+          const j12 = (q.x - p.x) / e;
+          const j22 = (q.y - p.y) / e;
+          const det = j11 * j22 - j12 * j21;
+          if (Math.abs(det) < 1e-6) break;
+          ua += (j22 * rx - j12 * ry) / det;
+          ub += (j11 * ry - j21 * rx) / det;
+          const r = Math.hypot(ua, ub);
+          if (r > 0.995) {
+            ua *= 0.995 / r;
+            ub *= 0.995 / r;
+          }
+        }
+        if (!ok) {
+          // Close enough (the cusp of the head shape at the centre line slows Newton down there).
+          at(ua, ub, p);
+          ok = Math.hypot(x - p.x, y - p.y) < 2e-5;
+        }
+        warm = ok;
+        if (ok && Math.sqrt(Math.max(0, 1 - ua * ua - ub * ub)) > 0.05) faceGrid[gy * FG.nx + gx] = at(ua, ub, p).z;
       }
     }
   }
-  const gx = Math.max(0, Math.min(FG.nx - 1, Math.round((x - FG.x0) / FG.step)));
-  const gy = Math.max(0, Math.min(FG.ny - 1, Math.round((y - FG.y0) / FG.step)));
-  return faceGrid[gy * FG.nx + gx]!;
+  // Bilinear between the four nearest samples (any that missed the surface are skipped).
+  const fx = Math.max(0, Math.min(FG.nx - 1.001, (x - FG.x0) / FG.step));
+  const fy = Math.max(0, Math.min(FG.ny - 1.001, (y - FG.y0) / FG.step));
+  const ix = Math.floor(fx);
+  const iy = Math.floor(fy);
+  const tx = fx - ix;
+  const ty = fy - iy;
+  let sum = 0;
+  let wsum = 0;
+  for (const [dx, dy, w] of [[0, 0, (1 - tx) * (1 - ty)], [1, 0, tx * (1 - ty)], [0, 1, (1 - tx) * ty], [1, 1, tx * ty]] as const) {
+    const v = faceGrid[(iy + dy) * FG.nx + ix + dx]!;
+    if (v > -0.5) {
+      sum += v * w;
+      wsum += w;
+    }
+  }
+  return wsum > 0 ? sum / wsum : faceGrid[Math.round(fy) * FG.nx + Math.round(fx)]!;
+}
+
+/**
+ * The sculpted features of the face, as height above the skull surface at (x, y) from the skull centre (metres):
+ * brow ridge, cheekbones, the nose (bridge, tip, nostril wings), lips with the mouth line, and the chin. Also how
+ * much of each there is, for the skin colouring.
+ */
+function faceFeatures(x: number, y: number): { h: number; lipUp: number; lipLo: number; mouth: number; nostril: number; noseTip: number } {
+  const ax = Math.abs(x);
+  const g2 = (dx: number, dy: number, sx: number, sy: number) => Math.exp(-((dx / sx) ** 2) - (dy / sy) ** 2);
+  const band = (v: number, a: number, b: number, soft: number) => smooth((v - a) / soft) * smooth((b - v) / soft);
+  let h = 0;
+  // Brow ridge and cheekbones.
+  h += 0.0028 * g2(ax - 0.028, y - 0.021, 0.022, 0.006);
+  h += 0.0032 * g2(ax - 0.043, y + 0.014, 0.014, 0.013);
+  // Nose: a bridge that widens and rises to the tip, the tip, and the nostril wings either side of it.
+  const ny = clamp01((0.012 - y) / 0.047); // 0 at the top of the bridge, 1 at the tip
+  const nw = 0.0052 + 0.0055 * ny;
+  const nh = 0.0025 + 0.0165 * Math.pow(ny, 1.2);
+  h += nh * Math.exp(-((x / nw) ** 2)) * band(y, -0.041, 0.016, 0.006);
+  const noseTip = g2(x, y + 0.034, 0.008, 0.0065);
+  h += 0.0045 * noseTip;
+  const wing = g2(ax - 0.0108, y + 0.0365, 0.0052, 0.0048);
+  h += 0.0052 * wing;
+  // Under the tip the nose turns back in to the upper lip.
+  h -= 0.003 * g2(x, y + 0.044, 0.012, 0.003);
+  const nostril = g2(ax - 0.0062, y + 0.041, 0.0026, 0.0016);
+  // Lips: upper and lower, narrowing to the corners, with the line of the mouth between them.
+  const width = smooth((0.0225 - ax) / 0.007);
+  const lipUp = Math.exp(-(((y + 0.0585) / 0.0042) ** 2)) * width;
+  const lipLo = Math.exp(-(((y + 0.0688) / 0.0052) ** 2)) * smooth((0.0195 - ax) / 0.007);
+  const mouth = Math.exp(-(((y + 0.0632) / 0.0012) ** 2)) * smooth((0.0235 - ax) / 0.004);
+  h += 0.0042 * lipUp + 0.0048 * lipLo - 0.0016 * mouth;
+  // A soft groove from the nose to the mouth corners, and the chin.
+  const t = clamp01((-0.036 - y) / 0.03);
+  const fold = Math.exp(-(((ax - (0.017 + 0.009 * t)) / 0.0028) ** 2)) * band(y, -0.066, -0.034, 0.004);
+  h -= 0.0011 * fold;
+  h += 0.0045 * g2(x, y + 0.099, 0.021, 0.012);
+  return { h, lipUp, lipLo, mouth, nostril, noseTip };
 }
 
 const SPHERES = new Map<string, THREE.BufferGeometry>();
@@ -424,7 +517,7 @@ function headGeometry(kit: Kit, lo: boolean): THREE.BufferGeometry[] {
   const covered = kit.headgear === 'helmet' || kit.headgear === 'cap' || kit.headgear === 'hat';
   const style: HairStyle = kit.hairStyle ?? 'short';
 
-  const g = sphereDirs(lo ? 12 : 32, lo ? 9 : 24);
+  const g = sphereDirs(lo ? 12 : 48, lo ? 9 : 36);
   const pos = g.getAttribute('position');
   const dirs: THREE.Vector3[] = [];
   const p = new THREE.Vector3();
@@ -484,31 +577,104 @@ function headGeometry(kit: Kit, lo: boolean): THREE.BufferGeometry[] {
 
   const C = HEAD_CENTRE;
   const at = (x: number, y: number, dz: number) => V(C.x + x, C.y + y, C.z + faceZ(x, y) + dz);
-  const irisCol = kit.eyes ?? '#3a2616';
+
+  // The face: a fine mesh over the front of the head carrying the sculpted features and the skin's colouring.
+  // It sits just outside the skull surface and sinks under it at its edge, so there is no seam.
+  {
+    const x0 = -0.064;
+    const y0 = -0.116;
+    const step = 0.0021;
+    const nx = Math.round(0.128 / step) + 1;
+    const ny = Math.round(0.166 / step) + 1;
+    const verts: number[] = [];
+    const inside: number[] = [];
+    const valid: boolean[] = [];
+    const feat: ReturnType<typeof faceFeatures>[] = [];
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const x = x0 + i * step;
+        const y = y0 + j * step;
+        const m = (x / 0.062) ** 2 + ((y + 0.034) / 0.081) ** 2;
+        const fade = smooth((1 - m) / 0.32);
+        const f = faceFeatures(x, y);
+        const z = faceZ(x, y);
+        feat.push(f);
+        inside.push(m);
+        // Past the edge of the head seen from the front there is no surface to follow, and where the surface turns
+        // away steeply (under the jaw) the head itself is left to show.
+        const e = 0.001;
+        const zx = faceZ(x + e, y) - faceZ(x - e, y);
+        const zy = faceZ(x, y + e) - faceZ(x, y - e);
+        valid.push(z > -0.5 && Math.hypot(zx, zy) / (2 * e) < 2.2);
+        // A full beard stands out from the skin as it does on the head itself.
+        const beard = kit.facialHair === 'beard' && z > -0.5 ? 0.006 * facialHairWeight(kit, new THREE.Vector3(x, y, z).normalize()) : 0;
+        verts.push(C.x + x, C.y + y, C.z + (z > -0.5 ? z : 0) + beard + (0.0006 + f.h) * fade - 0.0018 * (1 - fade));
+      }
+    }
+    const idx: number[] = [];
+    for (let j = 0; j < ny - 1; j++) {
+      for (let i = 0; i < nx - 1; i++) {
+        const a0 = j * nx + i;
+        const quad = [a0, a0 + 1, a0 + nx, a0 + nx + 1];
+        if (quad.every((q) => inside[q]! > 1) || quad.some((q) => !valid[q])) continue;
+        // Counter-clockwise seen from the front.
+        idx.push(a0, a0 + 1, a0 + nx + 1, a0, a0 + nx + 1, a0 + nx);
+      }
+    }
+    const face = new THREE.BufferGeometry();
+    face.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    face.setIndex(idx);
+    face.computeVertexNormals();
+    const lipCol = mix(kit.skin, '#9c4048', 0.38).multiplyScalar(0.92);
+    const blush = new THREE.Color('#c4504a');
+    const u = new THREE.Vector3();
+    parts.push(
+      finish(face, (q, i) => {
+        const f = feat[i]!;
+        const x = q.x - C.x;
+        const y = q.y - C.y;
+        const ax = Math.abs(x);
+        const c = skin.clone();
+        // A touch lighter on the forehead and nose bridge, warmer on the cheeks and nose tip.
+        c.multiplyScalar(1 + 0.05 * Math.exp(-(((y - 0.04) / 0.025) ** 2)) * Math.exp(-((x / 0.04) ** 2)));
+        c.lerp(blush, 0.08 * Math.exp(-(((ax - 0.036) / 0.016) ** 2) - ((y + 0.03) / 0.018) ** 2) + 0.06 * f.noseTip);
+        // Shade under the brows and in the inner corners of the eyes, and under the nose and lower lip.
+        c.multiplyScalar(1 - 0.14 * Math.exp(-(((ax - 0.026) / 0.012) ** 2) - ((y - 0.012) / 0.006) ** 2) - 0.1 * Math.exp(-(((ax - 0.016) / 0.005) ** 2) - (y / 0.008) ** 2));
+        c.multiplyScalar(1 - 0.08 * Math.exp(-((x / 0.012) ** 2) - ((y + 0.046) / 0.004) ** 2) - 0.09 * Math.exp(-((x / 0.014) ** 2) - ((y + 0.078) / 0.004) ** 2));
+        // Lips (the lower one a little fuller and lighter), the mouth line and the nostrils.
+        c.lerp(lipCol, Math.min(1, 0.85 * f.lipUp + 0.8 * f.lipLo));
+        c.multiplyScalar(1 + 0.06 * f.lipLo - 0.45 * f.mouth - 0.6 * f.nostril);
+        // Stubble, moustache and beard.
+        u.copy(q).sub(C).normalize();
+        c.lerp(hair, facialHairWeight(kit, u) * (1 - 0.6 * f.lipUp - 0.6 * f.lipLo));
+        return c;
+      }, onHead, 0.12),
+    );
+  }
+
+  const irisCol = new THREE.Color(kit.eyes ?? '#3a2616');
   const lid = skin.clone().multiplyScalar(0.9);
+  const lash = hair.clone().multiplyScalar(0.35);
+  const brow = hair.clone().multiplyScalar(0.78);
   for (const sx of [1, -1]) {
-    // Eyes (at the middle of the head): white, iris, pupil, and an upper lid that gives them a natural line.
-    const eye = at(0.03 * sx, 0.004, -0.0065);
-    parts.push(finish(ellipsoid(eye, [0.0122, 0.0112, 0.0112], 10, 6), '#ece8e0', onHead, 0));
-    parts.push(finish(ellipsoid(eye.clone().add(V(0, -0.0005, 0.0102)), [0.0062, 0.0062, 0.0026], 8, 4), irisCol, onHead, 0));
-    parts.push(finish(ellipsoid(eye.clone().add(V(0, -0.0005, 0.0124)), [0.0027, 0.0027, 0.0011], 6, 4), '#0b0806', onHead, 0));
-    parts.push(finish(ellipsoid(eye.clone().add(V(0, 0.0008, 0.0004)), [0.0133, 0.0127, 0.0127], 10, 4, [0.42, 0, 0], Math.PI * 0.3), lid, onHead, 0));
-    parts.push(finish(ellipsoid(eye.clone().add(V(0, -0.0006, 0.0002)), [0.0133, 0.0124, 0.0124], 10, 3, [Math.PI - 0.1, 0, 0], Math.PI * 0.22), lid, onHead, 0));
-    // Eyebrows.
-    parts.push(finish(ellipsoid(at(0.032 * sx, 0.025, -0.001), [0.0185, 0.0038, 0.005], 8, 4, [0.1, 0.3 * sx, -0.1 * sx]), hair.clone().multiplyScalar(0.8), onHead, 0));
+    // Eyes: white (pinker towards the inner corner), a darker ring round the iris, the pupil, a catch-light,
+    // upper and lower lids, and a dark lash line along the upper lid.
+    const eye = at(0.03 * sx, 0.004, -0.0068);
+    parts.push(finish(ellipsoid(eye, [0.0124, 0.0113, 0.0113], 14, 10), (q) => mix('#efeae2', '#e2b4ac', 0.6 * smooth((0.004 - (q.x - eye.x) * sx) / 0.009)), onHead, 0));
+    parts.push(finish(ellipsoid(eye.clone().add(V(0, -0.0004, 0.0101)), [0.0064, 0.0064, 0.0027], 12, 6), (q) => irisCol.clone().multiplyScalar(0.55 + 0.6 * smooth((0.0062 - Math.hypot(q.x - eye.x, q.y - eye.y + 0.0004)) / 0.004)), onHead, 0));
+    parts.push(finish(ellipsoid(eye.clone().add(V(0, -0.0004, 0.0124)), [0.0028, 0.0028, 0.0011], 8, 4), '#070504', onHead, 0));
+    parts.push(finish(ellipsoid(eye.clone().add(V(0.0022 * sx, 0.0018, 0.0128)), [0.0011, 0.0011, 0.0005], 6, 3), '#ffffff', onHead, 0));
+    parts.push(finish(ellipsoid(eye.clone().add(V(0, 0.0009, 0.0005)), [0.0135, 0.0129, 0.0129], 12, 5, [0.45, 0, 0], Math.PI * 0.3), lid, onHead, 0));
+    parts.push(finish(ellipsoid(eye.clone().add(V(0, 0.0009, 0.0006)), [0.0136, 0.0129, 0.013], 12, 2, [0.45 + Math.PI * 0.28, 0, 0], Math.PI * 0.05), lash, onHead, 0));
+    parts.push(finish(ellipsoid(eye.clone().add(V(0, -0.0007, 0.0003)), [0.0134, 0.0125, 0.0125], 12, 3, [Math.PI - 0.08, 0, 0], Math.PI * 0.22), lid, onHead, 0));
+    // Eyebrows: fuller at the inner end, tapering outwards.
+    parts.push(finish(ellipsoid(at(0.025 * sx, 0.0236, 0.0004), [0.0112, 0.0041, 0.0055], 10, 5, [0.12, 0.22 * sx, -0.05 * sx]), brow, onHead, 0));
+    parts.push(finish(ellipsoid(at(0.036 * sx, 0.0246, -0.0002), [0.0105, 0.003, 0.005], 10, 5, [0.1, 0.42 * sx, -0.16 * sx]), brow, onHead, 0));
     // Ears, level with the eyes and nose.
     const ear = V(C.x + 0.073 * sx, C.y - 0.012, C.z - 0.01);
-    parts.push(finish(ellipsoid(ear, [0.011, 0.031, 0.019], 8, 6, [0.05, -0.35 * sx, 0.1 * sx]), skin, onHead, 0.15));
-    parts.push(finish(ellipsoid(ear.clone().add(V(0.008 * sx, 0, 0.002)), [0.004, 0.019, 0.011], 6, 5, [0.05, -0.35 * sx, 0.1 * sx]), skin.clone().multiplyScalar(0.72), onHead, 0));
-    // Nostril wings.
-    parts.push(finish(ellipsoid(at(0.0098 * sx, -0.037, -0.001), [0.0062, 0.0055, 0.0062], 8, 6), skin, onHead, 0.2));
+    parts.push(finish(ellipsoid(ear, [0.011, 0.031, 0.019], 10, 8, [0.05, -0.35 * sx, 0.1 * sx]), skin, onHead, 0.15));
+    parts.push(finish(ellipsoid(ear.clone().add(V(0.008 * sx, 0, 0.002)), [0.004, 0.019, 0.011], 8, 6, [0.05, -0.35 * sx, 0.1 * sx]), skin.clone().multiplyScalar(0.72), onHead, 0));
   }
-  // Nose: bridge from between the eyes to the tip.
-  parts.push(finish(ellipsoid(at(0, -0.012, 0.0), [0.0074, 0.027, 0.0115], 8, 8, [-0.36, 0, 0]), skin, onHead, 0.15));
-  parts.push(finish(ellipsoid(at(0, -0.033, 0.009), [0.0085, 0.0078, 0.0085], 10, 8), skin, onHead, 0.2));
-  // Lips.
-  parts.push(finish(ellipsoid(at(0, -0.061, -0.0035), [0.02, 0.0048, 0.0075], 10, 4), lips, onHead, 0));
-  parts.push(finish(ellipsoid(at(0, -0.0695, -0.0045), [0.0175, 0.0062, 0.0082], 10, 4), lips.clone().multiplyScalar(1.08), onHead, 0));
   return parts;
 }
 

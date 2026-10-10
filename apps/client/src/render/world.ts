@@ -260,7 +260,7 @@ export class World {
       const stroke = (s.swing?.stroke ?? 'straightDrive') as Stroke;
       // Backlift: the bat goes up as the bowler reaches the crease and stays up while the ball comes down.
       const backlift = s.phase === 'runUp' ? Math.max(0, Math.min(1, (s.runUp.t - 0.62) / 0.33)) : s.phase === 'inPlay' && !s.hit && s.ball.pos.z < 9.6 ? 1 : 0;
-      st.pose(a.anim, a.t, dt, { speed: Math.max(v, s.striker.anim === 'run' ? 3 : 0), stroke, shotAngle: STROKES[stroke]?.natural ?? 0, look: ballAt, backlift });
+      st.pose(a.anim, a.t, dt, { speed: Math.max(v, s.striker.anim === 'run' ? 3 : 0), stroke, shotAngle: STROKES[stroke]?.natural ?? 0, family: s.swing?.family, look: ballAt, backlift });
     }
     if (ns) {
       ns.setMirror(1);

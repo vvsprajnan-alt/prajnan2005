@@ -196,6 +196,8 @@ export interface PoseExtra {
   toRelease?: number;
   /** Batter in the stance: how far the bat is lifted (0 = grounded, 1 = full backlift as the ball is bowled). */
   backlift?: number;
+  /** Shot family ('ground', 'lofted', 'defend'): lofted shots finish higher and fuller. */
+  family?: string;
 }
 
 interface Grip {
@@ -379,10 +381,10 @@ export class Cricketer {
     this.grips.push({ side, at, dir, pole: pole ?? (side === 'l' ? new THREE.Vector3(0.5, -0.8, 0) : new THREE.Vector3(-0.4, -0.8, -0.25)) });
   }
 
-  /** Both hands on the handle: top hand (left) near the top, bottom hand below it. */
-  private gripBat(): void {
+  /** Both hands on the handle: top hand (left) near the top, bottom hand below it; `lPole` points the top elbow. */
+  private gripBat(lPole?: THREE.Vector3): void {
     const dir = new THREE.Vector3(0, -1, 0).applyQuaternion(this.batPivot.quaternion);
-    this.grip('l', this.batPivot.position.clone().addScaledVector(dir, 0.045));
+    this.grip('l', this.batPivot.position.clone().addScaledVector(dir, 0.045), lPole);
     this.grip('r', this.batPivot.position.clone().addScaledVector(dir, 0.13));
   }
 
@@ -644,7 +646,7 @@ export class Cricketer {
         }
         break;
       case 'swing':
-        this.batSwing(t, extra.stroke ?? 'straightDrive', extra.shotAngle ?? 0);
+        this.batSwing(t, extra.stroke ?? 'straightDrive', extra.shotAngle ?? 0, extra.family === 'lofted');
         look = false;
         break;
       // --- reactions (presentation only)
@@ -914,66 +916,191 @@ export class Cricketer {
   }
 
   /**
-   * Stroke animation driven by time relative to bat-ball contact (t = 0).
-   * Keyframes: stance -> backlift -> contact -> follow-through.
+   * Stroke animation, timed from bat-ball contact (t = 0), through five keys: backlift (from the stance), the
+   * downswing, contact, the follow-through and the finish. Each family of shots has its own keys for the hands,
+   * the bat and the body (front-foot stride, back-and-across, kneeling, the turn of the hips and shoulders, the
+   * head over the ball), joined by smooth curves so the bat travels in an arc. Lofted shots finish higher.
    */
-  private batSwing(t: number, stroke: string, shotAngleDeg: number): void {
-    const horizontalLeg = stroke === 'pull' || stroke === 'hook' || stroke === 'sweep';
-    const horizontalOff = stroke === 'cut' || stroke === 'lateCut' || stroke === 'reverseSweep' || stroke === 'upperCut';
-    const scoop = stroke === 'scoop';
-    const sweep = stroke === 'sweep' || stroke === 'reverseSweep';
-    const defence = stroke === 'defence';
-    const front = !(stroke === 'pull' || stroke === 'hook' || stroke === 'cut' || stroke === 'lateCut' || stroke === 'punch' || stroke === 'glance' || stroke === 'upperCut');
+  private batSwing(t: number, stroke: string, shotAngleDeg: number, lofted = false): void {
     const a = (shotAngleDeg * Math.PI) / 180;
-    const aim = new THREE.Vector3(Math.cos(a), 0, Math.sin(a)); // local: +x bowler, +z off side
-
-    const K = {
-      stance: { h: new THREE.Vector3(0.02, 0.8, 0.3), d: new THREE.Vector3(-0.15, -1, 0.05) },
-      back: { h: new THREE.Vector3(-0.22, 1.25, 0.16), d: new THREE.Vector3(-0.45, 0.85, -0.25) },
-      contact: { h: new THREE.Vector3(0.38, 0.74, 0.34), d: new THREE.Vector3(0.12, -1, 0.1) },
-      follow: { h: new THREE.Vector3(0.15 + 0.3 * aim.x, 1.38, 0.2 + 0.28 * aim.z), d: new THREE.Vector3(-0.55, 0.6, -0.35) },
+    const ax = Math.cos(a); // towards the bowler
+    const az = Math.sin(a); // + off side, - leg side
+    const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    type Body = { stride: number; back: number; kneel: number; twist: number; lean: number; heel: number; look: number };
+    type Key = { t: number; h: THREE.Vector3; d: THREE.Vector3; b: Body };
+    const body = (o: Partial<Body>): Body => ({ stride: 0, back: 0, kneel: 0, twist: 0, lean: 0.38, heel: 0, look: 0, ...o });
+    // The backlift every shot starts from (the stance's lifted bat).
+    const B = { h: V(-0.05, 1.1, 0.16), d: V(-0.38, 0.55, -0.55) };
+    let keys: Key[];
+    const drive = (fz: number) => {
+      const loft = lofted ? 1 : 0;
+      return [
+        { t: -0.3, ...B, b: body({ stride: 0.15 }) },
+        { t: -0.11, h: V(0.16, 1.02, 0.3), d: V(-0.55, -0.82, 0.05), b: body({ stride: 0.75, lean: 0.44, look: 0.15 }) },
+        { t: 0, h: V(0.44, 0.74 + 0.04 * loft, 0.3 + 0.06 * az), d: V(0.18 + 0.1 * loft, -1, 0.06 + 0.25 * az), b: body({ stride: 1, lean: 0.5 - 0.1 * loft, heel: 0.5, twist: -0.1 + 0.15 * az, look: 0.3 }) },
+        { t: 0.13, h: V(0.52 + 0.1 * ax, 1.08 + 0.12 * loft, 0.3 + 0.24 * az), d: V(0.65 * ax + 0.1, 0.35 + 0.3 * loft, 0.6 * az + fz), b: body({ stride: 1, lean: 0.46 - 0.15 * loft, heel: 0.7, twist: -0.2 + 0.3 * az - 0.2 * loft, look: 0.2 }) },
+        { t: 0.42, h: V(0.28 + 0.1 * ax, 1.52 + 0.14 * loft, 0.24 + 0.12 * az), d: V(-0.6, 0.45 + 0.25 * loft, -0.4 - 0.2 * loft), b: body({ stride: 1, lean: 0.4 - 0.15 * loft, heel: 0.8, twist: -0.35 + 0.2 * az - 0.25 * loft, look: 0.05 }) },
+      ];
     };
-    if (defence) {
-      K.contact = { h: new THREE.Vector3(0.36, 0.8, 0.3), d: new THREE.Vector3(0.28, -1, 0.02) };
-      K.follow = K.contact;
-      K.back = { h: new THREE.Vector3(-0.05, 1.0, 0.22), d: new THREE.Vector3(-0.3, 0.4, -0.1) };
-    } else if (horizontalLeg) {
-      K.contact = { h: new THREE.Vector3(0.2, sweep ? 0.45 : 1.05, 0.34), d: new THREE.Vector3(0.25, sweep ? -0.25 : 0.1, 1) };
-      K.follow = { h: new THREE.Vector3(-0.1, sweep ? 0.6 : 1.22, -0.12), d: new THREE.Vector3(-0.7, 0.35, -0.6) };
-    } else if (scoop) {
-      K.back = { h: new THREE.Vector3(0.05, 0.9, 0.3), d: new THREE.Vector3(0.2, -1, 0.1) };
-      K.contact = { h: new THREE.Vector3(0.3, 0.55, 0.35), d: new THREE.Vector3(0.7, -0.2, 0.2) };
-      K.follow = { h: new THREE.Vector3(0.05, 1.0, 0.3), d: new THREE.Vector3(0.2, 0.95, -0.1) };
-    } else if (stroke === 'upperCut') {
-      K.contact = { h: new THREE.Vector3(0.2, 1.4, 0.42), d: new THREE.Vector3(0.5, 0.2, 0.85) };
-      K.follow = { h: new THREE.Vector3(-0.2, 1.52, 0.25), d: new THREE.Vector3(-0.8, 0.5, 0.3) };
-    } else if (horizontalOff) {
-      K.contact = { h: new THREE.Vector3(0.18, sweep ? 0.45 : 1.0, 0.42), d: new THREE.Vector3(0.55, -0.3, 0.8) };
-      K.follow = { h: new THREE.Vector3(-0.25, sweep ? 0.6 : 1.1, 0.3), d: new THREE.Vector3(-0.85, 0.2, 0.45) };
+    switch (stroke) {
+      case 'defence':
+        // Forward defence: big stride, head over the ball, bat angled down beside the pad, held there.
+        keys = [
+          { t: -0.25, ...B, b: body({ stride: 0.2 }) },
+          { t: -0.08, h: V(0.22, 0.92, 0.28), d: V(-0.2, -0.95, 0.05), b: body({ stride: 0.8, lean: 0.5, look: 0.2 }) },
+          { t: 0, h: V(0.4, 0.8, 0.29), d: V(0.32, -1, 0.02), b: body({ stride: 1, lean: 0.56, heel: 0.35, look: 0.4 }) },
+          { t: 0.1, h: V(0.4, 0.8, 0.29), d: V(0.34, -1, 0.02), b: body({ stride: 1, lean: 0.56, heel: 0.35, look: 0.35 }) },
+          { t: 0.6, h: V(0.38, 0.82, 0.29), d: V(0.3, -1, 0.02), b: body({ stride: 1, lean: 0.52, heel: 0.3, look: 0.25 }) },
+        ];
+        break;
+      case 'push':
+        // Soft hands: a short swing, checked just after contact.
+        keys = [
+          { t: -0.24, h: V(-0.02, 1.02, 0.2), d: V(-0.35, 0.2, -0.3), b: body({ stride: 0.2 }) },
+          { t: -0.08, h: V(0.2, 0.9, 0.3), d: V(-0.25, -0.95, 0.05), b: body({ stride: 0.75, lean: 0.48, look: 0.15 }) },
+          { t: 0, h: V(0.4, 0.78, 0.3 + 0.05 * az), d: V(0.25, -1, 0.1 + 0.3 * az), b: body({ stride: 1, lean: 0.58, heel: 0.35, look: 0.3 }) },
+          { t: 0.12, h: V(0.46, 0.86, 0.3 + 0.1 * az), d: V(0.4, -0.85, 0.2 + 0.4 * az), b: body({ stride: 1, lean: 0.55, heel: 0.45, look: 0.25 }) },
+          { t: 0.45, h: V(0.44, 0.92, 0.3 + 0.1 * az), d: V(0.35, -0.8, 0.2 + 0.35 * az), b: body({ stride: 1, lean: 0.5, heel: 0.45, look: 0.15 }) },
+        ];
+        break;
+      case 'punch':
+        // Back and across, up on the toes, a short punch with a checked finish.
+        keys = [
+          { t: -0.28, ...B, b: body({ back: 0.3 }) },
+          { t: -0.1, h: V(0.04, 1.12, 0.3), d: V(-0.45, -0.85, 0.05), b: body({ back: 0.9, lean: 0.26, look: 0.15 }) },
+          { t: 0, h: V(0.28, 0.96, 0.33 + 0.05 * az), d: V(0.2, -1, 0.12 + 0.25 * az), b: body({ back: 1, lean: 0.24, look: 0.3 }) },
+          { t: 0.13, h: V(0.46, 1.1, 0.36 + 0.12 * az), d: V(0.55, -0.25, 0.3 + 0.5 * az), b: body({ back: 1, lean: 0.24, twist: 0.1 * az, look: 0.2 }) },
+          { t: 0.42, h: V(0.4, 1.28, 0.32 + 0.1 * az), d: V(0.45, 0.25, 0.25 + 0.45 * az), b: body({ back: 1, lean: 0.22, look: 0.1 }) },
+        ];
+        break;
+      case 'cut':
+      case 'lateCut': {
+        // Back and across to the off side, the bat high, then slapped down horizontally through the line.
+        const late = stroke === 'lateCut' ? 1 : 0;
+        keys = [
+          { t: -0.28, h: V(-0.06, 1.3, 0.22), d: V(-0.35, 0.8, 0.25), b: body({ back: 0.3 }) },
+          { t: -0.1, h: V(0.05, 1.28, 0.36), d: V(0.05, 0.55, 0.85), b: body({ back: 0.9, lean: 0.3, twist: 0.15 }) },
+          { t: 0, h: V(0.16 - 0.14 * late, 1.0 - 0.08 * late, 0.48), d: V(0.45 - 0.6 * late, -0.32, 0.82), b: body({ back: 1, lean: 0.36, twist: 0.25 + 0.15 * late, look: 0.35 }) },
+          { t: 0.12, h: V(-0.02 - 0.08 * late, 0.92, 0.42), d: V(-0.5, -0.45, 0.72), b: body({ back: 1, lean: 0.4, twist: 0.1, look: 0.3 }) },
+          { t: 0.4, h: V(-0.12, 1.08, 0.18), d: V(-0.85, 0.15, 0.2), b: body({ back: 1, lean: 0.34, twist: -0.1, look: 0.1 }) },
+        ];
+        break;
+      }
+      case 'pull':
+      case 'hook': {
+        // Back foot, pivot on it and turn the hips and shoulders round; the bat horizontal across the chest, then
+        // wrapped over the leg-side shoulder.
+        const hi = stroke === 'hook' ? 0.3 : 0;
+        keys = [
+          { t: -0.28, h: V(-0.08, 1.25, 0.18), d: V(-0.4, 0.8, -0.2), b: body({ back: 0.4 }) },
+          { t: -0.1, h: V(0.06, 1.18 + hi, 0.38), d: V(0.15, 0.4, 0.9), b: body({ back: 0.9, lean: 0.2, twist: -0.25 }) },
+          { t: 0, h: V(0.3, 1.08 + hi, 0.28), d: V(0.35, 0.05 + 0.1 * hi, 0.95), b: body({ back: 1, lean: 0.16 - 0.1 * hi, twist: -0.75, heel: 0.3, look: 0.1 }) },
+          { t: 0.12, h: V(0.22, 1.12 + hi, -0.06), d: V(0.4, 0.1, -0.9), b: body({ back: 1, lean: 0.14, twist: -1.2, heel: 0.6, look: 0 }) },
+          { t: 0.42, h: V(-0.12, 1.32 + 0.6 * hi, -0.15), d: V(-0.7, 0.35, -0.6), b: body({ back: 1, lean: 0.12, twist: -1.35, heel: 0.7, look: -0.05 }) },
+        ];
+        break;
+      }
+      case 'sweep':
+      case 'reverseSweep': {
+        // Down on the back knee, front leg bent, the bat swept low and flat across the line.
+        const r = stroke === 'reverseSweep' ? -1 : 1;
+        keys = [
+          { t: -0.3, ...B, b: body({ kneel: 0.3 }) },
+          { t: -0.12, h: V(0.18, 0.75, 0.3 + 0.08 * r), d: V(-0.1, -0.2, r), b: body({ kneel: 1, lean: 0.55, look: 0.2 }) },
+          { t: 0, h: V(0.36, 0.55, 0.32), d: V(0.35, -0.25, r), b: body({ kneel: 1, lean: 0.62, twist: -0.25 * r, look: 0.3 }) },
+          { t: 0.12, h: V(0.26, 0.58, 0.32 - 0.25 * r), d: V(-0.25, -0.12, -r), b: body({ kneel: 1, lean: 0.6, twist: -0.6 * r, look: 0.2 }) },
+          { t: 0.42, h: V(0.04, 0.92, 0.3 - 0.4 * r), d: V(-0.5, 0.6, -0.6 * r), b: body({ kneel: 1, lean: 0.5, twist: -0.75 * r, look: 0.05 }) },
+        ];
+        break;
+      }
+      case 'glance':
+        // Wristy: the bat face turned down to fine leg, almost no follow-through.
+        keys = [
+          { t: -0.26, ...B, b: body({ back: 0.3 }) },
+          { t: -0.09, h: V(0.14, 0.95, 0.27), d: V(-0.3, -0.95, 0), b: body({ back: 0.7, lean: 0.34, look: 0.15 }) },
+          { t: 0, h: V(0.32, 0.8, 0.24), d: V(0.2, -1, -0.32), b: body({ back: 0.8, lean: 0.4, twist: -0.15, look: 0.3 }) },
+          { t: 0.12, h: V(0.3, 0.84, 0.16), d: V(-0.15, -0.9, -0.55), b: body({ back: 0.8, lean: 0.38, twist: -0.3, look: 0.2 }) },
+          { t: 0.4, h: V(0.24, 0.96, 0.12), d: V(-0.25, -0.75, -0.6), b: body({ back: 0.8, lean: 0.34, twist: -0.35, look: 0.1 }) },
+        ];
+        break;
+      case 'flick': {
+        // Front foot, the wrists roll the bat face over to the leg side.
+        keys = drive(0);
+        keys[2]!.d = V(0.2, -1, -0.12);
+        keys[3] = { t: 0.13, h: V(0.5, 0.98, 0.14), d: V(0.25, 0.05, -1), b: body({ stride: 1, lean: 0.5, heel: 0.6, twist: -0.4, look: 0.2 }) };
+        keys[4] = { t: 0.42, h: V(0.26, 1.38 + (lofted ? 0.14 : 0), -0.02), d: V(-0.4, 0.5, -0.75), b: body({ stride: 1, lean: 0.4, heel: 0.75, twist: -0.6, look: 0.05 }) };
+        break;
+      }
+      case 'scoop':
+        keys = [
+          { t: -0.24, h: V(0.05, 0.9, 0.3), d: V(0.2, -1, 0.1), b: body({ kneel: 0.6 }) },
+          { t: -0.08, h: V(0.22, 0.62, 0.34), d: V(0.6, -0.5, 0.15), b: body({ kneel: 1, lean: 0.62, look: 0.3 }) },
+          { t: 0, h: V(0.3, 0.55, 0.35), d: V(0.75, -0.2, 0.2), b: body({ kneel: 1, lean: 0.66, look: 0.35 }) },
+          { t: 0.12, h: V(0.18, 0.78, 0.32), d: V(0.4, 0.6, 0.05), b: body({ kneel: 1, lean: 0.55, look: 0.1 }) },
+          { t: 0.42, h: V(0.05, 1.0, 0.3), d: V(0.2, 0.95, -0.1), b: body({ kneel: 1, lean: 0.45, look: -0.1 }) },
+        ];
+        break;
+      case 'upperCut':
+        keys = [
+          { t: -0.28, h: V(-0.04, 1.25, 0.22), d: V(-0.3, 0.75, 0.3), b: body({ back: 0.4 }) },
+          { t: -0.1, h: V(0.04, 1.32, 0.38), d: V(0.1, 0.4, 0.9), b: body({ back: 0.9, lean: 0.12 }) },
+          { t: 0, h: V(0.2, 1.42, 0.44), d: V(0.5, 0.2, 0.85), b: body({ back: 1, lean: 0.05, twist: 0.25, look: 0.05 }) },
+          { t: 0.12, h: V(0.02, 1.5, 0.36), d: V(-0.4, 0.4, 0.8), b: body({ back: 1, lean: 0.02, twist: 0.2, look: -0.05 }) },
+          { t: 0.42, h: V(-0.2, 1.54, 0.24), d: V(-0.8, 0.5, 0.3), b: body({ back: 1, lean: 0.02, twist: 0.05, look: -0.1 }) },
+        ];
+        break;
+      default:
+        // Straight, cover, square and on drives.
+        keys = drive(0);
     }
-    const lerpK = (x: { h: THREE.Vector3; d: THREE.Vector3 }, y: { h: THREE.Vector3; d: THREE.Vector3 }, f: number) => ({
-      h: x.h.clone().lerp(y.h, f),
-      d: x.d.clone().lerp(y.d, f).normalize(),
+
+    // Catmull-Rom between the keys for the hands and the bat (so the bat swings in an arc); smoothstep for the body.
+    const n = keys.length;
+    let i = 0;
+    while (i < n - 2 && t > keys[i + 1]!.t) i++;
+    const k0 = keys[Math.max(0, i - 1)]!;
+    const k1 = keys[i]!;
+    const k2 = keys[i + 1]!;
+    const k3 = keys[Math.min(n - 1, i + 2)]!;
+    const u = clamp01((t - k1.t) / (k2.t - k1.t));
+    const cr = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3) => {
+      const u2 = u * u;
+      const u3 = u2 * u;
+      return new THREE.Vector3()
+        .addScaledVector(p0, -0.5 * u3 + u2 - 0.5 * u)
+        .addScaledVector(p1, 1.5 * u3 - 2.5 * u2 + 1)
+        .addScaledVector(p2, -1.5 * u3 + 2 * u2 + 0.5 * u)
+        .addScaledVector(p3, 0.5 * u3 - 0.5 * u2);
+    };
+    const hands = t <= keys[0]!.t ? keys[0]!.h.clone() : cr(k0.h, k1.h, k2.h, k3.h);
+    const dir = (t <= keys[0]!.t ? keys[0]!.d.clone() : cr(k0.d.clone().normalize(), k1.d.clone().normalize(), k2.d.clone().normalize(), k3.d.clone().normalize())).normalize();
+    const w = smooth(u);
+    const bd = Object.fromEntries((Object.keys(k1.b) as (keyof Body)[]).map((q) => [q, k1.b[q] + (k2.b[q] - k1.b[q]) * (t <= keys[0]!.t ? 0 : w)])) as Body;
+
+    // Legs: the stance, plus a front-foot stride, a back-and-across step or kneeling, weighted by the keys.
+    const S = bd.stride;
+    const Bk = bd.back;
+    const Kn = bd.kneel;
+    const legs: Pose = {
+      lHip: [-0.3 - 0.52 * S + 0.12 * Bk - 0.9 * Kn, 0.1 * S, 0.16 + 0.14 * S - 0.04 * Bk + 0.14 * Kn],
+      lKnee: [0.45 + 0.32 * S - 0.12 * Bk + 0.85 * Kn, 0, 0],
+      rHip: [-0.28 + 0.34 * S + 0.12 * Bk + 0.58 * Kn, 0, -0.12 - 0.3 * Bk - 0.08 * Kn],
+      rKnee: [0.42 - 0.2 * S - 0.12 * Bk + 1.48 * Kn, 0, 0],
+    };
+    this.apply({
+      lean: bd.lean,
+      head: [0.1 + bd.look, 1.1 - 0.6 * bd.twist * 0.5, 0],
+      chest: [0, bd.twist, 0],
+      hips: [0, bd.twist * 0.45, 0],
+      ...legs,
     });
-    let k;
-    let stride = 0;
-    if (t < -0.26) k = lerpK(K.stance, K.back, smooth((t + 0.5) / 0.24));
-    else if (t < 0) {
-      k = lerpK(K.back, K.contact, smooth((t + 0.26) / 0.26));
-      stride = smooth((t + 0.26) / 0.2);
-    } else {
-      k = lerpK(K.contact, K.follow, smooth(t / (defence ? 0.1 : 0.32)));
-      stride = 1;
-    }
-    const legs: Pose = front
-      ? { lHip: [-0.3 - 0.45 * stride, 0.1, 0.16 + 0.2 * stride], lKnee: [0.45 + 0.2 * stride, 0, 0], rHip: [-0.2 + 0.25 * stride, 0, -0.12], rKnee: [0.42, 0, 0] }
-      : { rHip: [-0.28 + 0.3 * stride, 0, -0.12 - 0.25 * stride], lHip: [-0.3, 0, 0.16], lKnee: [0.45, 0, 0], rKnee: [0.35, 0, 0] };
-    if (sweep || scoop) Object.assign(legs, { lHip: [-1.2 * stride - 0.3 * (1 - stride), 0, 0.3], lKnee: [1.3 * stride + 0.45 * (1 - stride), 0, 0], rHip: [0.3 * stride - 0.28 * (1 - stride), 0, -0.2], rKnee: [1.9 * stride + 0.42 * (1 - stride), 0, 0] });
-    const twist = t < 0 ? -0.35 * stride : -0.35 - 0.45 * smooth(t / 0.3) * (defence ? 0 : 1);
-    this.apply({ lean: 0.38 + 0.12 * stride, head: [0.1, 1.1 + (t > 0 ? -0.3 * smooth(t / 0.4) * (defence ? 0 : 1) : 0), 0], chest: [0, twist + (horizontalLeg ? -0.4 * clamp01(t / 0.2) : 0), 0], hips: [0, twist * 0.4, 0], ...legs });
-    if (front) this.body.position.x = 0.15 * stride;
-    this.placeBat(k.h, k.d);
-    this.gripBat();
+    // Weight onto the front foot for a drive, back onto the back foot (and up on its toes) for a back-foot shot.
+    this.body.position.x = 0.19 * S - 0.12 * Bk;
+    this.heelLift.r = bd.heel;
+    this.placeBat(hands, dir);
+    // A high front elbow on the drives and the defence; the default for cross-batted shots.
+    const vertical = S > 0.5 && Kn < 0.5;
+    this.gripBat(vertical ? new THREE.Vector3(0.7, 0.55, 0.25) : undefined);
   }
 
   /** Bowling action; t = seconds since release. */

@@ -3,9 +3,10 @@
 An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two friends bat together
 (striker + non-striker calling the runs) against two friends bowling and fielding.
 
-> Crease Clash is an original project. All teams, players, sponsors, stadiums, UI, art and sound are
-> fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
-> affiliated with, and does not copy from, any existing cricket game.
+> Crease Clash is an original project. All players, franchises, sponsors, stadiums, UI, art and sound are
+> fictional and made for this game (the 3D art, textures and sounds are generated in code). The international
+> sides use real country names, but every player in them is invented - none stands for a real cricketer. It is
+> not affiliated with, and does not copy from, any existing cricket game.
 
 **Status:** Phase 10 complete, and the players have since been rebuilt as animated people (sculpted faces, hair,
 hands with fingers, natural walking and running, hands that grip the bat). Phase 10 was testing and bug fixing: soak tests over complete matches with scorecard and
@@ -76,8 +77,18 @@ Run the server on a computer (`npm run server`), make sure the phone is on the s
 
 ## How to play
 
-From the main menu choose **Play**, pick teams, overs and difficulty, then call the toss.
+From the main menu choose **Play**, pick teams, overs and difficulty, then go **To the toss**.
 **Practice** drops you straight into batting or bowling nets.
+
+- **Teams.** Six international sides (India, England, Australia, Pakistan, South Africa, New Zealand) with squads
+  of fifteen, and four franchises of eleven. For an international side, **Squad & XI** picks your eleven from the
+  fifteen, sets the batting order and chooses the captain.
+- **The toss** is played out in the middle: the two captains meet the match referee, you call heads or tails, the
+  coin goes up and the camera shows it on the pitch. The winner chooses to bat or bowl.
+- **The score bar** along the bottom shows the batting side, both batters, the score (with the powerplay, free hit
+  and the chase), the bowler and this over's balls.
+- **Player names.** In **Teams**, open a team and choose **Edit names** to rename any player. The names are kept
+  in your browser and used in your matches (online, everyone sees the original names).
 
 ### Controls
 

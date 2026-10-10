@@ -619,6 +619,14 @@ export class Cricketer {
         look = false;
         break;
       }
+      case 'tossCoin': {
+        // Flicking the coin up with the thumb: the hand comes up from the waist and opens at shoulder height.
+        const up = smooth(t / 0.16) * (1 - smooth((t - 0.45) / 0.4));
+        this.apply({ rShoulder: [-0.5 - 0.9 * up, 0, -0.18], rElbow: [-1.5 + 0.7 * up, 0, 0], rHand: [-0.6 * up, 0, 0], lShoulder: [-0.15, 0, 0.25], lElbow: [-0.4, 0, 0], head: [-0.25 * up, 0, 0] });
+        this.idleLegs(0.2);
+        look = false;
+        break;
+      }
       case 'signal-out':
         this.apply({ rShoulder: [-3.05 * smooth(t / 0.4), 0, -0.05], lShoulder: [0, 0, 0.1], lElbow: [-0.2, 0, 0] });
         this.idleLegs(0.2);

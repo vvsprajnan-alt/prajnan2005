@@ -231,6 +231,16 @@ export class World {
     this.excitement = Math.max(this.excitement, level);
   }
 
+  /** Show or hide the match players, umpires and ball (hidden while the toss is played out). */
+  setActorsVisible(on: boolean): void {
+    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.root.visible = on;
+    this.ball.group.visible = on;
+    if (!on) {
+      this.stadium.marker.visible = false;
+      this.stadium.lengthGuide.visible = false;
+    }
+  }
+
   render(s: MatchSnapshot, dt: number, time: number): void {
     const offS = s.strikerHand === 'R' ? 1 : -1;
     // Batters.

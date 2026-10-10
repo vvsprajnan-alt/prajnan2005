@@ -19,14 +19,13 @@ import { MiniMap } from './miniMap';
 export type HudMode = 'batting' | 'bowling' | 'watching';
 
 /**
- * Broadcast-style HUD: scorebug, batter/bowler lower-third, this-over tracker,
+ * Broadcast-style HUD: the score bar along the bottom (batters, score, bowler, this over),
  * event banners, timing feedback, running calls, bowling meter and on-screen
  * (touch-friendly) controls. Pure presentation over match state.
  */
 export class Hud {
   readonly el: HTMLElement;
-  private scorebug = h('div', { class: 'scorebug' });
-  private lower = h('div', { class: 'lowerthird' });
+  private lower = h('div', { class: 'lowerthird scorebar' });
   private banner = h('div', { class: 'banner' });
   private feedback = h('div', { class: 'feedback' });
   private speed = h('div', { class: 'speed' });
@@ -76,7 +75,7 @@ export class Hud {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
     const replay = h('button', { class: 'ctrl replay-btn', onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger('replay'); }, 'aria-label': 'Instant replay', title: 'Instant replay (I)' }, '⟲');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.miniMap.el, this.dpad, pause, replay);
+    this.el = h('div', {}, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.miniMap.el, this.dpad, pause, replay);
     this.chatMenu.style.display = 'none';
     this.roleBox.style.display = 'none';
     this.reviewBox.style.display = 'none';
@@ -513,21 +512,19 @@ export class Hud {
     const bat = m.cfg.teams[inn.battingTeam]!;
     const bowl = m.cfg.teams[inn.bowlingTeam]!;
     const rr = runRate(inn.runs, inn.legalBalls, rules.ballsPerOver).toFixed(2);
-    let info = `<span>RR <b>${rr}</b></span>`;
+    const legalLeft = inn.overs * rules.ballsPerOver - inn.legalBalls;
+    let info = `CRR ${rr}`;
     if (inn.target !== null) {
-      const need = Math.max(0, inn.target - inn.runs);
-      const left = inn.overs * rules.ballsPerOver - inn.legalBalls;
       const rrr = requiredRate(inn, rules);
-      info = `<span>Need <b>${need}</b> off <b>${left}</b></span><span>RRR <b>${rrr !== null ? rrr.toFixed(2) : '-'}</b> · RR ${rr}</span>`;
-    } else {
-      info += `<span>${inn.superOver ? 'Super Over' : esc(rules.format)} · ${inn.overs} ov</span>`;
+      info = `Need ${Math.max(0, inn.target - inn.runs)} off ${legalLeft} · RRR ${rrr !== null ? rrr.toFixed(2) : '-'}`;
     }
-    this.scorebug.style.setProperty('--team', bat.colors.primary);
-    this.scorebug.innerHTML = `<div class="team">${esc(bat.shortName)}</div>
-      <div class="score">${inn.runs}-${inn.wickets}<small>${oversString(inn.legalBalls, rules.ballsPerOver)}</small></div>
-      <div class="info">${info}</div>${inn.freeHit ? '<div class="freehit">FREE HIT</div>' : ''}${
-        inn.superOver ? '<div class="pp so">SUPER OVER</div>' : inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver ? '<div class="pp">POWERPLAY</div>' : ''}`;
-
+    const badge = inn.freeHit
+      ? '<span class="sb-badge hit">FREE HIT</span>'
+      : inn.superOver
+        ? '<span class="sb-badge so">SUPER OVER</span>'
+        : inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver
+          ? '<span class="sb-badge" title="Powerplay">P1</span>'
+          : '';
     const card = (i: number) => inn.batters[i]!;
     const s = card(inn.striker);
     const n = card(inn.nonStriker);
@@ -539,11 +536,14 @@ export class Hud {
         return `<span class="ball-chip ${cls}">${c === '0' ? '•' : esc(c)}</span>`;
       })
       .join('');
+    const batter = (b: typeof s, strike: boolean) =>
+      `<div class="sb-bat${strike ? ' strike' : ''}"><span class="nm">${esc(bat.players[b.player]!.shortName)}${strike ? '*' : ''}</span><b>${b.runs}</b><small>${b.balls}</small></div>`;
+    // One bar along the bottom, like a TV graphic: batting side, the two batters, the score, the bowler, bowling side.
     this.lower.innerHTML = `
-      <div class="lt-box"><div><span class="name">${esc(bat.players[s.player]!.shortName)}*</span><span class="val">${s.runs}</span> <span class="sub">(${s.balls})</span></div>
-        <div><span class="name">${esc(bat.players[n.player]!.shortName)}</span><span class="val">${n.runs}</span> <span class="sub">(${n.balls})</span></div></div>
-      <div class="lt-box hide-sm"><div class="sub">Partnership</div><div><span class="val" style="margin:0">${inn.partnership.runs}</span> <span class="sub">(${inn.partnership.balls})</span></div></div>
-      <div class="lt-box"><div><span class="name">${esc(bowler.shortName)}</span><span class="val">${bw ? `${bw.wickets}-${bw.runs}` : '0-0'}</span> <span class="sub">${bw ? oversString(bw.balls) : '0.0'}</span></div>
-        <div class="balls">${chips || '<span class="sub">New over</span>'}</div></div>`;
+      <div class="sb-end" style="--c:${esc(bat.colors.primary)}">${esc(bat.shortName)}</div>
+      ${batter(s, true)}${batter(n, false)}
+      <div class="sb-score"><div class="sc"><span class="tm">${esc(bat.shortName)}</span><b>${inn.runs}-${inn.wickets}</b>${badge}<span class="ov">${oversString(inn.legalBalls, rules.ballsPerOver)}</span></div><div class="sub">${info}</div></div>
+      <div class="sb-bowl"><div><span class="nm">${esc(bowler.shortName)}</span><b>${bw ? `${bw.wickets}-${bw.runs}` : '0-0'}</b><small>${bw ? oversString(bw.balls) : '0.0'}</small></div><div class="balls">${chips || '<span class="sub">New over</span>'}</div></div>
+      <div class="sb-end" style="--c:${esc(bowl.colors.primary)}">${esc(bowl.shortName)}</div>`;
   }
 }

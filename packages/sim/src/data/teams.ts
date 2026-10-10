@@ -8,6 +8,8 @@ export interface TeamDef {
   /** Kit colours as hex strings: primary, secondary, accent. */
   colors: { primary: string; secondary: string; accent: string };
   players: PlayerDef[];
+  /** Index of the captain in `players` (the first player when not set). */
+  captain?: number;
 }
 
 type Row = [

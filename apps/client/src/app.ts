@@ -2,11 +2,16 @@ import {
   CricketMatch,
   Difficulty,
   InningsState,
+  NATIONS,
   PITCH_PRESETS,
+  PlayerDef,
   Rng,
   TEAMS,
   TeamDef,
+  bowlTypeLabel,
   defaultConfig,
+  getNation,
+  squadTeam,
   makeRules,
   oversString,
 } from '@crease/sim';
@@ -16,6 +21,8 @@ import { MobileProfile, currentEnv, enterFullscreen, mobileProfile } from './mob
 import { GameSession } from './game/session';
 import { Input } from './input/input';
 import { World } from './render/world';
+import { TossScene } from './render/tossScene';
+import { cleanName, loadNames, saveNames, withNames } from './names';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
 import type { CentreTab, MatchCentreOptions } from './ui/matchCentre';
@@ -33,6 +40,9 @@ interface MatchSetup {
   myTeam: string;
   /** Batting order for my team (player indices), or null for squad order. */
   myOrder: number[] | null;
+  /** International sides: my eleven (squad indices, in batting order) and captain; null = the usual ones. */
+  myXI: number[] | null;
+  myCaptain: number | null;
   oppTeam: string;
   overs: number;
   difficulty: Difficulty;
@@ -54,7 +64,9 @@ export class App {
   private fpsEl: HTMLElement;
   private fpsFrames = 0;
   private fpsSince = performance.now();
-  private setup: MatchSetup = { myOrder: null, myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
+  private setup: MatchSetup = { myOrder: null, myXI: null, myCaptain: null, myTeam: 'ind', oppTeam: 'eng', overs: 2, difficulty: 'normal', pitch: 'balanced' };
+  /** The toss being played out on the pitch (between the menus and the match). */
+  private ceremony: TossScene | null = null;
   private root: HTMLElement;
   private mobile: MobileProfile = mobileProfile(currentEnv());
 
@@ -105,7 +117,8 @@ export class App {
     if (!this.limiter.ready(t)) return;
     const dt = (t - this.last) / 1000;
     this.last = t;
-    this.session?.frame(dt);
+    if (this.ceremony) this.ceremony.frame(Math.min(dt, 0.1));
+    else this.session?.frame(dt);
     if (this.settings.adaptiveResolution) {
       const scale = this.governor.sample(dt);
       if (scale !== null) this.world.setResolutionScale(scale);
@@ -170,17 +183,29 @@ export class App {
     }, this.hudRoot);
   }
 
+  /** A team ready to play: an international side's eleven (and captain) or a franchise, with the user's names. */
+  private teamFor(id: string, xi: number[] | null = null, captain: number | null = null): TeamDef {
+    const n = getNation(id);
+    const t = n ? squadTeam(n, xi ?? n.defaultXI, captain ?? n.captain) : TEAMS.find((x) => x.id === id) ?? TEAMS[0]!;
+    return withNames(t);
+  }
+
+  private myTeamFor(setup: MatchSetup): TeamDef {
+    return this.teamFor(setup.myTeam, setup.myXI, setup.myCaptain);
+  }
+
   private startMatch(setup: MatchSetup, humanBatsFirst: boolean, practice: 'bat' | 'bowl' | null = null): void {
+    this.endCeremony();
     this.session?.dispose();
-    const my = TEAMS.find((t) => t.id === setup.myTeam)!;
-    const opp = TEAMS.find((t) => t.id === setup.oppTeam)!;
+    const my = this.myTeamFor(setup);
+    const opp = this.teamFor(setup.oppTeam);
     const overs = practice ? 50 : setup.overs;
     const cfg = defaultConfig([my, opp], overs, (Math.random() * 1e9) | 0);
     cfg.rules = makeRules(overs, practice ? { playersPerSide: 11, maxOversPerBowler: 0 } : {});
     cfg.difficulty = setup.difficulty;
     cfg.conditions = PITCH_PRESETS[setup.pitch] ?? PITCH_PRESETS.balanced!;
     cfg.battingFirst = humanBatsFirst ? 0 : 1;
-    cfg.battingOrders = [setup.myOrder, null];
+    cfg.battingOrders = [getNation(setup.myTeam) ? null : setup.myOrder, null];
     cfg.introSeconds = practice ? 0 : 12;
     this.clearScreens();
     this.root.classList.add('in-match');
@@ -235,15 +260,16 @@ export class App {
         this.tile('Controls', 'Keyboard, controller and touch.', () => this.controlsScreen()),
       ),
       this.homeScreenTip(),
-      h('p', { class: 'muted', style: 'margin-top:18px;font-size:12px' }, `${GAME_NAME} is an original game. All teams, players, sponsors and stadiums are fictional.`),
+      h('p', { class: 'muted', style: 'margin-top:18px;font-size:12px' }, `${GAME_NAME} is an original game. All players, franchises, sponsors and stadiums are fictional.`),
     );
     this.show(card);
   }
 
   private teamSelect(id: string, value: string, onChange: (v: string) => void): HTMLElement {
-    const sel = h('select', { id, onchange: (e: Event) => onChange((e.target as HTMLSelectElement).value) },
-      ...TEAMS.map((t) => h('option', { value: t.id, selected: t.id === value }, t.name)));
-    return sel;
+    const group = (label: string, teams: { id: string; name: string }[]) =>
+      h('optgroup', { label }, ...teams.map((t) => h('option', { value: t.id, selected: t.id === value }, t.name)));
+    return h('select', { id, onchange: (e: Event) => onChange((e.target as HTMLSelectElement).value) },
+      group('International', NATIONS), group('Franchises', TEAMS));
   }
 
   private quickMatch(): void {
@@ -254,7 +280,7 @@ export class App {
     const card = h('div', { class: 'menu-card' },
       this.header('Quick Match'),
       h('div', { class: 'row' },
-        field('Your team', this.teamSelect('my', s.myTeam, (v) => { s.myTeam = v; s.myOrder = null; })),
+        field('Your team', this.teamSelect('my', s.myTeam, (v) => { s.myTeam = v; s.myOrder = null; s.myXI = null; s.myCaptain = null; this.quickMatch(); })),
         field('Opponent', this.teamSelect('opp', s.oppTeam, (v) => (s.oppTeam = v))),
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
@@ -264,7 +290,9 @@ export class App {
       ),
       h('div', { class: 'row', style: 'margin-top:22px' },
         h('button', { class: 'btn', onclick: () => (s.myTeam === s.oppTeam ? alert('Pick two different teams') : this.toss()) }, 'To the toss'),
-        h('button', { class: 'btn secondary', onclick: () => this.battingOrderScreen() }, 'Batting order'),
+        getNation(s.myTeam)
+          ? h('button', { class: 'btn secondary', onclick: () => this.squadScreen() }, 'Squad & XI')
+          : h('button', { class: 'btn secondary', onclick: () => this.battingOrderScreen() }, 'Batting order'),
         h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'),
       ),
     );
@@ -274,7 +302,7 @@ export class App {
   /** Reorder the batting line-up with up/down buttons. */
   private battingOrderScreen(): void {
     const s = this.setup;
-    const team = TEAMS.find((t) => t.id === s.myTeam)!;
+    const team = this.teamFor(s.myTeam);
     const order = s.myOrder ? [...s.myOrder] : team.players.map((_, i) => i);
     const list = h('div', { class: 'order-list' });
     const render = () => {
@@ -302,25 +330,145 @@ export class App {
         h('button', { class: 'btn secondary', onclick: () => this.quickMatch() }, 'Cancel'))));
   }
 
+  /**
+   * The toss, out in the middle: the captains meet the match referee, you call, the coin goes up, and the
+   * winner chooses to bat or bowl.
+   */
   private toss(): void {
     const s = this.setup;
-    const call = (c: 'heads' | 'tails') => {
-      const coin = new Rng((Date.now() & 0xffff) ^ 0x5bd1).next() < 0.5 ? 'heads' : 'tails';
-      const won = coin === c;
-      if (won) {
-        this.show(h('div', { class: 'menu-card' }, this.header(`It's ${coin}. You won the toss!`),
-          h('div', { class: 'menu-grid' },
-            this.tile('Bat first', 'Set a target.', () => this.startMatch(s, true), true),
-            this.tile('Bowl first', 'Chase it down.', () => this.startMatch(s, false)))));
-      } else {
-        const aiBats = Math.random() < 0.5;
-        const opp = TEAMS.find((t) => t.id === s.oppTeam)!;
-        this.show(h('div', { class: 'menu-card' }, this.header(`It's ${coin}. ${opp.name} won the toss and chose to ${aiBats ? 'bat' : 'bowl'}.`),
-          h('button', { class: 'btn', onclick: () => this.startMatch(s, !aiBats) }, aiBats ? 'Take the field' : 'Pad up')));
-      }
+    const my = this.myTeamFor(s);
+    const opp = this.teamFor(s.oppTeam);
+    this.session?.dispose();
+    this.session = null;
+    this.root.classList.add('in-match');
+    this.endCeremony();
+    const scene = new TossScene(this.world, my, opp);
+    this.ceremony = scene;
+    const capt = (t: TeamDef) => t.players[t.captain ?? 0]!.name;
+    const panel = (...kids: (HTMLElement | string)[]) => {
+      this.clearScreens();
+      this.screens.append(h('div', { class: 'toss-ui' }, h('div', { class: 'toss-panel' }, ...kids)));
+      (this.screens.querySelector('.toss-panel button') as HTMLButtonElement | null)?.focus();
     };
-    this.show(h('div', { class: 'menu-card' }, this.header('The toss. Call it!'),
-      h('div', { class: 'menu-grid' }, this.tile('Heads', '', () => call('heads'), true), this.tile('Tails', '', () => call('tails')))));
+    const call = (c: 'heads' | 'tails') => {
+      this.sfx.ui();
+      const coin = new Rng((Date.now() & 0xffff) ^ 0x5bd1).next() < 0.5 ? 'heads' : 'tails';
+      panel(h('div', { class: 'toss-title' }, `${capt(my)} calls ${c}...`));
+      void scene.call(coin === 'heads').then(() => {
+        if (this.ceremony !== scene) return;
+        const won = coin === c;
+        scene.celebrate(won);
+        const label = coin === 'heads' ? 'Heads' : 'Tails';
+        if (won) {
+          panel(h('div', { class: 'toss-title' }, `It's ${label}! You won the toss.`), h('div', { class: 'toss-sub' }, 'What would you like to do?'),
+            h('div', { class: 'toss-choice' },
+              h('button', { class: 'btn toss-btn', onclick: () => this.startMatch(s, true) }, h('b', {}, 'Bat first'), h('small', {}, 'Set a target')),
+              h('button', { class: 'btn toss-btn', onclick: () => this.startMatch(s, false) }, h('b', {}, 'Bowl first'), h('small', {}, 'Chase it down'))));
+        } else {
+          const aiBats = Math.random() < 0.5;
+          panel(h('div', { class: 'toss-title' }, `It's ${label}. ${opp.name} won the toss.`), h('div', { class: 'toss-sub' }, `${capt(opp)} chooses to ${aiBats ? 'bat' : 'bowl'} first.`),
+            h('div', { class: 'toss-choice' }, h('button', { class: 'btn toss-btn', onclick: () => this.startMatch(s, !aiBats) }, h('b', {}, aiBats ? 'Take the field' : 'Pad up'))));
+        }
+      });
+    };
+    panel(h('div', { class: 'toss-title' }, 'The toss'),
+      h('div', { class: 'toss-sub' }, `${capt(my)} (${my.shortName}) and ${capt(opp)} (${opp.shortName}) meet the match referee. Call it!`),
+      h('div', { class: 'toss-choice' },
+        h('button', { class: 'btn toss-btn', onclick: () => call('heads') }, h('b', {}, 'Heads')),
+        h('button', { class: 'btn toss-btn', onclick: () => call('tails') }, h('b', {}, 'Tails'))),
+      h('button', { class: 'ctrl toss-back', onclick: () => { this.endCeremony(); this.startAttract(); this.quickMatch(); } }, 'Back'));
+  }
+
+  private endCeremony(): void {
+    this.ceremony?.dispose();
+    this.ceremony = null;
+  }
+
+  /** International side: pick the eleven from the squad of fifteen, their batting order and the captain. */
+  private squadScreen(): void {
+    const s = this.setup;
+    const n = getNation(s.myTeam);
+    if (!n) return this.quickMatch();
+    const names = loadNames();
+    const name = (p: PlayerDef) => names[p.id] ?? p.name;
+    let xi = [...(s.myXI ?? n.defaultXI)];
+    let captain = s.myCaptain ?? n.captain;
+    const table = h('table', { class: 'card squad-table' });
+    const final = h('div', { class: 'order-list' });
+    const status = h('p', { class: 'muted' });
+    const save = h('button', { class: 'btn', onclick: () => {
+      if (xi.length !== 11) return;
+      s.myXI = [...xi];
+      s.myCaptain = xi.includes(captain) ? captain : xi[0]!;
+      this.quickMatch();
+    } }, 'Save') as HTMLButtonElement;
+    const render = () => {
+      table.innerHTML = '<thead><tr><th></th><th>Player</th><th>Role</th><th>BAT</th><th>TIM</th><th>PWR</th><th>BOWL</th><th>Bowling</th></tr></thead>';
+      const body = h('tbody', {});
+      n.squad.forEach((p, i) => {
+        const inXI = xi.includes(i);
+        const toggle = () => {
+          if (inXI) xi = xi.filter((j) => j !== i);
+          else if (xi.length < 11) xi.push(i);
+          render();
+        };
+        body.append(h('tr', { class: inXI ? 'in-xi' : '' },
+          h('td', {}, h('button', { class: `ctrl pick${inXI ? ' on' : ''}`, 'aria-label': `${inXI ? 'Drop' : 'Pick'} ${name(p)}`, onclick: toggle }, inXI ? '✓' : '+')),
+          h('td', {}, name(p), i === captain ? h('span', { class: 'pill' }, 'C') : ''),
+          h('td', {}, p.role), h('td', {}, String(p.attrs.batting)), h('td', {}, String(p.attrs.timing)), h('td', {}, String(p.attrs.power)),
+          h('td', {}, String(p.attrs.bowling)), h('td', { class: 'muted' }, bowlTypeLabel(p))));
+      });
+      table.append(body);
+      final.innerHTML = '';
+      xi.forEach((i, k) => {
+        const p = n.squad[i]!;
+        const move = (d: number) => {
+          const j = k + d;
+          if (j < 0 || j >= xi.length) return;
+          [xi[k], xi[j]] = [xi[j]!, xi[k]!];
+          render();
+        };
+        final.append(h('div', { class: 'order-row' },
+          h('span', { class: 'order-no' }, String(k + 1)),
+          h('span', { class: 'order-name' }, h('b', {}, name(p)), ' ', h('span', { class: 'muted' }, p.role)),
+          h('button', { class: `ctrl${i === captain ? ' on' : ''}`, 'aria-label': `Make ${name(p)} captain`, title: 'Captain', onclick: () => { captain = i; render(); } }, 'C'),
+          h('button', { class: 'ctrl', 'aria-label': `Move ${name(p)} up`, onclick: () => move(-1) }, '▲'),
+          h('button', { class: 'ctrl', 'aria-label': `Move ${name(p)} down`, onclick: () => move(1) }, '▼')));
+      });
+      const keeper = xi.some((i) => n.squad[i]!.role === 'keeper');
+      status.textContent = `${xi.length} / 11 picked${xi.length === 11 && !keeper ? ' · no wicketkeeper: a fielder will keep' : ''}${xi.includes(captain) ? '' : ' · tap C to choose a captain'}`;
+      save.disabled = xi.length !== 11;
+    };
+    render();
+    this.show(h('div', { class: 'menu-card' }, this.header(`${n.name} · squad`),
+      h('p', { class: 'muted' }, 'Pick your eleven (+ / ✓), set the batting order with ▲ ▼ and choose the captain (C).'),
+      h('div', { class: 'squad-wrap' }, h('div', { style: 'overflow:auto' }, table), h('div', {}, h('h3', {}, 'Final XI'), final)),
+      status,
+      h('div', { class: 'row', style: 'margin-top:12px' }, save,
+        h('button', { class: 'btn secondary', onclick: () => { s.myXI = null; s.myCaptain = null; this.quickMatch(); } }, 'Reset'),
+        h('button', { class: 'btn secondary', onclick: () => this.quickMatch() }, 'Cancel'))));
+  }
+
+  /** Rename any player (kept in this browser). */
+  private nameEditor(title: string, players: PlayerDef[], back: () => void): void {
+    const names = loadNames();
+    const inputs = players.map((p) => h('input', { type: 'text', value: names[p.id] ?? p.name, maxlength: 24, 'aria-label': `Name for ${p.name}` }) as HTMLInputElement);
+    const rows = players.map((p, i) => h('div', { class: 'name-row' }, h('span', { class: 'muted' }, p.name), inputs[i]!));
+    this.show(h('div', { class: 'menu-card' }, this.header(`${title} · edit names`),
+      h('p', { class: 'muted' }, 'Names you change are kept in this browser and used in your matches. Leave a name empty (or as it was) to keep the original.'),
+      h('div', { class: 'name-list' }, ...rows),
+      h('div', { class: 'row', style: 'margin-top:14px' },
+        h('button', { class: 'btn', onclick: () => {
+          players.forEach((p, i) => {
+            const v = cleanName(inputs[i]!.value);
+            if (!v || v === p.name) delete names[p.id];
+            else names[p.id] = v;
+          });
+          saveNames(names);
+          back();
+        } }, 'Save'),
+        h('button', { class: 'btn secondary', onclick: () => { players.forEach((p) => delete names[p.id]); saveNames(names); back(); } }, 'Reset all'),
+        h('button', { class: 'btn secondary', onclick: back }, 'Cancel'))));
   }
 
   private practiceMenu(): void {
@@ -333,25 +481,33 @@ export class App {
   }
 
   private teamsScreen(): void {
-    const list = h('div', { class: 'menu-grid' },
-      ...TEAMS.map((t) => {
-        const tile = this.tile(t.name, `${t.city} · ${t.players.length} players`, () => this.teamDetail(t));
-        tile.style.borderLeft = `6px solid ${t.colors.primary}`;
-        return tile;
-      }));
-    this.show(h('div', { class: 'menu-card' }, this.header('Teams'), list, h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
+    const tile = (t: { name: string; colors: TeamDef['colors'] }, desc: string, open: () => void) => {
+      const el = this.tile(t.name, desc, open);
+      el.style.borderLeft = `6px solid ${t.colors.primary}`;
+      return el;
+    };
+    this.show(h('div', { class: 'menu-card' }, this.header('Teams'),
+      h('h3', {}, 'International'),
+      h('div', { class: 'menu-grid' }, ...NATIONS.map((n) => tile(n, `Squad of ${n.squad.length}`, () => this.teamDetail({ ...n, players: n.squad })))),
+      h('h3', {}, 'Franchises'),
+      h('div', { class: 'menu-grid' }, ...TEAMS.map((t) => tile(t, `${t.city} · ${t.players.length} players`, () => this.teamDetail(t)))),
+      h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
   }
 
-  private teamDetail(t: TeamDef): void {
-    const rows = t.players.map((p) => `<tr><td>${esc(p.name)} <span class="pill">${p.role}</span></td><td>${p.batHand}HB</td><td>${p.bowlStyle}</td><td>${p.attrs.batting}</td><td>${p.attrs.bowling}</td><td>${p.attrs.fielding}</td></tr>`).join('');
+  private teamDetail(team: Pick<TeamDef, 'name' | 'city' | 'players'>): void {
+    const t = withNames(team);
+    const rows = t.players.map((p) => `<tr><td>${esc(p.name)} <span class="pill">${p.role}</span></td><td>${p.batHand}HB</td><td>${esc(bowlTypeLabel(p))}</td><td>${p.attrs.batting}</td><td>${p.attrs.bowling}</td><td>${p.attrs.fielding}</td></tr>`).join('');
     const table = h('table', { class: 'card', html: `<thead><tr><th>Player</th><th>Bat</th><th>Bowls</th><th>BAT</th><th>BOWL</th><th>FIELD</th></tr></thead><tbody>${rows}</tbody>` });
-    this.show(h('div', { class: 'menu-card' }, this.header(`${t.name} · ${t.city}`), table,
-      h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.teamsScreen() }, 'Back'))));
+    this.show(h('div', { class: 'menu-card' }, this.header(team.name === team.city ? team.name : `${team.name} · ${team.city}`), table,
+      h('div', { class: 'row', style: 'margin-top:18px' },
+        h('button', { class: 'btn', onclick: () => this.nameEditor(team.name, team.players, () => this.teamDetail(team)) }, 'Edit names'),
+        h('button', { class: 'btn secondary', onclick: () => this.teamsScreen() }, 'Back'))));
   }
 
   private playersScreen(): void {
     const keys = ['batting', 'timing', 'power', 'running', 'bowling', 'pace', 'spin', 'fielding', 'catching', 'throwing', 'stamina', 'reaction'] as const;
-    const rows = TEAMS.flatMap((t) => t.players.map((p) => `<tr><td>${esc(p.name)} <span class="muted">${t.shortName}</span></td>${keys.map((k) => `<td>${p.attrs[k]}</td>`).join('')}</tr>`)).join('');
+    const all = [...NATIONS.map((n) => withNames({ shortName: n.shortName, players: n.squad })), ...TEAMS.map((t) => withNames(t))];
+    const rows = all.flatMap((t) => t.players.map((p) => `<tr><td>${esc(p.name)} <span class="muted">${t.shortName}</span></td>${keys.map((k) => `<td>${p.attrs[k]}</td>`).join('')}</tr>`)).join('');
     const table = h('table', { class: 'card', html: `<thead><tr><th>Player</th>${keys.map((k) => `<th>${k.slice(0, 4).toUpperCase()}</th>`).join('')}</tr></thead><tbody>${rows}</tbody>` });
     this.show(h('div', { class: 'menu-card' }, this.header('Players'), h('div', { style: 'overflow:auto' }, table),
       h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));

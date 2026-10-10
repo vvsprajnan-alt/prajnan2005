@@ -1,6 +1,6 @@
 /**
- * Fictional player model. All names, teams and ratings in this project are
- * original inventions; no real-world players or teams are represented.
+ * Fictional player model. All names, franchises and ratings in this project are original inventions; the
+ * international sides use real country names, but no real-world player is represented.
  */
 export type BatHand = 'R' | 'L';
 export type BowlStyle = 'fast' | 'medium' | 'offspin' | 'legspin';

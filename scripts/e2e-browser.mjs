@@ -81,8 +81,12 @@ async function singlePlayer() {
   await p.getByText('Play', { exact: true }).click();
   await p.getByText('To the toss').click();
   await p.getByText('Heads', { exact: true }).click();
+  // The coin goes up and lands on the pitch first; then the winner's choice (or "Take the field" / "Pad up").
+  const choice = p.locator('.toss-btn').filter({ hasNotText: /^(Heads|Tails)$/ }).first();
+  await choice.waitFor({ timeout: 30000 });
+  check(true, 'toss played out on the pitch');
   if (await p.getByText('Bat first').count()) await p.getByText('Bat first').click();
-  else await p.locator('.btn').first().click();
+  else await choice.click();
   await p.waitForTimeout(1500);
   check(await p.locator('.intro').isVisible(), 'team intro shows');
   await p.keyboard.press('Space');

@@ -53,11 +53,22 @@ function rate(name: string, role: PlayerRole, style: BowlStyle, tier: Tier): Pla
   };
 }
 
-function squad(id: string, rows: Row[]): PlayerDef[] {
+/** A side's character: points added to (or taken from) its batting, bowling and fielding. */
+type Bias = { bat: number; bowl: number; field: number };
+
+function squad(id: string, rows: Row[], bias: Bias): PlayerDef[] {
+  const add = (v: number, d: number) => Math.max(5, Math.min(97, v + d));
   return rows.map(([name, role, hand, style, arm, tier], i) => {
     const parts = name.split(' ');
     const shortName = `${parts[0]![0]}. ${parts.slice(1).join(' ')}`;
-    return { id: `${id}-${i + 1}`, name, shortName, role, batHand: hand, bowlStyle: style, bowlArm: arm, attrs: rate(name, role, style, tier) };
+    const a = rate(name, role, style, tier);
+    const attrs: PlayerAttributes = {
+      ...a,
+      batting: add(a.batting, bias.bat), timing: add(a.timing, bias.bat), power: add(a.power, bias.bat),
+      bowling: role === 'batter' || role === 'keeper' ? a.bowling : add(a.bowling, bias.bowl),
+      fielding: add(a.fielding, bias.field), catching: add(a.catching, bias.field),
+    };
+    return { id: `${id}-${i + 1}`, name, shortName, role, batHand: hand, bowlStyle: style, bowlArm: arm, attrs };
   });
 }
 
@@ -83,7 +94,7 @@ export const NATIONS: SquadDef[] = [
       ['Harshil Advani', 'keeper', 'L', 'medium', 'R', 3],
       ['Omkar Bhosekar', 'bowler', 'R', 'medium', 'R', 3],
       ['Raghav Sethuram', 'bowler', 'R', 'offspin', 'R', 3],
-    ]),
+    ], { bat: 4, bowl: 0, field: -1 }),
   },
   {
     id: 'eng', name: 'England', shortName: 'ENG', city: 'England',
@@ -105,7 +116,7 @@ export const NATIONS: SquadDef[] = [
       ['Will Cardingham', 'keeper', 'L', 'medium', 'R', 3],
       ['Ben Stallworth', 'bowler', 'R', 'medium', 'R', 3],
       ['Tom Easterbrook', 'bowler', 'R', 'offspin', 'R', 3],
-    ]),
+    ], { bat: 1, bowl: 1, field: 1 }),
   },
   {
     id: 'aus', name: 'Australia', shortName: 'AUS', city: 'Australia',
@@ -127,7 +138,7 @@ export const NATIONS: SquadDef[] = [
       ['Tyson Merrick', 'keeper', 'L', 'medium', 'R', 3],
       ['Zac Pemberton', 'bowler', 'R', 'medium', 'R', 3],
       ['Ewan Coolidge', 'bowler', 'R', 'legspin', 'R', 3],
-    ]),
+    ], { bat: 2, bowl: 2, field: 4 }),
   },
   {
     id: 'pak', name: 'Pakistan', shortName: 'PAK', city: 'Pakistan',
@@ -149,7 +160,7 @@ export const NATIONS: SquadDef[] = [
       ['Sufyan Gondal', 'keeper', 'L', 'medium', 'R', 3],
       ['Bilal Wahla', 'bowler', 'R', 'medium', 'R', 3],
       ['Taimoor Niazi', 'bowler', 'R', 'offspin', 'R', 3],
-    ]),
+    ], { bat: -2, bowl: 4, field: -3 }),
   },
   {
     id: 'rsa', name: 'South Africa', shortName: 'RSA', city: 'South Africa',
@@ -171,7 +182,7 @@ export const NATIONS: SquadDef[] = [
       ['Ruben Fourier', 'keeper', 'L', 'medium', 'R', 3],
       ['Dewald Britsman', 'bowler', 'R', 'medium', 'R', 3],
       ['Tshepo Molefane', 'bowler', 'R', 'offspin', 'R', 3],
-    ]),
+    ], { bat: 0, bowl: 2, field: 5 }),
   },
   {
     id: 'nzl', name: 'New Zealand', shortName: 'NZ', city: 'New Zealand',
@@ -193,7 +204,7 @@ export const NATIONS: SquadDef[] = [
       ['Mason Te Huia', 'keeper', 'L', 'medium', 'R', 3],
       ['Shane Tipene', 'bowler', 'R', 'medium', 'R', 3],
       ['Lachlan Doidge', 'bowler', 'R', 'offspin', 'R', 3],
-    ]),
+    ], { bat: -1, bowl: 0, field: 4 }),
   },
 ];
 

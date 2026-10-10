@@ -127,6 +127,21 @@ export function getTeam(id: string): TeamDef {
   return t;
 }
 
+/**
+ * Team strength for the selection screens, each 0-100: batting from the top seven batters (skill, timing and
+ * power), bowling from the best five bowlers, fielding from all eleven (the keeper's catching counts double).
+ */
+export function teamStrength(team: Pick<TeamDef, 'players'>): { batting: number; bowling: number; fielding: number; overall: number } {
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const top = (xs: number[], n: number) => [...xs].sort((a, b) => b - a).slice(0, n);
+  const ps = team.players;
+  const batting = avg(top(ps.map((p) => 0.5 * p.attrs.batting + 0.25 * p.attrs.timing + 0.25 * p.attrs.power), 7));
+  const bowling = avg(top(ps.map((p) => p.attrs.bowling), 5));
+  const fielding = avg(ps.map((p) => (p.role === 'keeper' ? (p.attrs.fielding + 2 * p.attrs.catching) / 3 : (p.attrs.fielding + p.attrs.catching) / 2)));
+  const r = Math.round;
+  return { batting: r(batting), bowling: r(bowling), fielding: r(fielding), overall: r(0.4 * batting + 0.4 * bowling + 0.2 * fielding) };
+}
+
 /** Players who can bowl, ordered by bowling rating. */
 export function bowlingOptions(team: TeamDef): number[] {
   return team.players

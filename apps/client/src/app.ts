@@ -12,6 +12,7 @@ import {
   defaultConfig,
   getNation,
   squadTeam,
+  teamStrength,
   makeRules,
   oversString,
 } from '@crease/sim';
@@ -24,6 +25,8 @@ import { World } from './render/world';
 import { TossScene } from './render/tossScene';
 import { PreMatchScene } from './render/preMatch';
 import { cleanName, loadNames, saveNames, withNames } from './names';
+import { numberFor } from './render/players';
+import { jerseySvg } from './ui/jersey';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
 import type { CentreTab, MatchCentreOptions } from './ui/matchCentre';
@@ -274,13 +277,6 @@ export class App {
     this.show(card);
   }
 
-  private teamSelect(id: string, value: string, onChange: (v: string) => void): HTMLElement {
-    const group = (label: string, teams: { id: string; name: string }[]) =>
-      h('optgroup', { label }, ...teams.map((t) => h('option', { value: t.id, selected: t.id === value }, t.name)));
-    return h('select', { id, onchange: (e: Event) => onChange((e.target as HTMLSelectElement).value) },
-      group('International', NATIONS), group('Franchises', TEAMS));
-  }
-
   private quickMatch(): void {
     const s = this.setup;
     const field = (label: string, el: HTMLElement) => h('div', { class: 'field' }, h('label', {}, label), el);
@@ -288,10 +284,7 @@ export class App {
       h('select', { onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...vals.map(([v, l]) => h('option', { value: v, selected: v === cur }, l)));
     const card = h('div', { class: 'menu-card' },
       this.header('Quick Match'),
-      h('div', { class: 'row' },
-        field('Your team', this.teamSelect('my', s.myTeam, (v) => { s.myTeam = v; s.myOrder = null; s.myXI = null; s.myCaptain = null; this.quickMatch(); })),
-        field('Opponent', this.teamSelect('opp', s.oppTeam, (v) => (s.oppTeam = v))),
-      ),
+      this.teamPicker(),
       h('div', { class: 'row', style: 'margin-top:12px' },
         field('Overs', opts([['1', '1 over'], ['2', '2 overs'], ['5', '5 overs'], ['10', '10 overs'], ['20', '20 overs (T20)']], String(s.overs), (v) => (s.overs = Number(v)))),
         field('AI difficulty', opts([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['expert', 'Expert']], s.difficulty, (v) => (s.difficulty = v as Difficulty))),
@@ -306,6 +299,60 @@ export class App {
       ),
     );
     this.show(card);
+  }
+
+  /**
+   * Team selection: each side's shirt with arrows to change team, VS, and batting / bowling / fielding strength
+   * bars comparing the two elevens.
+   */
+  private teamPicker(): HTMLElement {
+    const s = this.setup;
+    const all = [...NATIONS.map((n) => ({ id: n.id, kind: 'International' })), ...TEAMS.map((t) => ({ id: t.id, kind: 'Franchise' }))];
+    const next = (cur: string, avoid: string, dir: number) => {
+      let i = all.findIndex((t) => t.id === cur);
+      do i = (i + dir + all.length) % all.length;
+      while (all[i]!.id === avoid);
+      return all[i]!.id;
+    };
+    const set = (which: 'my' | 'opp', id: string) => {
+      this.sfx.ui();
+      if (which === 'my') Object.assign(s, { myTeam: id, myOrder: null, myXI: null, myCaptain: null });
+      else s.oppTeam = id;
+      this.quickMatch();
+    };
+    const my = this.myTeamFor(s);
+    const opp = this.teamFor(s.oppTeam);
+    const side = (which: 'my' | 'opp', t: TeamDef) => {
+      const id = which === 'my' ? s.myTeam : s.oppTeam;
+      const other = which === 'my' ? s.oppTeam : s.myTeam;
+      const capt = t.players[t.captain ?? 0]!;
+      return h('div', { class: `ts-side ${which}` },
+        h('div', { class: 'ts-kind' }, which === 'my' ? 'Your team' : 'Opponent'),
+        h('div', { class: 'ts-kit' },
+          h('button', { class: 'ctrl ts-arrow', 'aria-label': `Previous team (${which === 'my' ? 'yours' : 'opponent'})`, onclick: () => set(which, next(id, other, -1)) }, '◀'),
+          h('div', { class: 'ts-jersey', html: jerseySvg(t.colors, t.shortName, numberFor(capt.id), 132) }),
+          h('button', { class: 'ctrl ts-arrow', 'aria-label': `Next team (${which === 'my' ? 'yours' : 'opponent'})`, onclick: () => set(which, next(id, other, 1)) }, '▶')),
+        h('div', { class: 'ts-name' }, t.name),
+        h('div', { class: 'ts-sub' }, `${all.find((x) => x.id === id)?.kind ?? ''} · Captain ${capt.shortName}`));
+    };
+    return h('div', { class: 'team-picker' }, side('my', my), h('div', { class: 'ts-mid' }, h('div', { class: 'ts-vs' }, 'VS'), this.strengthBars(teamStrength(my), teamStrength(opp))), side('opp', opp));
+  }
+
+  /** Two-sided bars (the stronger side highlighted); one-sided when there is nothing to compare with. */
+  private strengthBars(a: ReturnType<typeof teamStrength>, b: ReturnType<typeof teamStrength> | null): HTMLElement {
+    const pct = (v: number) => Math.max(4, Math.min(100, (v - 50) * 2));
+    const rows = (['batting', 'bowling', 'fielding', 'overall'] as const).map((k) => {
+      const label = k[0]!.toUpperCase() + k.slice(1);
+      const av = a[k];
+      const bv = b?.[k];
+      return h('div', { class: `ts-bar${b ? '' : ' single'}` },
+        h('span', { class: `v${bv !== undefined && av > bv ? ' win' : ''}` }, String(av)),
+        h('span', { class: 'l' }, h('i', { style: `width:${pct(av)}%` })),
+        h('span', { class: 'k' }, label),
+        b ? h('span', { class: 'r' }, h('i', { style: `width:${pct(bv!)}%` })) : '',
+        b ? h('span', { class: `v${bv! > av ? ' win' : ''}` }, String(bv)) : '');
+    });
+    return h('div', { class: 'ts-bars' }, ...rows);
   }
 
   /** Reorder the batting line-up with up/down buttons. */
@@ -431,6 +478,8 @@ export class App {
     let captain = s.myCaptain ?? n.captain;
     const table = h('table', { class: 'card squad-table' });
     const final = h('div', { class: 'order-list' });
+    const strength = h('div', { class: 'squad-strength' });
+    const shirt = h('div', { class: 'ts-jersey' });
     const status = h('p', { class: 'muted' });
     const save = h('button', { class: 'btn', onclick: () => {
       if (xi.length !== 11) return;
@@ -471,12 +520,18 @@ export class App {
           h('button', { class: 'ctrl', 'aria-label': `Move ${name(p)} up`, onclick: () => move(-1) }, '▲'),
           h('button', { class: 'ctrl', 'aria-label': `Move ${name(p)} down`, onclick: () => move(1) }, '▼')));
       });
+      shirt.innerHTML = jerseySvg(n.colors, n.shortName, numberFor(n.squad[captain]!.id), 96);
+      strength.innerHTML = '';
+      strength.append(this.strengthBars(teamStrength({ players: xi.map((i) => n.squad[i]!) }), null));
       const keeper = xi.some((i) => n.squad[i]!.role === 'keeper');
       status.textContent = `${xi.length} / 11 picked${xi.length === 11 && !keeper ? ' · no wicketkeeper: a fielder will keep' : ''}${xi.includes(captain) ? '' : ' · tap C to choose a captain'}`;
       save.disabled = xi.length !== 11;
     };
     render();
     this.show(h('div', { class: 'menu-card' }, this.header(`${n.name} · squad`),
+      h('div', { class: 'squad-head' },
+        shirt,
+        h('div', {}, h('div', { class: 'ts-kind' }, 'Team strength (your eleven)'), strength)),
       h('p', { class: 'muted' }, 'Pick your eleven (+ / ✓), set the batting order with ▲ ▼ and choose the captain (C).'),
       h('div', { class: 'squad-wrap' }, h('div', { style: 'overflow:auto' }, table), h('div', {}, h('h3', {}, 'Final XI'), final)),
       status,

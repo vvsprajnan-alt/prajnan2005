@@ -81,8 +81,10 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then go **
 **Practice** drops you straight into batting or bowling nets.
 
 - **Teams.** Six international sides (India, England, Australia, Pakistan, South Africa, New Zealand) with squads
-  of fifteen, and four franchises of eleven. For an international side, **Squad & XI** picks your eleven from the
-  fifteen, sets the batting order and chooses the captain.
+  of fifteen, and four franchises of eleven. Quick Match shows both sides' shirts (◀ ▶ changes team) with batting,
+  bowling, fielding and overall strength bars comparing the two elevens. For an international side, **Squad & XI**
+  picks your eleven from the fifteen, sets the batting order and chooses the captain; its strength bars follow
+  the eleven you pick.
 - **The toss** is played out in the middle: the two captains meet the match referee, you call heads or tails, the
   coin goes up and the camera shows it on the pitch. The winner chooses to bat or bowl.
 - **Before the first ball** the two teams line up with the match officials for the anthems (an original tune,

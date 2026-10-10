@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NATIONS, TEAMS, bowlTypeLabel, bowlerProfile, bowlingOptions, defaultConfig, keeperIndex, squadTeam } from '../src/index';
+import { NATIONS, TEAMS, bowlTypeLabel, bowlerProfile, bowlingOptions, defaultConfig, keeperIndex, squadTeam, teamStrength } from '../src/index';
 import { MatchHost } from '../src/match/host';
 
 describe('international squads', () => {
@@ -59,5 +59,19 @@ describe('bowler ratings for the selection screen', () => {
     }
     // Better bowlers move it more.
     expect(bowlerProfile({ ...fast, attrs: { ...fast.attrs, bowling: 95 } }).movement).toBeGreaterThan(bowlerProfile({ ...fast, attrs: { ...fast.attrs, bowling: 60 } }).movement);
+  });
+});
+
+describe('team strength for the selection screen', () => {
+  it('rates batting, bowling and fielding 0-100, and sides differ', () => {
+    const all = NATIONS.map((n) => teamStrength(squadTeam(n)));
+    for (const s of all) for (const v of Object.values(s)) expect(v).toBeGreaterThan(50), expect(v).toBeLessThanOrEqual(100);
+    const by = (k: 'batting' | 'bowling' | 'fielding') => new Set(all.map((s) => s[k])).size;
+    expect(by('batting')).toBeGreaterThan(2);
+    expect(by('fielding')).toBeGreaterThan(2);
+    // Dropping the best bowler for a reserve batter lowers the bowling.
+    const ind = NATIONS[0]!;
+    const weaker = squadTeam(ind, [0, 1, 2, 3, 4, 5, 6, 7, 11, 9, 10]);
+    expect(teamStrength(weaker).bowling).toBeLessThan(teamStrength(squadTeam(ind)).bowling);
   });
 });

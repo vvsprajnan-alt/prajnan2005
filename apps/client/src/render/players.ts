@@ -619,6 +619,13 @@ export class Cricketer {
         look = false;
         break;
       }
+      case 'anthem':
+        // Standing tall and still for the anthem: arms by the sides, chin up, only the breathing moves.
+        this.apply({ lShoulder: [0.02, 0, 0.06], rShoulder: [0.02, 0, -0.06], lElbow: [-0.12, 0, 0], rElbow: [-0.12, 0, 0], head: [-0.06, 0, 0], lean: -0.03 });
+        this.idleLegs(0.04);
+        this.breathe();
+        look = false;
+        break;
       case 'tossCoin': {
         // Flicking the coin up with the thumb: the hand comes up from the waist and opens at shoulder height.
         const up = smooth(t / 0.16) * (1 - smooth((t - 0.45) / 0.4));

@@ -22,6 +22,7 @@ import { GameSession } from './game/session';
 import { Input } from './input/input';
 import { World } from './render/world';
 import { TossScene } from './render/tossScene';
+import { PreMatchScene } from './render/preMatch';
 import { cleanName, loadNames, saveNames, withNames } from './names';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
@@ -67,6 +68,8 @@ export class App {
   private setup: MatchSetup = { myOrder: null, myXI: null, myCaptain: null, myTeam: 'ind', oppTeam: 'eng', overs: 2, difficulty: 'normal', pitch: 'balanced' };
   /** The toss being played out on the pitch (between the menus and the match). */
   private ceremony: TossScene | null = null;
+  /** The anthem line-up and the umpires walking out (between the toss and the match). */
+  private preScene: PreMatchScene | null = null;
   private root: HTMLElement;
   private mobile: MobileProfile = mobileProfile(currentEnv());
 
@@ -117,8 +120,14 @@ export class App {
     if (!this.limiter.ready(t)) return;
     const dt = (t - this.last) / 1000;
     this.last = t;
-    if (this.ceremony) this.ceremony.frame(Math.min(dt, 0.1));
-    else this.session?.frame(dt);
+    if (this.ceremony || this.preScene) {
+      // Space / Enter / A (or Esc) skips the line-up; nothing pressed here carries over into the match.
+      const actions = this.input.poll();
+      if (this.preScene && actions.some((a) => a === 'primary' || a === 'pause')) this.preScene.skip();
+      this.sfx.update(0.3, 'dead');
+      if (this.ceremony) this.ceremony.frame(Math.min(dt, 0.1));
+      else this.preScene?.frame(Math.min(dt, 0.1));
+    } else this.session?.frame(dt);
     if (this.settings.adaptiveResolution) {
       const scale = this.governor.sample(dt);
       if (scale !== null) this.world.setResolutionScale(scale);
@@ -362,12 +371,12 @@ export class App {
         if (won) {
           panel(h('div', { class: 'toss-title' }, `It's ${label}! You won the toss.`), h('div', { class: 'toss-sub' }, 'What would you like to do?'),
             h('div', { class: 'toss-choice' },
-              h('button', { class: 'btn toss-btn', onclick: () => this.startMatch(s, true) }, h('b', {}, 'Bat first'), h('small', {}, 'Set a target')),
-              h('button', { class: 'btn toss-btn', onclick: () => this.startMatch(s, false) }, h('b', {}, 'Bowl first'), h('small', {}, 'Chase it down'))));
+              h('button', { class: 'btn toss-btn', onclick: () => this.preMatch(s, true) }, h('b', {}, 'Bat first'), h('small', {}, 'Set a target')),
+              h('button', { class: 'btn toss-btn', onclick: () => this.preMatch(s, false) }, h('b', {}, 'Bowl first'), h('small', {}, 'Chase it down'))));
         } else {
           const aiBats = Math.random() < 0.5;
           panel(h('div', { class: 'toss-title' }, `It's ${label}. ${opp.name} won the toss.`), h('div', { class: 'toss-sub' }, `${capt(opp)} chooses to ${aiBats ? 'bat' : 'bowl'} first.`),
-            h('div', { class: 'toss-choice' }, h('button', { class: 'btn toss-btn', onclick: () => this.startMatch(s, !aiBats) }, h('b', {}, aiBats ? 'Take the field' : 'Pad up'))));
+            h('div', { class: 'toss-choice' }, h('button', { class: 'btn toss-btn', onclick: () => this.preMatch(s, !aiBats) }, h('b', {}, aiBats ? 'Take the field' : 'Pad up'))));
         }
       });
     };
@@ -382,6 +391,33 @@ export class App {
   private endCeremony(): void {
     this.ceremony?.dispose();
     this.ceremony = null;
+    this.preScene?.dispose();
+    this.preScene = null;
+  }
+
+  /** After the toss: the anthem line-up and the umpires walking out, then the match (skippable). */
+  private preMatch(s: MatchSetup, humanBatsFirst: boolean): void {
+    const my = this.myTeamFor(s);
+    const opp = this.teamFor(s.oppTeam);
+    this.endCeremony();
+    this.input.poll();
+    const main = h('div', { class: 'pm-main' });
+    const sub = h('div', { class: 'pm-sub' });
+    let started = false;
+    const scene = new PreMatchScene(this.world, my, opp, (m, t) => {
+      main.textContent = m;
+      sub.textContent = t;
+    }, () => {
+      if (started) return;
+      started = true;
+      this.startMatch(s, humanBatsFirst);
+    });
+    this.preScene = scene;
+    this.clearScreens();
+    this.screens.append(h('div', { class: 'pm-ui' },
+      h('div', { class: 'pm-caption' }, main, sub),
+      h('button', { class: 'ctrl pm-skip', onclick: () => scene.skip() }, 'Skip', h('kbd', {}, 'Space / A'))));
+    this.sfx.anthem();
   }
 
   /** International side: pick the eleven from the squad of fifteen, their batting order and the captain. */

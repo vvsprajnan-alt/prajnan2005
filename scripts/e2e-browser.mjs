@@ -87,6 +87,10 @@ async function singlePlayer() {
   check(true, 'toss played out on the pitch');
   if (await p.getByText('Bat first').count()) await p.getByText('Bat first').click();
   else await choice.click();
+  // The anthem line-up and the umpires walking out: check it starts, then skip it.
+  await p.locator('.pm-skip').waitFor({ timeout: 10000 });
+  check(await p.locator('.pm-caption').isVisible(), 'anthem line-up plays');
+  await p.locator('.pm-skip').click();
   await p.waitForTimeout(1500);
   check(await p.locator('.intro').isVisible(), 'team intro shows');
   await p.keyboard.press('Space');

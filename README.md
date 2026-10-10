@@ -85,6 +85,9 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then go **
   fifteen, sets the batting order and chooses the captain.
 - **The toss** is played out in the middle: the two captains meet the match referee, you call heads or tails, the
   coin goes up and the camera shows it on the pitch. The winner chooses to bat or bowl.
+- **Before the first ball** the two teams line up with the match officials for the anthems (an original tune,
+  not any country's anthem) while the camera tracks along the line naming each player, and then the umpires walk
+  out to the middle. **Skip** (Space / A) goes straight to the match.
 - **The score bar** along the bottom shows the batting side, both batters, the score (with the powerplay, free hit
   and the chase), the bowler and this over's balls.
 - **Player names.** In **Teams**, open a team and choose **Edit names** to rename any player. The names are kept

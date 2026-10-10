@@ -499,6 +499,42 @@ function sphereDirs(ws: number, hs: number): THREE.BufferGeometry {
   return g.clone();
 }
 
+const ICOS = new Map<number, THREE.BufferGeometry>();
+/** A welded geodesic unit sphere: evenly spaced points, for fine detail all over (hair). */
+function icoDirs(detail: number): THREE.BufferGeometry {
+  let g = ICOS.get(detail);
+  if (!g) {
+    g = new THREE.IcosahedronGeometry(1, detail);
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    g = mergeVertices(g, 1e-5);
+    ICOS.set(detail, g);
+  }
+  return g.clone();
+}
+
+/**
+ * Per hair style: shell thickness, how many locks round the crown, how deep the partings, swirl, how far the lock
+ * ends spread along the hairline, and how far the clipped fade runs down the back and sides.
+ */
+const HAIR: Record<HairStyle, { thick: number; locks: number; depth: number; swirl: number; tips: number; fade: number }> = {
+  short: { thick: 0.011, locks: 22, depth: 0.0034, swirl: 0.45, tips: 0.035, fade: 0.2 },
+  crop: { thick: 0.006, locks: 36, depth: 0.0011, swirl: 0.3, tips: 0.02, fade: 0.3 },
+  curly: { thick: 0.017, locks: 30, depth: 0, swirl: 0, tips: 0.03, fade: 0.1 },
+  buzz: { thick: 0.0016, locks: 1, depth: 0, swirl: 0, tips: 0, fade: 0.22 },
+  bald: { thick: 0, locks: 1, depth: 0, swirl: 0, tips: 0, fade: 0 },
+};
+
+const hash01 = (n: number) => {
+  const x = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+};
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return (h >>> 0) % 9973;
+}
+
 function facialHairWeight(kit: Kit, u: THREE.Vector3): number {
   const f = kit.facialHair ?? 'none';
   if (f === 'none') return 0;
@@ -550,20 +586,71 @@ function headGeometry(kit: Kit, lo: boolean): THREE.BufferGeometry[] {
   );
   if (lo) return parts;
 
-  // Hair: a shell over the skull that sinks under the skin below the hairline.
-  if (style !== 'bald' && style !== 'buzz') {
-    const thick = covered ? 0.005 : style === 'crop' ? 0.006 : style === 'short' ? 0.011 : 0.017;
-    const h = sphereDirs(32, 24);
+  // Hair: a shell over the skull that sinks under the skin below the hairline, sculpted into locks that grow out
+  // from the crown (with a little swirl), each a slightly different shade and ending at its own point along the
+  // hairline; curls for curly hair, and a fine stubble-like grain for a buzz cut.
+  if (style !== 'bald') {
+    const P = HAIR[style];
+    const thick = style === 'buzz' ? P.thick : covered ? 0.005 : P.thick;
+    const seed = hashStr(kit.hair + kit.skin);
+    const side = seed & 1 ? 1 : -1;
+    const crown = V(0.14 * side, 0.8, -0.58).normalize();
+    const e1 = V(1, 0, 0).addScaledVector(crown, -crown.x).normalize();
+    const e2 = new THREE.Vector3().crossVectors(crown, e1);
+    const h = icoDirs(30);
     const hp = h.getAttribute('position');
     const cover: number[] = [];
+    const shade: number[] = [];
+    const fullness: number[] = [];
     for (let i = 0; i < hp.count; i++) {
       const u = new THREE.Vector3().fromBufferAttribute(hp, i).normalize();
-      const k = smooth((u.y - hairline(u)) / 0.1 + 0.5);
+      const th = Math.acos(Math.max(-1, Math.min(1, u.dot(crown))));
+      // Which lock this point is in (around the crown) and how far across it; locks blur together at the whorl.
+      // Uneven lock widths (the warp is periodic round the crown, so there is no seam).
+      const phi = Math.atan2(u.dot(e2), u.dot(e1));
+      const warp = 0.13 * Math.sin(3 * phi + seed) + 0.07 * Math.sin(5 * phi + 2 * seed);
+      const a = ((phi + warp + P.swirl * side * th) / (2 * Math.PI)) * P.locks;
+      const li = Math.floor(a);
+      const fr = a - li;
+      const rnd = hash01(li * 7.13 + seed);
+      const rnd2 = hash01(li * 3.71 + seed * 0.37 + 11);
+      const whorl = smooth(th / 0.55);
+      // Rounded locks with narrow partings between them.
+      const ridge = (1 - Math.pow(1 - Math.sin(Math.PI * fr), 2.5)) * whorl + (1 - whorl) * 0.8;
+      // Lock ends scallop the hairline a little; on a buzz cut it is a crisp, straight edge.
+      const tip = style === 'buzz' ? 0 : P.tips * (0.6 * ridge + 0.8 * (rnd - 0.5));
+      const edge = u.y - hairline(u) + tip;
+      // Short back and sides: below the hairline at the back and sides the hair is clipped down to a fade, the
+      // skin showing through more and more towards the neck (the ears and the face are left clear).
+      const ax = Math.abs(u.x);
+      const ear = Math.exp(-((ax - 0.98) ** 2) / 0.02 - ((u.z + 0.05) ** 2) / 0.05);
+      const fadeLen = P.fade * smooth((0.3 - u.z) / 0.5) * (1 - ear);
+      const k = smooth((edge + fadeLen) / (fadeLen > 0.02 ? 0.12 : style === 'buzz' ? 0.04 : 0.07) + 0.5);
+      const full = fadeLen > 0.001 ? smooth(edge / 0.2 + 0.35) : 1;
       cover.push(k);
+      fullness.push(full);
       headPoint(u, p);
-      let off = -0.004 + (thick + 0.004) * k;
-      if (!covered && style === 'short') off += 0.01 * smooth((u.y - 0.4) / 0.5) * k;
-      if (!covered && style === 'curly') off += 0.004 * (Math.sin(u.x * 43) * Math.sin(u.y * 41) * Math.sin(u.z * 47)) * k + 0.006 * smooth((u.y - 0.3) / 0.6) * k;
+      // The shell sinks under the skin at the hairline; in a fade it instead lies just on the skin and takes on the
+      // skin's colour at its lower edge, so there is no line where it ends.
+      let off = fadeLen > 0.02 ? 0.0005 + (0.0007 + (thick - 0.0012) * full) * k : -0.004 + 0.004 * k + (0.0012 + (thick - 0.0012) * full) * k;
+      if (style === 'curly') {
+        // Two sizes of curl.
+        const c1 = Math.sin(u.x * 43 + 1.3) * Math.sin(u.y * 41) * Math.sin(u.z * 47 + 0.7);
+        const c2 = Math.sin(u.x * 97) * Math.sin(u.y * 89 + 2.1) * Math.sin(u.z * 101);
+        const bump = 0.5 + 0.35 * c1 + 0.15 * c2;
+        if (!covered) off += (0.007 * bump + 0.006 * smooth((u.y - 0.3) / 0.6)) * k * full;
+        shade.push(0.68 + 0.5 * bump + 0.08 * (rnd - 0.5));
+      } else if (style === 'buzz') {
+        // Scalp showing through very short hair: a grain of lighter and darker points.
+        shade.push(0.55 + 0.3 * hash01(i * 0.917 + seed));
+      } else {
+        if (!covered && style === 'short') off += (0.01 * smooth((u.y - 0.4) / 0.5) + 0.003 * smooth((u.z - 0.4) / 0.4) * smooth((u.y - 0.25) / 0.3)) * k * full;
+        off += P.depth * (ridge - 0.65) * k * full * (covered ? 0.5 : 1);
+        // A sheen across the top, darker in the partings between locks and at the roots.
+        const sheen = Math.exp(-(((u.y - 0.72) / 0.18) ** 2));
+        const contrast = style === 'crop' ? 0.16 : 0.28;
+        shade.push((1.06 - contrast + contrast * ridge) * (0.9 + 0.2 * rnd) * (1 + 0.12 * sheen * ridge) * (0.96 + 0.08 * rnd2));
+      }
       const d = p.clone().sub(HEAD_CENTRE);
       const len = d.length();
       d.multiplyScalar((len + off) / len).add(HEAD_CENTRE);
@@ -571,8 +658,18 @@ function headGeometry(kit: Kit, lo: boolean): THREE.BufferGeometry[] {
     }
     filterTris(h, (i) => cover[i]! > 0.02, false);
     h.computeVertexNormals();
-    const hairDark = hair.clone().multiplyScalar(0.8);
-    parts.push(finish(h, (_q, i) => hair.clone().lerp(hairDark, 1 - cover[i]!), onHead, 0.3));
+    const hairDark = hair.clone().multiplyScalar(0.72);
+    parts.push(
+      finish(h, (_q, i) => {
+        const c = hair.clone().multiplyScalar(shade[i]!);
+        // A buzz cut lets the skin through; elsewhere the roots at the hairline are darker and thinner.
+        if (style === 'buzz') return c.lerp(skin, 0.35 + 0.65 * (1 - cover[i]!));
+        // In the fade the clipped hair is a grain over the skin, thinning out towards the neck.
+        const f = fullness[i]!;
+        if (f < 1) c.lerp(hair.clone().multiplyScalar(0.55 + 0.3 * hash01(i * 0.917 + seed)), 1 - f).lerp(skin, (1 - f) * (0.25 + 0.75 * (1 - cover[i]!)));
+        return c.lerp(hairDark, 0.7 * (1 - cover[i]!) * f);
+      }, onHead, 0.18),
+    );
   }
 
   const C = HEAD_CENTRE;

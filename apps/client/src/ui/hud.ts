@@ -5,6 +5,8 @@ import {
   MatchSnapshot,
   TimingWindows,
   VARIATION_LABEL,
+  bowlTypeLabel,
+  bowlerProfile,
   Variation,
   oversString,
   requiredRate,
@@ -215,26 +217,37 @@ export class Hud {
   }
 
   /** Choose the bowler for the over. */
+  /**
+   * Choose the bowler for the over: everyone who can bowl, best first, with accuracy and movement (as bars), the
+   * bowling type, top speed, today's figures and how many overs they have left.
+   */
   showPicker(m: CricketMatch, onPick: (player: number) => void, onClose: () => void): void {
     const inn = m.inn;
     const team = m.bowlingTeam;
     const eligible = new Set(m.eligibleBowlers());
     const rules = m.cfg.rules;
     const rows = team.players
-      .map((p, i) => ({ p, i, card: inn.bowlers.find((b) => b.player === i) }))
+      .map((p, i) => ({ p, i, card: inn.bowlers.find((b) => b.player === i), pro: bowlerProfile(p) }))
       .filter(({ p, i }) => p.attrs.bowling >= 55 || inn.bowlers.some((b) => b.player === i))
       .sort((a, b) => b.p.attrs.bowling - a.p.attrs.bowling);
+    const bar = (v: number, cls: string) => h('span', { class: `bp-bar ${cls}`, title: String(v) }, h('i', { style: `width:${Math.max(4, Math.min(100, v))}%` }), h('em', {}, String(v)));
+    this.picker.className = 'picker bowler-picker';
     this.picker.innerHTML = '';
-    this.picker.append(h('h3', {}, `Choose your bowler · over ${Math.floor(inn.legalBalls / rules.ballsPerOver) + 1}`));
-    for (const { p, i, card } of rows) {
-      const left = rules.maxOversPerBowler > 0 ? rules.maxOversPerBowler - Math.floor((card?.balls ?? 0) / rules.ballsPerOver) : '∞';
+    this.picker.append(
+      h('h3', {}, `Select bowler · over ${Math.floor(inn.legalBalls / rules.ballsPerOver) + 1}`),
+      h('div', { class: 'bp-head' }, h('span', {}, 'Bowler'), h('span', {}, 'Accuracy'), h('span', {}, 'Movement'), h('span', { class: 'bp-speed' }, 'Speed'), h('span', {}, 'Today')),
+    );
+    for (const { p, i, card, pro } of rows) {
+      const left = rules.maxOversPerBowler > 0 ? rules.maxOversPerBowler - Math.floor((card?.balls ?? 0) / rules.ballsPerOver) : null;
       const fig = card ? `${oversString(card.balls)}-${card.maidens}-${card.runs}-${card.wickets}` : 'Yet to bowl';
-      const why = i === inn.lastOverBowler ? 'bowled last over' : !eligible.has(i) ? 'quota used' : `${left} ov left`;
+      const why = i === inn.lastOverBowler ? 'Bowled last over' : !eligible.has(i) ? 'Quota used' : left === null ? '' : `${left} ov left`;
       this.picker.append(
-        h('button', { class: `opt${i === inn.currentBowler ? ' on' : ''}`, disabled: !eligible.has(i), onclick: () => onPick(i) },
-          h('span', {}, h('b', {}, p.name), ' ', h('span', { class: 'muted' }, `${p.bowlStyle} · ${p.bowlArm}-arm · BOWL ${p.attrs.bowling}`)),
-          h('span', { class: 'muted' }, fig),
-          h('span', { class: 'pill' }, why)),
+        h('button', { class: `opt bp-row${i === inn.currentBowler ? ' on' : ''}`, disabled: !eligible.has(i), onclick: () => onPick(i) },
+          h('span', { class: 'bp-name' }, h('b', {}, p.name), h('small', {}, bowlTypeLabel(p))),
+          bar(pro.accuracy, 'acc'),
+          bar(pro.movement, 'mov'),
+          h('span', { class: 'bp-speed' }, `${pro.topSpeedKmh}`, h('small', {}, ' km/h')),
+          h('span', { class: 'bp-today' }, h('span', {}, fig), why ? h('small', {}, why) : '')),
       );
     }
     this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done', h('kbd', {}, 'H / Space'))));
@@ -292,6 +305,7 @@ export class Hud {
   showBatterPicker(m: CricketMatch, current: number, onPick: (player: number) => void, onClose: () => void): void {
     const inn = m.inn;
     const team = m.battingTeam;
+    this.picker.className = 'picker';
     this.picker.innerHTML = '';
     this.picker.append(h('h3', {}, 'Who goes in next?'));
     const options = [current, ...inn.order.slice(inn.nextBatter)];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NATIONS, TEAMS, bowlTypeLabel, bowlingOptions, defaultConfig, keeperIndex, squadTeam } from '../src/index';
+import { NATIONS, TEAMS, bowlTypeLabel, bowlerProfile, bowlingOptions, defaultConfig, keeperIndex, squadTeam } from '../src/index';
 import { MatchHost } from '../src/match/host';
 
 describe('international squads', () => {
@@ -39,5 +39,25 @@ describe('international squads', () => {
     let n = 0;
     while (host.match.phase !== 'complete' && n++ < 120 * 60 * 30) host.step();
     expect(host.match.phase).toBe('complete');
+  });
+});
+
+describe('bowler ratings for the selection screen', () => {
+  it('accuracy is the bowling skill; movement follows swing/seam for quicks and spin for spinners', () => {
+    const squad = NATIONS[0]!.squad;
+    const fast = squad.find((p) => p.bowlStyle === 'fast' && p.role === 'bowler')!;
+    const spin = squad.find((p) => p.bowlStyle === 'legspin' && p.role === 'bowler')!;
+    const f = bowlerProfile(fast);
+    const s = bowlerProfile(spin);
+    expect(f.accuracy).toBe(fast.attrs.bowling);
+    expect(s.movement).toBe(Math.round(50 + spin.attrs.spin / 2));
+    expect(f.topSpeedKmh).toBeGreaterThan(125);
+    expect(s.topSpeedKmh).toBeLessThan(90);
+    for (const p of squad) {
+      const r = bowlerProfile(p);
+      for (const v of [r.accuracy, r.movement]) expect(v).toBeGreaterThanOrEqual(0), expect(v).toBeLessThanOrEqual(100);
+    }
+    // Better bowlers move it more.
+    expect(bowlerProfile({ ...fast, attrs: { ...fast.attrs, bowling: 95 } }).movement).toBeGreaterThan(bowlerProfile({ ...fast, attrs: { ...fast.attrs, bowling: 60 } }).movement);
   });
 });

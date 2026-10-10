@@ -129,6 +129,18 @@ function baseSpeed(p: PlayerDef): number {
   }
 }
 
+/**
+ * What the bowler-selection screen shows, from the same numbers the deliveries use: accuracy is the bowling skill
+ * (how close the ball lands to the target), movement is swing and seam for the quicks and the rate of spin for the
+ * spinners (both 0-100), and the top speed of their stock ball.
+ */
+export function bowlerProfile(p: PlayerDef): { accuracy: number; movement: number; topSpeedKmh: number } {
+  const skill = a01(p.attrs.bowling);
+  const spinner = p.bowlStyle === 'offspin' || p.bowlStyle === 'legspin';
+  const movement = spinner ? 50 + 50 * a01(p.attrs.spin) : (100 * (p.bowlStyle === 'fast' ? 2.2 : 2.6) * (0.5 + 0.5 * skill)) / 2.6;
+  return { accuracy: Math.round(skill * 100), movement: Math.round(movement), topSpeedKmh: Math.round(baseSpeed(p) * 3.6) };
+}
+
 /** Convert a line relative to the batter's off side into world x. */
 export const lineToX = (line: number, batHand: BatHand): number => (batHand === 'R' ? line : -line);
 export const xToLine = (x: number, batHand: BatHand): number => (batHand === 'R' ? x : -x);

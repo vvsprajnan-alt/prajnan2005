@@ -137,6 +137,10 @@ balls and back to short ones improves contact, the wrong foot costs you. Advance
 good-length spin into a half-volley - but if you miss, a keeper standing up will stump you. After each shot a timing bar shows how many milliseconds early or
 late you were; on Beginner a closing ring on the pitch shows when to play.
 
+**Choosing the bowler.** At the start of each over (or with H) the bowler screen lists everyone who can bowl, best
+first, with **accuracy** (how close the ball lands to your target) and **movement** (swing and seam for the quicks,
+spin for the spinners) as bars, the bowling type, top speed, today's figures and overs left.
+
 **Camera.** Like a TV broadcast: before and during each delivery the picture is the long-lens view from high
 behind the bowler, with the batter facing you; when the ball is hit it cuts to a wide shot that follows the ball,
 and cuts back for the next ball. (Settings > Camera can put it behind the batter / bowler instead.)

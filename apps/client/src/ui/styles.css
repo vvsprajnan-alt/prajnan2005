@@ -173,6 +173,20 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .picker .opt { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; width: 100%; text-align: left; background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 6px; }
 .picker .opt.on { border-color: var(--accent); background: rgba(255,182,39,.15); }
 .picker .opt:disabled { opacity: .45; cursor: not-allowed; }
+/* Bowler selection: a table of accuracy and movement bars, speed and today's figures. */
+.bowler-picker { width: min(780px, 96vw); }
+.bowler-picker .bp-head, .bowler-picker .bp-row { display: grid; grid-template-columns: minmax(150px, 1.6fr) 1fr 1fr 72px minmax(110px, 1fr); gap: 12px; align-items: center; }
+.bowler-picker .bp-head { padding: 0 10px 4px; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
+.bowler-picker .bp-name, .bowler-picker .bp-today { display: flex; flex-direction: column; min-width: 0; }
+.bowler-picker .bp-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bowler-picker small { color: var(--muted); font-size: 11px; }
+.bowler-picker .bp-today { font-size: 12px; }
+.bowler-picker .bp-row .bp-speed { font-family: var(--display); font-size: 15px; white-space: nowrap; }
+.bp-bar { position: relative; display: block; height: 16px; border-radius: 8px; background: rgba(255,255,255,.08); overflow: hidden; }
+.bp-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px; }
+.bp-bar.acc i { background: linear-gradient(90deg, #2e86de, #5dade2); }
+.bp-bar.mov i { background: linear-gradient(90deg, #d35400, #ffb627); }
+.bp-bar em { position: relative; display: block; text-align: center; font-style: normal; font-size: 11px; font-weight: 800; line-height: 16px; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
 .timing-bar { position: absolute; left: 50%; top: calc(34% + 34px); transform: translateX(-50%); width: min(380px, 72vw); pointer-events: none; background: rgba(5,12,24,.7); padding: 8px 10px 6px; border-radius: 10px; }
 .timing-bar .track { position: relative; height: 10px; border-radius: 5px; background: rgba(255,90,78,.45); overflow: hidden; }
 .timing-bar .z { position: absolute; top: 0; bottom: 0; }
@@ -399,9 +413,15 @@ table.card th { color: var(--muted); font-weight: 600; font-size: 12px; }
   .banner { top: 12%; }
   .info-card { top: 60px; width: 190px; font-size: 11px; }
   .meter { bottom: 100px; }
-  .picker { top: 44px; max-height: calc(100vh - 56px); width: min(560px, 64vw); padding: 8px; }
+  .picker { top: 44px; max-height: calc(100vh - 84px); width: min(560px, 64vw); padding: 8px; }
   .picker h3 { font-size: 11px; margin-bottom: 4px; }
   .picker .opt { padding: 4px 8px; margin-top: 4px; font-size: 12px; }
+  .bowler-picker { width: min(700px, 72vw); }
+  .bowler-picker .bp-head, .bowler-picker .bp-row { grid-template-columns: minmax(120px, 1.5fr) 1fr 1fr minmax(90px, 1fr); gap: 8px; }
+  .bowler-picker .bp-speed { display: none; }
+  .bp-bar { height: 13px; }
+  .bp-bar em { font-size: 9px; line-height: 13px; }
+  .bowler-picker small { font-size: 9px; }
   .review-box { bottom: 90px; }
   .menu-card { padding: 16px; }
   .screen { padding: 8px; }

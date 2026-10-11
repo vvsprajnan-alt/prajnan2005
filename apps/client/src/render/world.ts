@@ -22,6 +22,9 @@ export class World {
   readonly ball: BallView;
   private batters: Cricketer[] = [];
   private bowler: Cricketer | null = null;
+  /** The bowler's style and arm (for the action, and to mirror a left-armer). */
+  private bowlerStyle: string | undefined;
+  private bowlerArm: 'L' | 'R' = 'R';
   private fielders: Cricketer[] = [];
   private umpires: Cricketer[] = [];
   private rosterKey = '';
@@ -161,6 +164,9 @@ export class World {
     };
     this.batters = batterIds.map((id) => get(batting, id, 'batter'));
     this.bowler = get(bowling, bowlerId, 'bowler');
+    const bdef = bowling.players.find((p) => p.id === bowlerId);
+    this.bowlerStyle = bdef?.bowlStyle;
+    this.bowlerArm = bdef?.bowlArm === 'L' ? 'L' : 'R';
     this.fielders = fielderIds.map((id, i) => get(bowling, id, i === 0 ? 'keeper' : 'fielder'));
     for (const r of [...this.batters, this.bowler, ...this.fielders]) this.scene.add(r.root);
   }
@@ -274,8 +280,9 @@ export class World {
       const v = this.speedOf('bowler', s.bowler.pos.x, s.bowler.pos.z, dt);
       const a = this.animFor('bowler', s.bowler.anim, s.bowler.t, v, time);
       this.bowler.setTransform(s.bowler.pos.x, s.bowler.pos.z, s.bowler.heading);
+      this.bowler.setMirror(this.bowlerArm === 'L' ? -1 : 1);
       const toRelease = a.anim === 'runup' ? (1 - s.runUp.t) * s.runUp.duration : undefined;
-      this.bowler.pose(a.anim, a.t, dt, { speed: a.anim === 'runup' ? 4 + 3 * s.bowler.t : Math.max(v, a.anim === 'run' ? 3 : 0), look: ballAt, toRelease });
+      this.bowler.pose(a.anim, a.t, dt, { speed: a.anim === 'runup' ? 4 + 3 * s.bowler.t : Math.max(v, a.anim === 'run' ? 3 : 0), look: ballAt, toRelease, bowlStyle: this.bowlerStyle });
     }
     // Fielders (snapshot excludes the bowler; first is the keeper).
     this.fielderPlayers = s.fielders.map((f) => f.player);
@@ -306,6 +313,8 @@ export class World {
 
     // Ball.
     const bp = new THREE.Vector3(s.ball.pos.x, s.ball.pos.y, s.ball.pos.z);
+    // Before it is bowled the ball is in the bowler's hand, going round with the arm.
+    if ((s.phase === 'runUp' || s.phase === 'preDelivery') && this.bowler) this.bowler.handBall(bp);
     const fast = Math.hypot(s.ball.vel.x, s.ball.vel.y, s.ball.vel.z) > 12 && !s.ball.held;
     this.ball.update(bp, s.ball.visible, fast, this.cams.camera.position.distanceTo(bp), time);
 

@@ -194,6 +194,8 @@ export interface PoseExtra {
   look?: { x: number; y: number; z: number } | null;
   /** Bowler's run-up: seconds left until the ball is released (the last strides become the delivery stride). */
   toRelease?: number;
+  /** The bowler's style: a fast bowler's leaping action, a medium pacer's shorter bound, a spinner's hop and pivot. */
+  bowlStyle?: string;
   /** Batter in the stance: how far the bat is lifted (0 = grounded, 1 = full backlift as the ball is bowled). */
   backlift?: number;
   /** Shot family ('ground', 'lofted', 'defend'): lofted shots finish higher and fuller. */
@@ -235,6 +237,10 @@ export class Cricketer {
   private fromBody = { px: 0, py: 0, rz: 0 };
   private fromBat = { p: new THREE.Vector3(), q: new THREE.Quaternion() };
   private inStride = false;
+  private runningOff = false;
+  /** Bowling: where each arm points this frame (solved after the body is grounded), and the wrist's turn. */
+  private armAims: ArmAim[] = [];
+  private wrist: [number, number, number] | null = null;
   private backlift = 0;
 
   constructor(kit: Kit, castShadow = true) {
@@ -326,6 +332,12 @@ export class Cricketer {
     if (this.badgePlane) this.badgePlane.scale.x = m;
   }
 
+  /** Where a ball held in the right hand is (world space): the bowler's ball before it is let go. */
+  handBall(out: THREE.Vector3): THREE.Vector3 {
+    this.root.updateMatrixWorld(true);
+    return out.set(0, -0.075, 0.025).applyMatrix4(this.j.rHand.matrixWorld);
+  }
+
   setTransform(x: number, z: number, heading: number): void {
     this.root.position.set(x, 0, z);
     this.root.rotation.y = heading;
@@ -337,6 +349,8 @@ export class Cricketer {
     this.body.rotation.set(0, 0, 0);
     this.body.position.set(0, 0, 0);
     this.grips.length = 0;
+    this.armAims.length = 0;
+    this.wrist = null;
     this.feetFree = false;
     this.lift = 0;
     this.heelLift.l = this.heelLift.r = 0;
@@ -386,6 +400,27 @@ export class Cricketer {
     const dir = new THREE.Vector3(0, -1, 0).applyQuaternion(this.batPivot.quaternion);
     this.grip('l', this.batPivot.position.clone().addScaledVector(dir, 0.045), lPole);
     this.grip('r', this.batPivot.position.clone().addScaledVector(dir, 0.13));
+  }
+
+  /**
+   * Point an arm along the line of the pitch: `phi` is its angle in the vertical plane through the shoulder
+   * (0 straight down, increasing back, over the top and down in front), `tilt` leans it in towards the head at the
+   * top, `across` takes the hand over towards the other side of the body, and `reach` is how straight it is.
+   * Blended with where the posed (forward-kinematic) hand already is by `w`, then solved with the arm IK.
+   */
+  private aimArm(a: ArmAim): void {
+    this.refresh();
+    const S = new THREE.Vector3();
+    const H = new THREE.Vector3();
+    this.local(this.j[`${a.side}Shoulder`], S, _q);
+    this.local(this.j[`${a.side}Hand`], H, _q);
+    const inward = a.side === 'r' ? 1 : -1;
+    const c = Math.cos(a.phi);
+    const dir = new THREE.Vector3(inward * Math.sin(a.tilt) * -c, -c * Math.cos(a.tilt), -Math.sin(a.phi)).normalize();
+    const T = S.clone().addScaledVector(dir, (UPPER + FORE) * a.reach);
+    T.x += inward * a.across;
+    const at = H.lerp(T, a.w);
+    this.grips.push({ side: a.side, at, dir: new THREE.Vector3(inward, 0, 0), pole: new THREE.Vector3(-inward * 0.8, 0.1, -0.4) });
   }
 
   /**
@@ -572,18 +607,20 @@ export class Cricketer {
     let look = true;
     let grounded = true;
     switch (anim) {
-      case 'runup':
+      case 'runup': {
         // The last strides of the run-up are the delivery stride: gather, bound, back foot, front foot, release.
-        if (extra.toRelease !== undefined && extra.toRelease < Cricketer.STRIDE) {
+        const act = bowlAction(extra.bowlStyle);
+        if (extra.toRelease !== undefined && extra.toRelease < BOWL_KEYS[act][0]!.t * -1) {
           if (!this.inStride) this.beginFade(0.1);
           this.inStride = true;
-          this.bowl(-extra.toRelease);
+          this.bowl(-extra.toRelease, act, extra.bowlStyle);
         } else {
           this.inStride = false;
-          this.gait(Math.max(4, speed), true);
+          this.runUp(speed, act);
         }
         look = false;
         break;
+      }
       case 'run':
         if (speed < 2.6) this.gait(speed, false);
         else this.gait(Math.max(3, speed), true);
@@ -626,7 +663,7 @@ export class Cricketer {
         look = false;
         break;
       case 'delivery':
-        this.bowl(t);
+        this.bowl(t, bowlAction(extra.bowlStyle), extra.bowlStyle);
         look = false;
         break;
       case 'stance':
@@ -767,8 +804,14 @@ export class Cricketer {
     if (grounded) this.ground();
     this.j.hips.position.y += this.lift;
     if (look && extra.look) this.lookAt(extra.look);
+    for (const a of this.armAims) this.aimArm(a);
     if (this.grips.length) this.reachWithTorso();
     for (const g of this.grips) this.solveArm(g);
+    if (this.wrist) {
+      this.j.rHand.rotateX(this.wrist[0]);
+      this.j.rHand.rotateY(this.wrist[1]);
+      this.j.rHand.rotateZ(this.wrist[2]);
+    }
     this.blend(dt);
   }
 
@@ -1103,55 +1146,162 @@ export class Cricketer {
     this.gripBat(vertical ? new THREE.Vector3(0.7, 0.55, 0.25) : undefined);
   }
 
-  /** Bowling action; t = seconds since release. */
-  /** Seconds before release that the delivery stride starts. */
-  static readonly STRIDE = 0.55;
-
   /**
-   * The bowling action, timed from release (t = 0): the gather and bound (airborne, knee up, arms coiled at the
-   * chin), back-foot contact side-on with the front arm reaching high, the front foot landing on a braced leg as
-   * the bowling arm comes over the top, then the follow-through (arm across the body, trunk bent, back leg
-   * swinging through) into a jog.
+   * The run-up. Pace bowlers run in hard, leaning into it, the ball hand pumping close to the chest and the head
+   * steady; spinners jog in a few steps holding the ball in front of them.
    */
-  private bowl(t: number): void {
-    if (t > 0.45) {
-      this.gait(3.2, true);
+  private runUp(speed: number, act: BowlAct): void {
+    if (act === 'spin') {
+      this.gait(3.1, true);
+      this.apply({ rShoulder: [-0.55, 0, 0.05], rElbow: [-0.9, 0, 0], lean: 0.04, head: [-0.06, 0, 0] });
       return;
     }
-    const seg = (a: number, b: number) => smooth((t - a) / (b - a));
-    // Key poses, blended in order.
-    const P = {
-      gather: { lHip: -1.25, lKnee: 1.45, rHip: 0.25, rKnee: 0.95, lSh: -2.3, lEl: -1.1, rSh: -1.5, rEl: -1.7, chestY: 0.75, hipsY: 0.45, lean: -0.05, headY: -0.55 },
-      back: { lHip: -1.1, lKnee: 1.05, rHip: -0.02, rKnee: 0.28, lSh: -2.95, lEl: -0.15, rSh: 0.65, rEl: -0.15, chestY: 0.8, hipsY: 0.5, lean: -0.22, headY: -0.6 },
-      release: { lHip: -0.55, lKnee: 0.08, rHip: 0.4, rKnee: 0.5, lSh: -0.55, lEl: -0.7, rSh: -3.45, rEl: -0.05, chestY: 0.0, hipsY: 0.05, lean: 0.38, headY: -0.05 },
-      follow: { lHip: -0.35, lKnee: 0.45, rHip: -0.65, rKnee: 1.05, lSh: 0.35, lEl: -0.8, rSh: -5.85, rEl: -0.3, chestY: -0.55, hipsY: -0.35, lean: 0.8, headY: 0.2 },
-    };
-    type K = typeof P.gather;
-    const lerpPose = (a: K, b: K, k: number): K => Object.fromEntries((Object.keys(a) as (keyof K)[]).map((n) => [n, a[n] + (b[n] - a[n]) * k])) as K;
-    let q: K;
-    if (t < -0.38) q = P.gather;
-    else if (t < -0.12) q = lerpPose(P.gather, P.back, seg(-0.38, -0.28));
-    else if (t < 0) q = lerpPose(P.back, P.release, seg(-0.12, 0));
-    else q = lerpPose(P.release, P.follow, seg(0, 0.32));
-    // Coming out of the run-up into the gather.
-    if (t < -0.42) q = lerpPose({ ...P.gather, lHip: -0.6, lKnee: 0.9, rHip: 0.4, rKnee: 0.6, lSh: -0.9, rSh: -0.6, chestY: 0.2 }, P.gather, seg(-0.55, -0.42));
-    // The bowling arm goes across the body in the follow-through.
-    const across = t > 0 ? 0.55 * seg(0, 0.3) : 0;
+    this.gait(Math.max(4, speed), true);
+    this.apply({ lean: act === 'fast' ? 0.12 : 0.08, rElbow: [-0.35, 0, 0], head: [-0.1, 0, 0] });
+  }
+
+  /** The delivery stride's key poses are blended along a curve (Catmull-Rom through them, channel by channel). */
+  private bowlPose(t: number, keys: BowlKey[]): BowlKey {
+    let i = 0;
+    while (i < keys.length - 2 && t > keys[i + 1]!.t) i++;
+    const k1 = keys[i]!;
+    const k2 = keys[i + 1]!;
+    const k0 = keys[Math.max(0, i - 1)]!;
+    const k3 = keys[Math.min(keys.length - 1, i + 2)]!;
+    const u = clamp01((t - k1.t) / (k2.t - k1.t));
+    const out = { ...k1 };
+    for (const n of Object.keys(k1) as (keyof BowlKey)[]) {
+      if (n === 't') continue;
+      const p0 = k0[n];
+      const p1 = k1[n];
+      const p2 = k2[n];
+      const p3 = k3[n];
+      // Tangents scaled to the neighbouring key spacing, so uneven timing does not overshoot.
+      const m1 = ((p2 - p0) / Math.max(1e-3, k2.t - k0.t)) * (k2.t - k1.t);
+      const m2 = ((p3 - p1) / Math.max(1e-3, k3.t - k1.t)) * (k2.t - k1.t);
+      const u2 = u * u;
+      const u3 = u2 * u;
+      out[n] = (2 * u3 - 3 * u2 + 1) * p1 + (u3 - 2 * u2 + u) * m1 + (-2 * u3 + 3 * u2) * p2 + (u3 - u2) * m2;
+    }
+    return out;
+  }
+
+  /**
+   * The bowling action, timed from release (t = 0, negative before it). Pace: the last running stride, the leap
+   * (front knee driving up, hands rising to the chin), back-foot contact side-on with the front arm reaching high
+   * and the bowling arm down behind, the front foot landing on a braced leg as the front arm pulls down and the
+   * bowling arm comes up behind and over the top, the wrist flicking through at release, then the follow-through:
+   * arm down across the body, trunk bent over the front leg, the back leg swinging through, and into the run-off.
+   * Spin: a hop, side-on landing, a pivot over the front foot with the wrist turning the ball (a finger spinner's
+   * wrist turns like a door handle, a wrist spinner's flicks over), and a shorter follow-through.
+   */
+  private bowl(t: number, act: BowlAct, style?: string): void {
+    const keys = BOWL_KEYS[act];
+    const last = keys[keys.length - 1]!.t;
+    if (t > last) {
+      if (!this.runningOff) this.beginFade(0.2);
+      this.runningOff = true;
+      this.gait(act === 'spin' ? 2.4 : 3.4, true);
+      return;
+    }
+    this.runningOff = false;
+    const q = this.bowlPose(t, keys);
+    // The wrist: cocked back before release and flicked through it; spinners turn it as they let go.
+    let wy = 0;
+    let wz = 0;
+    if (style === 'offspin') wy = -1.1 * Math.exp(-(((t + 0.01) / 0.07) ** 2));
+    if (style === 'legspin') wz = 0.9 * Math.exp(-(((t + 0.01) / 0.07) ** 2)) - 0.4 * smooth((t + 0.25) / 0.15) * (1 - smooth(t / 0.05));
     this.apply({
       lHip: [q.lHip, 0, 0.06], lKnee: [q.lKnee, 0, 0],
       rHip: [q.rHip, 0, -0.06], rKnee: [q.rKnee, 0, 0],
-      lShoulder: [q.lSh, 0, 0.25], lElbow: [q.lEl, 0, 0],
-      rShoulder: [q.rSh, 0, -0.08 + across], rElbow: [q.rEl, 0, 0],
-      chest: [0, q.chestY, 0], hips: [0, q.hipsY, 0],
+      lShoulder: [q.lSh, 0, q.lShZ], lElbow: [q.lEl, 0, 0],
+      rShoulder: [q.rSh, 0, q.rShZ], rElbow: [q.rEl, 0, 0],
+      chest: [0, q.chestY, q.chestZ], hips: [0, q.hipsY, 0],
       lean: q.lean,
-      head: [0.08, q.headY, 0],
+      head: [q.headX, q.headY, 0],
     });
-    // In the air during the bound; up on the toes of the back foot as the hips drive through.
-    if (t > -0.5 && t < -0.3) this.lift = 0.2 * Math.sin((Math.PI * (t + 0.5)) / 0.2);
-    if (t > -0.08) this.heelLift.r = 0.75 * seg(-0.08, 0.1);
-    if (t < -0.3) this.feetFree = true;
+    // From the leap on, both arms swing in the line of the pitch whatever the chest is doing.
+    if (q.lW > 0.01) this.armAims.push({ side: 'l', phi: q.lPhi, tilt: 0, across: 0, reach: q.lReach, w: Math.min(1, q.lW) });
+    if (q.rW > 0.01) this.armAims.push({ side: 'r', phi: q.rPhi, tilt: q.rIn, across: q.rAcross, reach: 0.985, w: Math.min(1, q.rW) });
+    this.wrist = [q.wrist, wy, wz];
+    // In the air in the leap (or the spinner's hop); up on the toes of the back foot as the hips drive through.
+    this.lift = Math.max(0, q.lift);
+    if (q.lift > 0.01) this.feetFree = true;
+    if (t > -0.12 && t < 0.12) this.heelLift.r = 0.75 * smooth((t + 0.12) / 0.14);
   }
 }
+
+type BowlAct = 'fast' | 'medium' | 'spin';
+const bowlAction = (style?: string): BowlAct => (style === 'offspin' || style === 'legspin' ? 'spin' : style === 'medium' ? 'medium' : 'fast');
+
+/**
+ * One key pose of the bowling action (t: seconds from release). Angles in radians: hips and knees (left = the
+ * front leg of a right-arm bowler), shoulders, elbows (posed directly, used before the leap), the bowling
+ * wrist, chest twist (side-on) and side bend, hip turn, lean, head, lift off the ground, and from the leap on the
+ * arms' angles in the line of the pitch (the bowling arm's keeps increasing as it goes back, over the top and down
+ * in front, so it turns the right way round).
+ */
+interface BowlKey {
+  t: number;
+  lHip: number; lKnee: number; rHip: number; rKnee: number;
+  lSh: number; lShZ: number; lEl: number;
+  rSh: number; rShZ: number; rEl: number; wrist: number;
+  chestY: number; chestZ: number; hipsY: number; lean: number; headX: number; headY: number; lift: number;
+  /** Arms aimed along the pitch (see aimArm): front arm angle, straightness and weight; bowling arm angle, tilt in, across and weight. */
+  lPhi: number; lReach: number; lW: number;
+  rPhi: number; rIn: number; rAcross: number; rW: number;
+}
+
+interface ArmAim {
+  side: Side;
+  phi: number;
+  tilt: number;
+  across: number;
+  reach: number;
+  w: number;
+}
+const K = (t: number, k: Omit<BowlKey, 't'>): BowlKey => ({ t, ...k });
+const PACE_KEYS: BowlKey[] = [
+  // The last running stride.
+  K(-0.56, { lHip: -0.55, lKnee: 0.7, rHip: 0.45, rKnee: 0.5, lSh: -0.8, lShZ: 0.15, lEl: -1.4, rSh: 0.5, rShZ: -0.1, rEl: -1.5, wrist: 0, chestY: 0.1, chestZ: 0, hipsY: 0.05, lean: 0.15, headX: 0.05, headY: -0.05, lift: 0, lPhi: 0, lReach: 0.9, lW: 0, rPhi: 0.3, rIn: 0, rAcross: 0, rW: 0 }),
+  // Take-off: pushing off the back foot, front knee driving up, hands rising.
+  K(-0.47, { lHip: -1.35, lKnee: 1.7, rHip: 0.35, rKnee: 0.25, lSh: -1.7, lShZ: 0.15, lEl: -1.7, rSh: -1.5, rShZ: -0.1, rEl: -1.9, wrist: 0, chestY: 0.3, chestZ: 0, hipsY: 0.2, lean: 0.05, headX: 0.05, headY: -0.15, lift: 0.05, lPhi: 3.0, lReach: 0.8, lW: 0, rPhi: 0.3, rIn: 0, rAcross: 0, rW: 0 }),
+  // Top of the leap: coiled, hands at the chin, turning side-on.
+  K(-0.37, { lHip: -1.3, lKnee: 1.6, rHip: -0.1, rKnee: 1.2, lSh: -2.3, lShZ: 0.15, lEl: -1.3, rSh: -1.9, rShZ: -0.1, rEl: -1.8, wrist: 0, chestY: 0.6, chestZ: 0, hipsY: 0.45, lean: -0.05, headX: 0.05, headY: -0.45, lift: 0.24, lPhi: 3.4, lReach: 0.85, lW: 0.35, rPhi: 0.2, rIn: 0, rAcross: 0, rW: 0 }),
+  // Back-foot contact: side-on, leaning back, front arm reaching high, bowling arm down behind.
+  K(-0.27, { lHip: -1.05, lKnee: 1.0, rHip: -0.05, rKnee: 0.35, lSh: -2.95, lShZ: 0.2, lEl: -0.1, rSh: 0.55, rShZ: -0.15, rEl: -0.25, wrist: 0.4, chestY: 0.9, chestZ: -0.05, hipsY: 0.6, lean: -0.25, headX: 0.05, headY: -0.7, lift: 0, lPhi: 3.55, lReach: 0.97, lW: 1, rPhi: 0.45, rIn: 0.05, rAcross: 0, rW: 1 }),
+  // The front leg reaching out, the bowling arm rising behind.
+  K(-0.18, { lHip: -0.95, lKnee: 0.55, rHip: 0.15, rKnee: 0.45, lSh: -2.7, lShZ: 0.25, lEl: -0.2, rSh: 1.25, rShZ: -0.15, rEl: -0.15, wrist: 0.5, chestY: 0.8, chestZ: -0.02, hipsY: 0.55, lean: -0.2, headX: 0.05, headY: -0.65, lift: 0.03, lPhi: 3.75, lReach: 0.95, lW: 1, rPhi: 1.3, rIn: 0.1, rAcross: 0, rW: 1 }),
+  // Front-foot contact on a braced leg: front arm pulling down, bowling arm high behind, wrist cocked.
+  K(-0.1, { lHip: -0.6, lKnee: 0.12, rHip: 0.35, rKnee: 0.55, lSh: -1.7, lShZ: 0.35, lEl: -0.6, rSh: 2.05, rShZ: -0.1, rEl: -0.05, wrist: 0.6, chestY: 0.45, chestZ: 0.1, hipsY: 0.3, lean: 0, headX: 0.05, headY: -0.35, lift: 0, lPhi: 4.3, lReach: 0.85, lW: 1, rPhi: 2.15, rIn: 0.15, rAcross: 0, rW: 1 }),
+  // Release: arm just past vertical, front arm tucked in, chest square, wrist flicked through.
+  K(0, { lHip: -0.5, lKnee: 0.08, rHip: 0.45, rKnee: 0.7, lSh: -0.4, lShZ: 0.45, lEl: -1.5, rSh: 3.3, rShZ: -0.05, rEl: 0, wrist: -0.3, chestY: 0, chestZ: 0.22, hipsY: 0, lean: 0.35, headX: 0.1, headY: -0.05, lift: 0, lPhi: 5.6, lReach: 0.55, lW: 1, rPhi: 3.3, rIn: 0.28, rAcross: 0, rW: 1 }),
+  // The arm comes down in front and across.
+  K(0.1, { lHip: -0.45, lKnee: 0.35, rHip: 0.15, rKnee: 1.0, lSh: 0.1, lShZ: 0.4, lEl: -1.0, rSh: 4.6, rShZ: 0.35, rEl: -0.1, wrist: -0.5, chestY: -0.45, chestZ: 0.15, hipsY: -0.3, lean: 0.75, headX: 0.2, headY: 0.1, lift: 0, lPhi: 6.3, lReach: 0.6, lW: 1, rPhi: 4.5, rIn: 0.12, rAcross: 0.12, rW: 1 }),
+  // Follow-through: arm to the far hip, trunk over the front leg, back leg swinging through.
+  K(0.22, { lHip: -0.3, lKnee: 0.55, rHip: -0.7, rKnee: 1.1, lSh: 0.6, lShZ: 0.3, lEl: -0.7, rSh: 5.7, rShZ: 0.7, rEl: -0.4, wrist: -0.3, chestY: -0.7, chestZ: 0.05, hipsY: -0.5, lean: 0.9, headX: 0.2, headY: 0.25, lift: 0, lPhi: 6.8, lReach: 0.7, lW: 1, rPhi: 5.75, rIn: 0, rAcross: 0.42, rW: 1 }),
+  // The back foot lands; rising into the run-off.
+  K(0.38, { lHip: 0.35, lKnee: 0.5, rHip: -0.6, rKnee: 0.4, lSh: 0.3, lShZ: 0.2, lEl: -1.0, rSh: 6.1, rShZ: 0.5, rEl: -0.6, wrist: 0, chestY: -0.45, chestZ: 0, hipsY: -0.35, lean: 0.55, headX: 0.05, headY: 0.1, lift: 0, lPhi: 6.7, lReach: 0.75, lW: 0.5, rPhi: 6.15, rIn: 0, rAcross: 0.3, rW: 0.6 }),
+];
+const SPIN_KEYS: BowlKey[] = [
+  // Jogging in, the ball held in front of the chest.
+  K(-0.5, { lHip: -0.45, lKnee: 0.5, rHip: 0.35, rKnee: 0.3, lSh: -0.5, lShZ: 0.15, lEl: -1.2, rSh: -0.9, rShZ: -0.05, rEl: -1.7, wrist: 0, chestY: 0.1, chestZ: 0, hipsY: 0.05, lean: 0.08, headX: 0.05, headY: -0.05, lift: 0, lPhi: 0, lReach: 0.9, lW: 0, rPhi: 0.3, rIn: 0, rAcross: 0, rW: 0 }),
+  // The hop: hands together at the chin, front knee up.
+  K(-0.38, { lHip: -1.0, lKnee: 1.2, rHip: 0.2, rKnee: 0.4, lSh: -1.7, lShZ: 0.1, lEl: -1.6, rSh: -1.6, rShZ: -0.05, rEl: -1.9, wrist: 0.2, chestY: 0.45, chestZ: 0, hipsY: 0.35, lean: -0.02, headX: 0.05, headY: -0.35, lift: 0.1, lPhi: 3.0, lReach: 0.8, lW: 0, rPhi: 0.3, rIn: 0, rAcross: 0, rW: 0 }),
+  // Landing side-on on the back foot: front arm up, bowling arm dropping behind, wrist cocked.
+  K(-0.26, { lHip: -0.85, lKnee: 0.8, rHip: 0, rKnee: 0.3, lSh: -2.6, lShZ: 0.15, lEl: -0.3, rSh: 0.3, rShZ: -0.1, rEl: -0.5, wrist: 0.4, chestY: 0.95, chestZ: -0.03, hipsY: 0.7, lean: -0.1, headX: 0.05, headY: -0.75, lift: 0, lPhi: 3.6, lReach: 0.95, lW: 1, rPhi: 0.35, rIn: -0.05, rAcross: 0, rW: 1 }),
+  // Front foot down, the arm coming up behind.
+  K(-0.12, { lHip: -0.55, lKnee: 0.25, rHip: 0.3, rKnee: 0.5, lSh: -1.9, lShZ: 0.3, lEl: -0.6, rSh: 1.65, rShZ: -0.15, rEl: -0.2, wrist: 0.5, chestY: 0.75, chestZ: 0.05, hipsY: 0.5, lean: 0.05, headX: 0.05, headY: -0.55, lift: 0, lPhi: 4.3, lReach: 0.85, lW: 1, rPhi: 1.8, rIn: -0.08, rAcross: 0, rW: 1 }),
+  // Release: pivoting over the front foot, the arm a little round from vertical.
+  K(0, { lHip: -0.45, lKnee: 0.25, rHip: 0.4, rKnee: 0.6, lSh: -0.6, lShZ: 0.4, lEl: -1.4, rSh: 3.5, rShZ: -0.25, rEl: -0.1, wrist: -0.4, chestY: 0.1, chestZ: 0.12, hipsY: 0.15, lean: 0.3, headX: 0.1, headY: -0.1, lift: 0, lPhi: 5.5, lReach: 0.55, lW: 1, rPhi: 3.55, rIn: -0.12, rAcross: 0, rW: 1 }),
+  // The pivot carries on: back leg coming round, arm across.
+  K(0.12, { lHip: -0.4, lKnee: 0.4, rHip: -0.2, rKnee: 0.9, lSh: 0.2, lShZ: 0.35, lEl: -1.0, rSh: 4.7, rShZ: 0.45, rEl: -0.2, wrist: -0.5, chestY: -0.55, chestZ: 0.08, hipsY: -0.4, lean: 0.55, headX: 0.15, headY: 0.1, lift: 0, lPhi: 6.4, lReach: 0.6, lW: 1, rPhi: 4.8, rIn: 0, rAcross: 0.25, rW: 1 }),
+  K(0.26, { lHip: -0.1, lKnee: 0.45, rHip: -0.75, rKnee: 0.8, lSh: 0.5, lShZ: 0.3, lEl: -0.8, rSh: 5.6, rShZ: 0.8, rEl: -0.5, wrist: -0.3, chestY: -0.85, chestZ: 0.02, hipsY: -0.7, lean: 0.6, headX: 0.15, headY: 0.25, lift: 0, lPhi: 6.7, lReach: 0.7, lW: 1, rPhi: 5.7, rIn: 0, rAcross: 0.5, rW: 1 }),
+  K(0.4, { lHip: 0.3, lKnee: 0.35, rHip: -0.4, rKnee: 0.3, lSh: 0.2, lShZ: 0.2, lEl: -0.9, rSh: 6.0, rShZ: 0.4, rEl: -0.7, wrist: 0, chestY: -0.4, chestZ: 0, hipsY: -0.35, lean: 0.25, headX: 0.05, headY: 0.1, lift: 0, lPhi: 6.7, lReach: 0.75, lW: 0.5, rPhi: 6.1, rIn: 0, rAcross: 0.3, rW: 0.6 }),
+];
+/** A medium pacer: the same action as a fast bowler's with a lower leap, less lean back and a shorter follow-through. */
+const MEDIUM_KEYS: BowlKey[] = PACE_KEYS.map((k) => ({ ...k, t: k.t * 0.92, lift: k.lift * 0.6, lean: k.lean < 0 ? k.lean * 0.6 : k.lean * 0.85, lKnee: k.t < -0.3 ? k.lKnee * 0.85 : k.lKnee }));
+export const BOWL_KEYS: Record<BowlAct, BowlKey[]> = { fast: PACE_KEYS, medium: MEDIUM_KEYS, spin: SPIN_KEYS };
 
 const HAIR_STYLES: HairStyle[] = ['short', 'crop', 'short', 'curly', 'crop', 'buzz', 'short', 'bald'];
 const FACIAL: FacialHair[] = ['none', 'none', 'stubble', 'none', 'beard', 'stubble', 'moustache', 'none'];

@@ -100,9 +100,11 @@ async function singlePlayer() {
     const s = await waitFor(p, (s) => (s.phase === 'preDelivery' || s.phase === 'runUp') && !s.replay, 150000, 'next ball');
     if (s.batting !== 0) await bowlOne(p);
     else {
+      // Pick the shot (Loft or Stroke), then play it off the front foot as the ball arrives.
+      await p.keyboard.press(i % 2 ? 'KeyK' : 'KeyJ');
       await waitFor(p, (s) => s.phase === 'inPlay' && s.z > 0, 60000, 'ball in play');
       await p.keyboard.down('KeyW');
-      await p.keyboard.press(i % 2 ? 'KeyK' : 'Space');
+      await p.keyboard.press('Space');
       await p.waitForTimeout(150);
       await p.keyboard.up('KeyW');
     }

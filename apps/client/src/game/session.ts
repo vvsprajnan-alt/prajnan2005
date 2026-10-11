@@ -10,7 +10,6 @@ import {
   STRIKER_STUMPS_Z,
   STROKES,
   SWING_TIME,
-  ShotFamily,
   VARIATION_LABEL,
   Variation,
   defaultIntent,
@@ -29,6 +28,7 @@ import { describeBall } from '../ui/commentary';
 import { BallRecorder, ReplayFrame, ReplayInfo, ReplayShot, frameAt, planReplay } from './replay';
 import { LocalDriver, MatchDriver } from './driver';
 import { BowlStage, chooseVariation, confirmAim, moveTarget } from './bowlFlow';
+import { ADVANCE_IDEAL_Z, SHOT_LABEL, ShotType, advanceError, advanceSwingDue } from './battingFlow';
 import { QUICK_CHAT } from '@crease/net';
 
 export interface SessionCallbacks {
@@ -43,7 +43,7 @@ export interface SessionCallbacks {
 
 /** Short hints for touch screens (the buttons carry their own labels). */
 function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean, stage: BowlStage): string {
-  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Drag to aim · pick your feet · Push, Stroke or Loft as the ball arrives';
+  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Pick Push, Stroke or Loft · drag to aim · Front foot or Back foot as the ball arrives (Advanced as it is bowled)';
   if (fielding) return fielding === 'holding' ? 'Tap a throw, or drag to run it in' : 'Drag the pad to run · Dive · Catch';
   if (phase === 'preDelivery') return stage === 'aim' ? 'Move the target with the joystick · tap OK' : 'Choose a delivery · tap Bowl';
   if (phase === 'runUp') return 'Tap Release in the green zone';
@@ -82,8 +82,8 @@ export class GameSession {
   private followUntil = 0;
   private cutUntil = 0;
   private lastCall: string | null = null;
-  /** The delivery the picked footwork belongs to (it resets every ball). */
-  private ballKey = '';
+  /** An Advanced press waiting to play its shot: when it was pressed, and when it should have been (once known). */
+  private advance: { pressedAt: number; ideal: number | null } | null = null;
   private breakShownFor = -1;
   private trackUntil = 0;
   private completeShown = false;
@@ -275,58 +275,97 @@ export class GameSession {
         return;
       }
       // Review: U, or the "run" button (Y) while a decision can be challenged.
-      if ((a === 'review' || (a === 'run' && m.phase === 'review')) && m.pendingReview?.team === this.humanTeam) {
+      if ((a === 'review' || ((a === 'run' || a === 'stroke') && m.phase === 'review')) && m.pendingReview?.team === this.humanTeam) {
         this.requestReview();
         return;
       }
     }
     if (mode === 'batting') {
       for (const a of actions) this.battingAction(a);
+      this.advanceShot(m);
     } else if (mode === 'bowling') {
       this.bowlingInput(actions, m);
     }
   }
 
   /**
-   * Batting: three shots (Push, Stroke, Loft - the stroke itself follows the aim, the ball and the
-   * footwork) and four actions (front foot, back foot, advance, leave).
+   * Batting in two steps: Push, Stroke or Loft picks the kind of shot (it stays picked); then, with the ball on its
+   * way, Front foot or Back foot plays it (timed as the ball arrives), Advanced steps down the pitch and plays it
+   * (timed as the ball leaves the hand), or Leave lets it go. The stroke itself follows the aim and the ball.
    */
   private battingAction(a: Action): void {
-    const fam: Partial<Record<Action, ShotFamily>> = { primary: 'ground', lofted: 'lofted', defend: 'defend' };
-    const f = fam[a];
+    const pick: Partial<Record<Action, ShotType>> = { defend: 'defend', stroke: 'ground', lofted: 'lofted' };
     const m = this.match;
     const beforeTheBall = (m.phase === 'preDelivery' || m.phase === 'runUp' || m.phase === 'inPlay') && !m.swing && !m.batContact && !m.padContact && !m.passedBatter;
-    if ((a === 'sweep' || a === 'reverseSweep') && beforeTheBall) {
-      // Front foot / back foot for this ball; press again to go back to automatic.
-      const want = a === 'sweep' ? 'front' : 'back';
-      this.input.pickedFootwork = this.input.pickedFootwork === want ? 'auto' : want;
+    const hit = m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact);
+    const p = pick[a];
+    if (p) {
+      if (!hit) this.input.pickedShot = p;
+      return;
+    }
+    // Space doubles as "run" once the ball is in the field.
+    if (a === 'primary' && hit) {
+      this.send({ type: 'run.call', call: 'run' });
+      this.lastCall = 'run';
+      return;
+    }
+    if ((a === 'primary' || a === 'sweep' || a === 'reverseSweep') && beforeTheBall) {
+      if (m.phase === 'inPlay' && this.can('striker') && !this.advance) this.playShot(a === 'reverseSweep' ? 'back' : 'front');
+      return;
+    }
+    if (a === 'charge' && beforeTheBall && m.phase !== 'preDelivery' && !this.advance && m.leaveTime === null) {
+      if (!this.can('striker')) return;
+      // Too late to get down the pitch (or already there): play it off the front foot where you stand.
+      const canGo = !m.charged && (m.phase === 'runUp' || m.ball.pos.z < -2);
+      if (!canGo) {
+        if (m.phase === 'inPlay') this.playShot('front');
+        return;
+      }
+      this.send({ type: 'bat.charge' });
+      this.advance = { pressedAt: m.time, ideal: m.phase === 'inPlay' ? this.advanceIdeal(m) : null };
       return;
     }
     // Leave: the Leave button, or "Stay" before the ball arrives (D-pad down on a controller).
-    if ((a === 'leave' || a === 'wait') && beforeTheBall && m.phase !== 'preDelivery' && m.leaveTime === null) {
+    if ((a === 'leave' || a === 'wait') && beforeTheBall && m.phase !== 'preDelivery' && m.leaveTime === null && !this.advance) {
       if (this.can('striker')) this.send({ type: 'bat.leave' });
-      return;
-    }
-    if (f) {
-      if (m.phase === 'inPlay' && !m.swing && !m.batContact) {
-        if (!this.can('striker')) return;
-        const d = this.shotAim();
-        this.send({ type: 'bat.shot', shot: { family: f, aimX: d.x, aimY: d.y, footwork: this.input.footwork() }, at: m.tick });
-      } else if (m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact) && a === 'primary') {
-        // Space doubles as "run" once the ball is in the field.
-        this.send({ type: 'run.call', call: 'run' });
-        this.lastCall = 'run';
-      }
-      return;
-    }
-    if (a === 'charge') {
-      if (this.can('striker')) this.send({ type: 'bat.charge' });
       return;
     }
     if (a === 'run' || a === 'wait' || a === 'back') {
       this.send({ type: 'run.call', call: a });
       this.lastCall = a;
     }
+  }
+
+  /** Play the picked shot now, aimed where the stick points. `ago` backdates it (seconds). */
+  private playShot(footwork: 'front' | 'back', ago = 0): void {
+    const m = this.match;
+    const d = this.shotAim();
+    const back = Math.min(30, Math.max(0, Math.round(ago / DT)));
+    this.send({ type: 'bat.shot', shot: { family: this.input.pickedShot, aimX: d.x, aimY: d.y, footwork }, at: m.tick - back });
+  }
+
+  /** When the ball came (or will come) past ADVANCE_IDEAL_Z, or null before then. */
+  private advanceIdeal(m: CricketMatch): number | null {
+    const b = m.ball;
+    if (b.pos.z < ADVANCE_IDEAL_Z) return null;
+    return m.time - (b.pos.z - ADVANCE_IDEAL_Z) / Math.max(5, b.vel.z);
+  }
+
+  /** After Advanced: once the ball is close enough, play the picked shot off the front foot, as early or late as the press was. */
+  private advanceShot(m: CricketMatch): void {
+    const adv = this.advance;
+    if (!adv) return;
+    if ((m.phase !== 'runUp' && m.phase !== 'inPlay') || m.swing || m.batContact || m.padContact || m.passedBatter || m.leaveTime !== null) {
+      this.advance = null;
+      return;
+    }
+    if (m.phase !== 'inPlay') return;
+    adv.ideal ??= this.advanceIdeal(m);
+    if (adv.ideal === null) return;
+    const due = advanceSwingDue(m.timeToPlane(m.frontPlane), SWING_TIME[this.input.pickedShot], advanceError(adv.pressedAt, adv.ideal));
+    if (due === null) return;
+    this.advance = null;
+    this.playShot('front', due);
   }
 
   private lastMove = { x: 0, z: 0 };
@@ -829,13 +868,8 @@ export class GameSession {
       hud.setRole(label, this.driver.backlog());
     }
     const fielding = this.fieldingActive(m) ? (m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled ? 'holding' : 'chasing') : null;
-    const ballKey = `${m.inningsIndex}|${m.inn.log.length}`;
-    if (ballKey !== this.ballKey) {
-      this.ballKey = ballKey;
-      this.input.pickedFootwork = 'auto';
-    }
     const stage = bowlingNow && m.phase === 'preDelivery' ? this.bowlStage : undefined;
-    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding, charged: m.charged, left: m.leaveTime !== null, stage, tv: this.settings.camera !== 'behind' });
+    hud.setControls(mode, m.phase, this.input.device, { shot: this.input.pickedShot, advancing: this.advance !== null || m.charged, side: this.intent.side ?? 'over', fielding, left: m.leaveTime !== null, stage, tv: this.settings.camera !== 'behind' });
     if (mode === 'bowling') {
       // The bowler's deliveries come up once the target is set.
       hud.setVariations(stage === 'delivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => this.pickVariation(v), m.bowlerDef.shortName);
@@ -852,8 +886,8 @@ export class GameSession {
     let hint = '';
     if (mode === 'batting') {
       if (m.phase === 'preDelivery' || m.phase === 'runUp' || (m.phase === 'inPlay' && !m.swing && !m.batContact && !m.passedBatter))
-        hint = pad ? 'Stick: aim · B push · A stroke · X loft · LB/RB front/back foot · D-pad ▲ advance · ▼ leave' : 'Aim WASD · L push · Space stroke · K loft · Q/E front/back foot · F advance · O leave';
-      else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'Y run · RT stay · LT back' : 'R/Y run · N stay · B back';
+        hint = `${SHOT_LABEL[this.input.pickedShot]} picked · ` + (pad ? 'B push · Y stroke · X loft · then A/LB front foot · RB back foot · D-pad ▲ advanced · ▼ leave' : 'L push · J stroke · K loft · then Space/Q front foot · E back foot · F advanced · O leave');
+      else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'A run · D-pad ▼ stay · L3 back' : 'R/Y run · N stay · B back';
     } else if (mode === 'bowling' && fielding) {
       hint = fielding === 'holding'
         ? pad ? 'A: throw to keeper · X: throw to bowler · stick: run it in' : 'Space: throw to keeper · K: throw to bowler · WASD: run it in'
@@ -865,7 +899,8 @@ export class GameSession {
     }
     if (this.driver.networked && mode === 'batting' && !this.can('striker')) hint = 'You are the non-striker: call the runs (R / N / B) - your partner plays the shots';
     if (this.driver.networked && mode === 'bowling' && !this.can('bowler') && !fielding) hint = 'Your partner is bowling this over - you field when the ball is hit (G: set the field)';
-    if (this.input.device === 'touch' && hint) hint = touchHint(mode, m.phase, fielding, this.settings.autoRun, this.bowlStage);
+    const waitingForBall = m.phase === 'inPlay' && !m.swing && !m.batContact && !m.padContact && !m.passedBatter;
+    if (this.input.device === 'touch' && hint) hint = touchHint(mode, mode === 'batting' && waitingForBall ? 'runUp' : m.phase, fielding, this.settings.autoRun, this.bowlStage);
     hud.setHint(hint);
 
     this.checkScreens(m);

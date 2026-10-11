@@ -1,13 +1,16 @@
+import type { ShotType } from '../game/battingFlow';
+
 /**
  * Unified input: keyboard, gamepad and touch/on-screen buttons all produce the
  * same abstract actions plus a 2D direction. Game code never reads devices.
  */
 export type Action =
-  | 'primary' // batting: Stroke (along the ground) / bowling: start run-up, release
-  | 'lofted' // batting: Loft
-  | 'defend' // batting: Push (a block, or soft hands into the aimed gap)
-  | 'sweep' // batting: front foot / fielding: switch fielder
-  | 'reverseSweep' // batting: back foot / fielding: automatic fielder
+  | 'primary' // batting: play it off the front foot (run, once it is hit) / bowling: start run-up, release
+  | 'stroke' // batting: pick Stroke (along the ground)
+  | 'lofted' // batting: pick Loft
+  | 'defend' // batting: pick Push (a block, or soft hands into the aimed gap)
+  | 'sweep' // batting: play it off the front foot / fielding: switch fielder
+  | 'reverseSweep' // batting: play it off the back foot / fielding: automatic fielder
   | 'leave' // batting: shoulder arms
   | 'run'
   | 'wait'
@@ -16,7 +19,7 @@ export type Action =
   | 'varNext'
   | 'pause'
   | 'camera'
-  | 'charge' // batting: advance down the pitch
+  | 'charge' // batting: advance down the pitch and play it
   | 'side' // bowling: toggle over / round the wicket
   | 'field' // bowling: open the field editor
   | 'bowlers' // bowling: choose the bowler for this over
@@ -27,7 +30,7 @@ export type Action =
 
 const KEYMAP: Record<string, Action> = {
   Space: 'primary',
-  KeyJ: 'primary',
+  KeyJ: 'stroke',
   Enter: 'primary',
   KeyK: 'lofted',
   KeyL: 'defend',
@@ -52,12 +55,12 @@ const KEYMAP: Record<string, Action> = {
   KeyI: 'replay',
 };
 
-// Standard gamepad mapping. LT/RT (6/7) are held modifiers for footwork, not actions.
+// Standard gamepad mapping.
 const PAD_BUTTONS: Record<number, Action> = {
   0: 'primary',
   1: 'defend',
   2: 'lofted',
-  3: 'run',
+  3: 'stroke',
   4: 'sweep',
   5: 'reverseSweep',
   10: 'back',
@@ -97,18 +100,8 @@ export class Input {
     target.addEventListener('touchstart', () => (this.device = 'touch'), { passive: true });
   }
 
-  /** Footwork picked for this delivery (Front foot / Back foot buttons, Q / E, LB / RB); the game resets it each ball. */
-  pickedFootwork: 'auto' | 'front' | 'back' = 'auto';
-
-  /** Footwork for the shot: a held modifier (Shift / RT front, V / LT back) wins, otherwise the picked one. */
-  footwork(): 'auto' | 'front' | 'back' {
-    const pad = this.pad();
-    const lt = pad?.buttons[6]?.pressed ?? false;
-    const rt = pad?.buttons[7]?.pressed ?? false;
-    if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || rt) return 'front';
-    if (this.keys.has('KeyV') || lt) return 'back';
-    return this.pickedFootwork;
-  }
+  /** The kind of shot picked (Push, Stroke or Loft): played by the next footwork button; it stays picked ball to ball. */
+  pickedShot: ShotType = 'ground';
 
   trigger(a: Action): void {
     this.queue.push(a);

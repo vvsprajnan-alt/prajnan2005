@@ -666,21 +666,25 @@ export class App {
       <h3>Batting</h3>
       <table class="card"><tbody>
       <tr><td>Aim the shot (hold while playing)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
+      <tr><td colspan="4"><b>1. Pick the shot</b> (it stays picked until you change it)</td></tr>
       <tr><td><b>Push</b> - a block, or soft hands into the gap you aim at</td><td>L</td><td>B</td><td>Push</td></tr>
-      <tr><td><b>Stroke</b> - a full shot along the ground</td><td>Space / J</td><td>A</td><td>Stroke</td></tr>
+      <tr><td><b>Stroke</b> - a full shot along the ground</td><td>J</td><td>Y</td><td>Stroke</td></tr>
       <tr><td><b>Loft</b> - over the top</td><td>K</td><td>X</td><td>Loft</td></tr>
-      <tr><td>Front foot / Back foot (for this ball; press again for automatic)</td><td>Q / E (or hold Shift / V)</td><td>LB / RB (or hold RT / LT)</td><td>Front foot / Back foot</td></tr>
-      <tr><td>Advance down the pitch (during the run-up)</td><td>F</td><td>D-pad up</td><td>Advance</td></tr>
-      <tr><td>Leave the ball (shoulder arms)</td><td>O</td><td>D-pad down</td><td>Leave</td></tr>
-      <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y / N / B</td><td>Y / D-pad down / L3</td><td>Run / Stay / Back</td></tr>
+      <tr><td colspan="4"><b>2. Play it</b> as the ball comes, with your footwork</td></tr>
+      <tr><td><b>Front foot</b> - press as the ball arrives</td><td>Space / Q</td><td>A / LB</td><td>Front foot</td></tr>
+      <tr><td><b>Back foot</b> - press as the ball arrives</td><td>E</td><td>RB</td><td>Back foot</td></tr>
+      <tr><td><b>Advanced</b> - down the pitch: press as the ball leaves the bowler's hand</td><td>F</td><td>D-pad up</td><td>Advanced</td></tr>
+      <tr><td><b>Leave</b> - shoulder arms</td><td>O</td><td>D-pad down</td><td>Leave</td></tr>
+      <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y (or Space once it is hit) / N / B</td><td>A / D-pad down / L3</td><td>Run / Stay / Back</td></tr>
       </tbody></table>
-      <p class="muted">Pick <b>what</b> to play (Push, Stroke or Loft) and <b>where</b> (the aim), and the batter plays the right shot for the ball:
+      <p class="muted">First pick <b>what</b> to play (Push, Stroke or Loft) - picking does not play it. Then, as the ball is bowled, read it and play it
+      with <b>Front foot</b>, <b>Back foot</b> or <b>Advanced</b>, aiming <b>where</b> you want it to go; or <b>Leave</b> it. The batter plays the right shot for the ball:
       a Stroke aimed through the covers is a cover drive to a full ball and a back-foot punch to a short one; aimed to the leg side it is a flick or a pull;
       a Loft aimed behind is a scoop or an upper cut. With no aim the batter plays with the line of the ball (a Push with no aim is a solid block).</p>
-      <p class="muted">Footwork is automatic unless you pick it: getting forward to full balls and back to short ones improves your contact, the wrong foot costs you.
+      <p class="muted">Getting forward to full balls and back to short ones improves your contact; the wrong foot costs you.
       <b>Front foot</b> against spin or gentle pace turns a Stroke or Loft aimed square or fine on the leg side into a sweep (a slog sweep when lofted), and fine on the off side into a reverse sweep.
-      <b>Advance</b> makes a good-length ball a half-volley, but miss it and the keeper will stump you. <b>Leave</b> lets the ball go - safe outside off stump, but not if it is hitting the stumps.</p>
-      <p class="muted">Aim where you want the ball to go on the screen: in the TV view the batter faces you, so down = straight back past the bowler and up = behind the wicket (the joystick is labelled). Timing is everything: start the shot as the ball arrives.</p>
+      <b>Advanced</b> makes a good-length ball a half-volley - press it as the ball is released, too early and the bowler sees you coming - but miss it and the keeper will stump you. <b>Leave</b> lets the ball go - safe outside off stump, but not if it is hitting the stumps.</p>
+      <p class="muted">Aim where you want the ball to go on the screen: in the TV view the batter faces you, so down = straight back past the bowler and up = behind the wicket (the joystick is labelled). Timing is everything: press Front foot or Back foot as the ball arrives.</p>
       <h3>Bowling</h3>
       <table class="card"><tbody>
       <tr><td>1. Move the target on the pitch (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Joystick</td></tr>

@@ -442,9 +442,9 @@ export class Hud {
     mode: HudMode,
     phase: string,
     device: string,
-    extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null; charged?: boolean; left?: boolean; stage?: 'aim' | 'delivery'; tv?: boolean } = {},
+    extra: { shot?: string; advancing?: boolean; side?: string; fielding?: 'holding' | 'chasing' | null; left?: boolean; stage?: 'aim' | 'delivery'; tv?: boolean } = {},
   ): void {
-    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}|${extra.charged}|${extra.left}|${extra.stage}|${extra.tv}`;
+    const key = `${mode}|${phase}|${device}|${extra.shot}|${extra.advancing}|${extra.side}|${extra.fielding}|${extra.left}|${extra.stage}|${extra.tv}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -461,17 +461,19 @@ export class Hud {
     this.dpadLabels[0].textContent = placing ? 'FULLER' : flip ? 'BEHIND' : 'STRAIGHT';
     this.dpadLabels[1].textContent = placing ? 'SHORTER' : flip ? 'STRAIGHT' : 'BEHIND';
     if (mode === 'batting') {
-      // Actions (how you play it) above the three shots (what you play); the shot follows your aim.
-      const fw = extra.footwork ?? 'auto';
+      // Step 1, what to play: Push, Stroke or Loft (a choice that stays lit). Step 2, as the ball comes: how to
+      // play it - Front foot, Back foot, Advanced or Leave - which plays the shot. The shot follows your aim.
+      const shot = extra.shot ?? 'ground';
+      const pickBtn = (label: string, kb: string, gp: string, a: Action, fam: string) => btn(label, kb, gp, a, `shot pick${shot === fam ? ' on' : ''}`);
       this.controls.append(
-        row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
+        row(btn('Run', 'R / Y', 'A', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
+        row(pickBtn('Push', 'L', 'B', 'defend', 'defend'), pickBtn('Stroke', 'J', 'Y', 'stroke', 'ground'), pickBtn('Loft', 'K', 'X', 'lofted', 'lofted')),
         row(
-          btn('Front foot', 'Q', 'LB', 'sweep', `act${fw === 'front' ? ' on' : ''}`),
-          btn('Back foot', 'E', 'RB', 'reverseSweep', `act${fw === 'back' ? ' on' : ''}`),
-          btn('Advance', 'F', 'D-pad ▲', 'charge', `act${extra.charged ? ' on' : ''}`),
+          btn('Front foot', 'Space / Q', 'A / LB', 'sweep', 'act big'),
+          btn('Back foot', 'E', 'RB', 'reverseSweep', 'act big'),
+          btn('Advanced', 'F', 'D-pad ▲', 'charge', `act${extra.advancing ? ' on' : ''}`),
           btn('Leave', 'O', 'D-pad ▼', 'leave', `act${extra.left ? ' on' : ''}`),
         ),
-        row(btn('Push', 'L', 'B', 'defend', 'shot'), btn('Stroke', 'Space', 'A', 'primary', 'shot big'), btn('Loft', 'K', 'X', 'lofted', 'shot big')),
       );
     } else if (mode === 'bowling' && extra.fielding) {
       const holding = extra.fielding === 'holding';

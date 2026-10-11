@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MatchSnapshot, STROKES, Stroke, TeamDef } from '@crease/sim';
+import { MatchSnapshot, STRIKER_STUMPS_Z, STROKES, Stroke, TeamDef } from '@crease/sim';
 import { QUALITY, Settings } from '../settings';
 import { BallView } from './ballView';
 import { CameraDirector } from './cameras';
@@ -150,6 +150,7 @@ export class World {
     for (const r of [...this.batters, ...this.fielders]) this.scene.remove(r.root);
     if (this.bowler) this.scene.remove(this.bowler.root);
     this.lastPos.clear();
+    this.headings.clear();
     this.reactions.clear();
     // Characters are cached: building a skinned rig is not free and rosters change every over.
     const get = (team: TeamDef, id: string, role: 'batter' | 'bowler' | 'keeper' | 'fielder') => {
@@ -193,6 +194,22 @@ export class World {
     }
     const busy = anim === 'dive' || anim === 'throw' || anim === 'delivery' || anim === 'swing' || anim === 'runup' || (anim === 'run' && speed > 1.2);
     return busy ? { anim, t } : { anim: r.anim, t: time - r.from };
+  }
+
+  private headings = new Map<string, number>();
+
+  /** Turn an actor towards a new heading quickly rather than snapping round. */
+  private smoothHeading(key: string, target: number, dt: number): number {
+    const prev = this.headings.get(key);
+    if (prev === undefined || dt <= 0) {
+      this.headings.set(key, target);
+      return target;
+    }
+    let d = target - prev;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    const h = Math.abs(d) < 1e-3 ? target : prev + d * Math.min(1, dt * 14);
+    this.headings.set(key, h);
+    return h;
   }
 
   /** Ground speed of an actor from its position change (smoothed). */
@@ -286,15 +303,23 @@ export class World {
     }
     // Fielders (snapshot excludes the bowler; first is the keeper).
     this.fielderPlayers = s.fielders.map((f) => f.player);
+    // How set the fielders are: easy between balls, crouching as the bowler runs in, set (after a little hop)
+    // as the ball is bowled. The keeper squats as the bowler runs in and rises as the ball comes.
+    const runT = s.phase === 'runUp' ? s.runUp.t : 0;
+    const ready = s.phase === 'runUp' ? Math.max(0, Math.min(1, (runT - 0.35) / 0.5)) : s.phase === 'inPlay' ? 1 : 0;
+    const split = s.phase === 'inPlay' ? Math.min(1, s.phaseTime / 0.3) : 0;
+    const keeperSquat = s.phase === 'runUp' ? Math.max(0, Math.min(1, runT / 0.5)) : s.phase === 'inPlay' ? 1 : 0;
     s.fielders.forEach((f, i) => {
       const r = this.fielders[i];
       if (!r) return;
-      r.setTransform(f.pos.x, f.pos.z, f.heading);
+      r.setTransform(f.pos.x, f.pos.z, this.smoothHeading(`f${i}`, f.heading, dt));
       const v = this.speedOf(`f${i}`, f.pos.x, f.pos.z, dt);
       let anim = f.anim;
       if (f.keeper && anim === 'ready') anim = 'keeper';
       const a = this.animFor(`f${i}`, anim, f.t, v, time);
-      r.pose(a.anim, a.t, dt, { speed: Math.max(v, a.anim === 'run' ? 2 : 0), look: ballAt });
+      const holding = s.ball.held && Math.hypot(s.ball.pos.x - f.pos.x, s.ball.pos.z - f.pos.z) < 1;
+      const close = !f.keeper && Math.hypot(f.pos.x, f.pos.z - STRIKER_STUMPS_Z) < 14;
+      r.pose(a.anim, a.t, dt, { speed: Math.max(v, a.anim === 'run' ? 2 : 0), look: ballAt, ready: f.keeper ? keeperSquat : ready, split, close, holding });
     });
     // Umpires: bowler's end and square leg.
     // Stand wide of the bowler's approach so the bowling camera has a clear view.
@@ -313,8 +338,22 @@ export class World {
 
     // Ball.
     const bp = new THREE.Vector3(s.ball.pos.x, s.ball.pos.y, s.ball.pos.z);
-    // Before it is bowled the ball is in the bowler's hand, going round with the arm.
+    // Before it is bowled the ball is in the bowler's hand, going round with the arm; a fielder holding it has
+    // it in their throwing hand.
     if ((s.phase === 'runUp' || s.phase === 'preDelivery') && this.bowler) this.bowler.handBall(bp);
+    else if (s.ball.held) {
+      let best: Cricketer | null = null;
+      let bd = 1.2;
+      s.fielders.forEach((f, i) => {
+        const d = Math.hypot(s.ball.pos.x - f.pos.x, s.ball.pos.z - f.pos.z);
+        if (d < bd && this.fielders[i]) {
+          bd = d;
+          best = this.fielders[i]!;
+        }
+      });
+      if (this.bowler && Math.hypot(s.ball.pos.x - s.bowler.pos.x, s.ball.pos.z - s.bowler.pos.z) < bd) best = this.bowler;
+      if (best) (best as Cricketer).handBall(bp);
+    }
     const fast = Math.hypot(s.ball.vel.x, s.ball.vel.y, s.ball.vel.z) > 12 && !s.ball.held;
     this.ball.update(bp, s.ball.visible, fast, this.cams.camera.position.distanceTo(bp), time);
 

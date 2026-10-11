@@ -196,6 +196,14 @@ export interface PoseExtra {
   toRelease?: number;
   /** The bowler's style: a fast bowler's leaping action, a medium pacer's shorter bound, a spinner's hop and pivot. */
   bowlStyle?: string;
+  /** Fielders: how set they are (0 standing easy between balls .. 1 crouched as the ball is bowled; the keeper's squat). */
+  ready?: number;
+  /** A close catcher (slips, gully, short leg): lower, hands cupped. */
+  close?: boolean;
+  /** Holding the ball (ready to throw it). */
+  holding?: boolean;
+  /** 0..1 through the split-step hop as the ball is bowled (the keeper rising out of the squat). */
+  split?: number;
   /** Batter in the stance: how far the bat is lifted (0 = grounded, 1 = full backlift as the ball is bowled). */
   backlift?: number;
   /** Shot family ('ground', 'lofted', 'defend'): lofted shots finish higher and fuller. */
@@ -230,6 +238,9 @@ export class Cricketer {
   private heelLift = { l: 0, r: 0 };
   // Cross-fade state.
   private anim = '';
+  /** The countdown time a timed action (catch, dive, pick-up, throw) started from, and the ball's height for a catch. */
+  private animT0 = 0;
+  private catchH = 1.2;
   private fadeT = 1;
   private fadeDur = 0.2;
   private from: THREE.Quaternion[] = [];
@@ -598,8 +609,10 @@ export class Cricketer {
 
   pose(anim: string, t: number, dt: number, extra: PoseExtra = {}): void {
     if (anim !== this.anim) {
-      if (this.anim) this.beginFade(SNAP.has(anim) ? 0.08 : anim === 'dive' || anim === 'throw' ? 0.1 : 0.22);
+      if (this.anim) this.beginFade(SNAP.has(anim) ? 0.08 : anim === 'dive' || anim === 'throw' ? 0.1 : anim === 'catch' || anim === 'pickup' ? 0.12 : 0.22);
       this.anim = anim;
+      this.animT0 = t;
+      this.catchH = extra.look ? extra.look.y : 1.2;
     }
     this.reset();
     const speed = extra.speed ?? 0;
@@ -627,36 +640,31 @@ export class Cricketer {
         if (this.kit.bat) this.holdBatRunning();
         break;
       case 'ready':
-        this.idleReady();
+        if (extra.holding) {
+          this.windUp();
+          look = false;
+        } else this.idleReady(extra.ready ?? 1, !!extra.close, extra.split ?? 0);
         break;
-      case 'keeper': {
-        const bob = Math.sin(this.phase * 2.2) * 0.03;
-        this.apply({ lean: 0.3, lHip: [-1.3 - bob, 0, 0.35], rHip: [-1.3 - bob, 0, -0.35], lKnee: [1.9 + bob * 2, 0, 0], rKnee: [1.9 + bob * 2, 0, 0], lShoulder: [-1.0, 0, 0.1], rShoulder: [-1.0, 0, -0.1], lElbow: [-0.35, 0, 0], rElbow: [-0.35, 0, 0], head: [-0.25, 0, 0] });
+      case 'keeper':
+        this.keeperReady(extra.ready ?? 1, extra.split ?? 0);
         break;
-      }
-      case 'dive': {
-        const k = smooth(1 - t / 0.6);
-        this.body.rotation.z = 1.25 * k;
-        this.body.position.y = -0.55 * k;
-        this.apply({ lShoulder: [-3.0, 0, 0.3], rShoulder: [-3.0, 0, -0.3], lHip: [-0.3, 0, 0.2], rKnee: [0.6, 0, 0], lean: -0.1 }, k);
-        this.feetFree = true;
+      case 'dive':
+        this.dive(t);
         grounded = false;
         look = false;
         break;
-      }
       case 'catch':
-        this.apply({ lShoulder: [-1.6, 0, 0.15], rShoulder: [-1.6, 0, -0.15], lElbow: [-0.6, 0, 0], rElbow: [-0.6, 0, 0], lean: 0.1, lHip: [-0.15, 0, 0.05], rHip: [-0.15, 0, -0.05], lKnee: [0.3, 0, 0], rKnee: [0.3, 0, 0] });
+        this.catchBall(t);
+        look = false;
         break;
       case 'pickup':
-        this.apply({ lean: 0.9, lHip: [-0.6, 0, 0.05], lKnee: [0.9, 0, 0], rHip: [0.1, 0, -0.05], rKnee: [0.5, 0, 0], rShoulder: [-1.2, 0, 0], lShoulder: [-0.6, 0, 0], rElbow: [-0.2, 0, 0] });
+        this.pickup(t, speed);
         look = false;
         break;
-      case 'throw': {
-        const k = clamp01(1 - t / 0.4);
-        this.apply({ rShoulder: [-3.4 + 2.0 * k, 0, -0.2], rElbow: [-0.6 * k, 0, 0], lShoulder: [-1.2 * k, 0, 0.2], chest: [0.3 * (1 - k), -0.5 * k, 0], lHip: [-0.4, 0, 0], rHip: [0.3, 0, 0], lKnee: [0.2, 0, 0], rKnee: [0.25, 0, 0] });
+      case 'throw':
+        this.throwBall(t);
         look = false;
         break;
-      }
       case 'mark':
         this.apply({ lShoulder: [0, 0, 0.1], rShoulder: [-0.3, 0, -0.12], rElbow: [-1.2, 0, 0], lElbow: [-0.2, 0, 0], chest: [0, 0, Math.sin(this.phase * 1.6) * 0.02] });
         this.breathe();
@@ -858,25 +866,157 @@ export class Cricketer {
     this.breathe();
   }
 
-  /** Fielder waiting for the ball: crouched, weight forward on the balls of the feet, hands ready. */
-  private idleReady(): void {
-    const sway = Math.sin(this.phase * 1.3) * 0.04;
-    this.apply({
-      lean: 0.4,
-      lHip: [-0.55, -0.1, 0.12 + sway],
-      rHip: [-0.55, 0.1, -0.12 + sway],
-      lKnee: [0.75, 0, 0],
-      rKnee: [0.75, 0, 0],
-      lShoulder: [-0.7, 0, 0.16],
-      rShoulder: [-0.7, 0, -0.16],
-      lElbow: [-0.6, 0, 0],
-      rElbow: [-0.6, 0, 0],
-      lHand: [0.2, 0, 0],
-      rHand: [0.2, 0, 0],
-      head: [-0.35, 0, 0],
-    });
+  /**
+   * A fielder between balls and as the ball is bowled. `r` 0: standing easy, weight shifting, hands loose; 1: set,
+   * crouched on the balls of the feet, hands ready, eyes on the bat. Close catchers crouch lower with their hands
+   * cupped low in front of their knees. As the ball is bowled (`split` 0..1) they make a little hop onto both feet.
+   */
+  private idleReady(r: number, close: boolean, split: number): void {
+    r = clamp01(r);
+    const sway = Math.sin(this.phase * 1.3) * 0.04 * r;
+    const deep = close ? 1.35 : 1;
+    if (r < 1) {
+      this.idleLegs(1 - r);
+      this.apply({ lShoulder: [0.05, 0, 0.1], rShoulder: [0.05, 0, -0.1], lElbow: [-0.25, 0, 0], rElbow: [-0.25, 0, 0], head: [0.05, 0, 0] }, 1 - r);
+    }
+    this.apply(
+      {
+        lean: 0.4 * deep,
+        lHip: [-0.55 * deep, -0.1, 0.12 + sway],
+        rHip: [-0.55 * deep, 0.1, -0.12 + sway],
+        lKnee: [0.75 * deep, 0, 0],
+        rKnee: [0.75 * deep, 0, 0],
+        lShoulder: close ? [-0.5, -0.25, 0.04] : [-0.7, 0, 0.16],
+        rShoulder: close ? [-0.5, 0.25, -0.04] : [-0.7, 0, -0.16],
+        lElbow: [close ? -0.4 : -0.6, 0, 0],
+        rElbow: [close ? -0.4 : -0.6, 0, 0],
+        lHand: [close ? -0.3 : 0.2, 0, 0],
+        rHand: [close ? -0.3 : 0.2, 0, 0],
+        head: [-0.35 * deep, 0, 0],
+      },
+      r,
+    );
+    if (split > 0 && split < 1) this.lift = 0.07 * Math.sin(Math.PI * split);
     this.body.position.x = sway * 0.4;
     this.breathe();
+  }
+
+  /**
+   * The keeper: standing easy between balls, down in a deep squat with the gloves between the feet as the bowler
+   * runs in (`r`), then rising into a half crouch with the gloves up as the ball comes (`rise` 0..1).
+   */
+  private keeperReady(r: number, rise: number): void {
+    r = clamp01(r);
+    if (r < 0.05) {
+      this.idle();
+      return;
+    }
+    const bob = Math.sin(this.phase * 2.2) * 0.02 * (1 - rise);
+    const q = r * (1 - 0.5 * smooth(rise));
+    this.apply({
+      lean: 0.25 + 0.2 * q,
+      lHip: [-1.75 * q - bob, 0, 0.38 * r], rHip: [-1.75 * q - bob, 0, -0.38 * r],
+      lKnee: [2.35 * q + bob * 2, 0, 0], rKnee: [2.35 * q + bob * 2, 0, 0],
+      lShoulder: [-0.45 * r - 0.6 * smooth(rise), 0, 0.12], rShoulder: [-0.45 * r - 0.6 * smooth(rise), 0, -0.12],
+      lElbow: [-0.3 - 0.3 * smooth(rise), 0, 0], rElbow: [-0.3 - 0.3 * smooth(rise), 0, 0],
+      lHand: [-0.3 * smooth(rise), 0, 0], rHand: [-0.3 * smooth(rise), 0, 0],
+      head: [-0.3, 0, 0],
+    });
+  }
+
+  /** Put a hand at a point (root-local), palm facing forward, the elbow towards `pole`. */
+  private reach(side: Side, at: THREE.Vector3, pole?: THREE.Vector3): void {
+    const out = side === 'l' ? 1 : -1;
+    this.grips.push({ side, at, dir: new THREE.Vector3(1, 0, 0), pole: pole ?? new THREE.Vector3(out * 0.8, -0.5, -0.2) });
+  }
+
+  /**
+   * Taking a catch: the hands go to the ball (fingers up for a high one at the face, cupped at the chest, or
+   * reverse-cupped low with the knees bent), give with it back into the body, then hold it up.
+   */
+  private catchBall(t: number): void {
+    const p = clamp01(1 - t / Math.max(0.3, this.animT0));
+    const h = this.catchH;
+    const high = h > 1.65;
+    const low = h < 0.95;
+    const at = high ? new THREE.Vector3(0, 1.85, 0.3) : low ? new THREE.Vector3(0, 0.5, 0.5) : new THREE.Vector3(0, 1.15, 0.4);
+    const out = smooth(p / 0.22);
+    const give = smooth((p - 0.25) / 0.35);
+    const hold = new THREE.Vector3(0, 1.08, 0.18);
+    const c = new THREE.Vector3(0, 1.0, 0.22).lerp(at, out).lerp(hold, give);
+    const bend = low ? 1 - 0.6 * give : 0.25 * (1 - give);
+    this.apply({ lean: (low ? 0.55 : high ? -0.1 : 0.15) * (1 - 0.5 * give), lHip: [-0.9 * bend, 0, 0.1], rHip: [-0.9 * bend, 0, -0.1], lKnee: [1.25 * bend, 0, 0], rKnee: [1.25 * bend, 0, 0], head: [high ? -0.35 : low ? 0.3 : 0.05, 0, 0] });
+    if (high && p < 0.3) this.heelLift.l = this.heelLift.r = 0.4;
+    this.reach('l', c.clone().add(new THREE.Vector3(0.055, 0, 0)), high ? new THREE.Vector3(0.8, -0.6, 0) : undefined);
+    this.reach('r', c.clone().add(new THREE.Vector3(-0.055, 0, 0)), high ? new THREE.Vector3(-0.8, -0.6, 0) : undefined);
+  }
+
+  /**
+   * Picking the ball up: on the run, bending into a one-handed scoop beside the leading foot; standing, getting
+   * down behind it and gathering with both hands. Then up with it to the chest, ready to throw.
+   */
+  private pickup(t: number, speed: number): void {
+    const p = clamp01(1 - t / Math.max(0.2, this.animT0));
+    const down = smooth(p / 0.45) * (1 - smooth((p - 0.55) / 0.45));
+    const up = smooth((p - 0.55) / 0.45);
+    if (speed > 2.5) {
+      this.apply({ lean: 0.95 * down + 0.2, rHip: [-0.95 * down - 0.2, 0, -0.08], rKnee: [1.15 * down + 0.3, 0, 0], lHip: [0.3 * down, 0, 0.08], lKnee: [0.45 * down + 0.2, 0, 0], lShoulder: [-0.5 * down, 0, 0.35], head: [-0.25 * down, 0, 0] });
+      const ground = new THREE.Vector3(-0.2, 0.06, 0.55);
+      this.reach('r', new THREE.Vector3(-0.22, 0.85, 0.2).lerp(ground, down).lerp(new THREE.Vector3(-0.16, 1.15, 0.2), up));
+    } else {
+      this.apply({ lean: 0.7 * down + 0.1, lHip: [-1.0 * down, 0, 0.15], rHip: [-1.0 * down, 0, -0.15], lKnee: [1.5 * down, 0, 0], rKnee: [1.5 * down, 0, 0], head: [-0.3 * down, 0, 0] });
+      const c = new THREE.Vector3(0, 0.9, 0.25).lerp(new THREE.Vector3(0, 0.07, 0.45), down).lerp(new THREE.Vector3(0, 1.1, 0.2), up);
+      this.reach('l', c.clone().add(new THREE.Vector3(0.05, 0, 0)));
+      this.reach('r', c.clone().add(new THREE.Vector3(-0.05, 0, 0)));
+    }
+  }
+
+  /** Ball in hand, about to throw: side-on, throwing arm cocked back, front arm pointing at the target, weight back. */
+  private windUp(): void {
+    const pump = 0.12 * Math.sin(this.phase * 6);
+    this.apply({ chest: [0, 0.85, 0], hips: [0, 0.55, 0], lHip: [-0.35, 0, 0.1], lKnee: [0.3, 0, 0], rHip: [0.1, 0, -0.12], rKnee: [0.55, 0, 0], lean: -0.05, head: [0, -0.75, 0] });
+    this.armAims.push({ side: 'r', phi: 1.95 + pump, tilt: 0, across: 0, reach: 0.82, w: 1 });
+    this.armAims.push({ side: 'l', phi: 4.45, tilt: 0, across: 0, reach: 0.95, w: 1 });
+  }
+
+  /** The throw (the ball has just gone): the arm comes over and through across the body, trunk and back leg following. */
+  private throwBall(t: number): void {
+    const p = clamp01(1 - t / Math.max(0.2, this.animT0));
+    const f = smooth(p / 0.65);
+    this.apply({
+      chest: [0, 0.25 - 0.95 * f, 0], hips: [0, 0.15 - 0.65 * f, 0],
+      lean: 0.2 + 0.5 * f,
+      lHip: [-0.6, 0, 0.06], lKnee: [0.3 + 0.2 * f, 0, 0],
+      rHip: [0.35 - 1.0 * smooth((p - 0.2) / 0.6), 0, -0.06], rKnee: [0.45 + 0.45 * f, 0, 0],
+      head: [0.1, 0.35 * f, 0],
+    });
+    this.armAims.push({ side: 'r', phi: 3.5 + 2.4 * f, tilt: 0.1, across: 0.38 * f, reach: 0.97, w: 1 });
+    this.armAims.push({ side: 'l', phi: 5.4 + 0.9 * f, tilt: 0, across: 0, reach: 0.7, w: 1 });
+  }
+
+  /**
+   * A full-length dive towards the ball: a crouch, the launch with the body going flat and the arms stretched out
+   * beyond the head, landing on the chest and sliding, then pushing up and getting back to the feet.
+   */
+  private dive(t: number): void {
+    const p = clamp01(1 - t / Math.max(0.3, this.animT0));
+    const air = smooth((p - 0.05) / 0.28);
+    const rec = smooth((p - 0.62) / 0.38);
+    const flat = air * (1 - rec);
+    const arc = Math.sin(Math.PI * clamp01((p - 0.05) / 0.4)) * 0.32;
+    this.body.rotation.x = 1.42 * flat;
+    this.body.position.y = (arc + 0.13 * air) * (1 - rec);
+    this.body.position.z = 0.45 * smooth(p / 0.6) * (1 - rec);
+    const crouch = (1 - air) * smooth(p / 0.08) + rec * (1 - smooth((p - 0.85) / 0.15));
+    this.apply({
+      lShoulder: [-3.0 * flat - 0.6 * crouch, 0, 0.25 * flat], rShoulder: [-3.0 * flat - 0.6 * crouch, 0, -0.25 * flat],
+      lElbow: [-0.15, 0, 0], rElbow: [-0.15, 0, 0],
+      lHip: [0.12 * flat - 1.1 * crouch, 0, 0.1], rHip: [0.25 * flat - 1.1 * crouch, 0, -0.1],
+      lKnee: [0.15 * flat + 1.5 * crouch, 0, 0], rKnee: [0.5 * flat + 1.5 * crouch, 0, 0],
+      lean: 0.4 * crouch - 0.15 * flat,
+      head: [-0.6 * flat, 0, 0],
+    });
+    this.feetFree = flat > 0.05;
   }
 
   /**

@@ -7,7 +7,7 @@ import { Cricketer, UMPIRE_KIT, kitFor } from './players';
 import { Stadium, animateStumps, buildStadium } from './stadium';
 import { TrackingView } from './tracking';
 
-export type UmpireSignal = 'out' | 'four' | 'six' | 'wide' | 'noBall' | 'bye' | 'notOut';
+export type UmpireSignal = 'out' | 'four' | 'six' | 'wide' | 'noBall' | 'bye' | 'legBye' | 'notOut' | 'revoke';
 
 /**
  * Owns the three.js renderer and scene, and turns simulation snapshots into
@@ -34,7 +34,8 @@ export class World {
   readonly tracking = new TrackingView();
   private controlRing: THREE.Mesh;
   private landingMark: THREE.Mesh;
-  private signal: { kind: UmpireSignal; at: number } | null = null;
+  /** Signals queued for the bowler's-end umpire (the latest one due is shown). */
+  private signals: { kind: UmpireSignal; at: number }[] = [];
   /** Presentation-only reactions (celebrations, dejection) keyed by actor. */
   private reactions = new Map<string, { anim: string; from: number; until: number }>();
   private lastPos = new Map<string, { x: number; z: number; v: number }>();
@@ -225,13 +226,13 @@ export class World {
     return v;
   }
 
-  /** The bowler's-end umpire signals a decision. */
+  /** The bowler's-end umpire signals a decision (at `time`, which may be a moment from now). */
   umpireSignal(kind: UmpireSignal, time: number): void {
-    this.signal = { kind, at: time };
+    this.signals = this.signals.filter((g) => g.at < time).concat({ kind, at: time });
   }
 
   clearSignal(): void {
-    this.signal = null;
+    this.signals = [];
   }
 
   /** Stumps state as of `time` (used when a replay ends). */
@@ -325,10 +326,15 @@ export class World {
     // Stand wide of the bowler's approach so the bowling camera has a clear view.
     const armSide = s.bowler.pos.x >= 0 ? 1 : -1;
     this.umpires[0]!.setTransform(-1.5 * armSide, -12.2, 0);
-    const sig = this.signal && time - this.signal.at < 2.6 ? this.signal : null;
-    this.umpires[0]!.pose(sig ? `signal-${sig.kind}` : 'umpire', sig ? time - sig.at : 0, dt, { look: ballAt });
+    // The latest signal that is due (each lasts its own length), otherwise the umpire's stance through the ball.
+    let sig: { kind: UmpireSignal; at: number } | null = null;
+    for (const g of this.signals) if (g.at <= time && time - g.at < (g.kind === 'six' ? 2.8 : 2.6)) sig = g;
+    this.signals = this.signals.filter((g) => time - g.at < 3);
+    const counter = s.phase === 'dead' ? Math.max(0, Math.min(1, (s.phaseTime - 0.9) / 0.7)) : 0;
+    const umpSplit = s.phase === 'inPlay' ? Math.min(1, s.phaseTime / 0.6) : 0;
+    this.umpires[0]!.pose(sig ? `signal-${sig.kind}` : 'umpire', sig ? time - sig.at : 0, dt, { look: ballAt, ready: s.phase === 'runUp' ? Math.max(0, Math.min(1, (runT - 0.5) / 0.4)) : s.phase === 'inPlay' ? 1 - Math.min(1, Math.max(0, (s.phaseTime - 0.8) / 0.8)) : 0, split: umpSplit, counter });
     this.umpires[1]!.setTransform(-24 * offS, 10.5, offS > 0 ? Math.PI / 2 : -Math.PI / 2);
-    this.umpires[1]!.pose('umpire', 0, dt, { look: ballAt });
+    this.umpires[1]!.pose('umpireLeg', 0, dt, { look: ballAt, ready });
 
     // Stumps.
     for (const end of ['S', 'B'] as const) {

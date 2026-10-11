@@ -202,8 +202,10 @@ export interface PoseExtra {
   close?: boolean;
   /** Holding the ball (ready to throw it). */
   holding?: boolean;
-  /** 0..1 through the split-step hop as the ball is bowled (the keeper rising out of the squat). */
+  /** 0..1 through the split-step hop as the ball is bowled (the keeper rising out of the squat; the umpire watching the front foot). */
   split?: number;
+  /** Umpire: 0..1 through moving the ball counter on after a ball. */
+  counter?: number;
   /** Batter in the stance: how far the bat is lifted (0 = grounded, 1 = full backlift as the ball is bowled). */
   backlift?: number;
   /** Shot family ('ground', 'lofted', 'defend'): lofted shots finish higher and fuller. */
@@ -761,51 +763,20 @@ export class Cricketer {
         look = false;
         break;
       }
-      case 'signal-out':
-        this.apply({ rShoulder: [-3.05 * smooth(t / 0.4), 0, -0.05], lShoulder: [0, 0, 0.1], lElbow: [-0.2, 0, 0] });
-        this.idleLegs(0.2);
-        look = false;
-        break;
-      case 'signal-six':
-        this.apply({ rShoulder: [-3.0 * smooth(t / 0.4), 0, -0.15], lShoulder: [-3.0 * smooth(t / 0.4), 0, 0.15] });
-        this.idleLegs(0.2);
-        look = false;
-        break;
-      case 'signal-four': {
-        const k = smooth(t / 0.3);
-        this.apply({ rShoulder: [-1.5 * k, 0, -0.2 + 0.9 * Math.sin(t * 9) * k], lShoulder: [0, 0, 0.1], lElbow: [-0.2, 0, 0] });
-        this.idleLegs(0.2);
-        look = false;
+      case 'umpire':
+      case 'umpireLeg': {
+        const r = extra.ready ?? 0;
+        const sp = extra.split ?? 0;
+        this.umpireStance(anim === 'umpireLeg', r, sp, extra.counter ?? 0);
+        // At the moment of delivery the bowler's-end umpire looks down at the front foot, then up for the ball.
+        if (anim === 'umpire' && sp > 0 && sp < 0.35) look = false;
         break;
       }
-      case 'signal-wide':
-        this.apply({ rShoulder: [0, 0, -1.5 * smooth(t / 0.4)], lShoulder: [0, 0, 1.5 * smooth(t / 0.4)] });
-        this.idleLegs(0.2);
-        look = false;
-        break;
-      case 'signal-noBall':
-        this.apply({ rShoulder: [0, 0, -1.5 * smooth(t / 0.4)], lShoulder: [0, 0, 0.1], lElbow: [-0.2, 0, 0] });
-        this.idleLegs(0.2);
-        look = false;
-        break;
-      case 'signal-bye':
-        this.apply({ rShoulder: [-2.9 * smooth(t / 0.4), 0, -0.1], lShoulder: [0, 0, 0.1], lElbow: [-0.2, 0, 0] });
-        this.idleLegs(0.2);
-        look = false;
-        break;
-      case 'signal-notOut':
-        this.apply({ lShoulder: [0.05, 0, 0.1], rShoulder: [0.05, 0, -0.1], lElbow: [-0.2, 0, 0], rElbow: [-0.2, 0, 0], head: [0, 0.5 * Math.sin(t * 8) * (t < 0.8 ? 1 : 0), 0] });
-        this.idleLegs(0.3);
-        look = false;
-        break;
-      case 'umpire':
-        // Hands loosely together in front, knees soft, weight shifting now and then.
-        this.apply({ lShoulder: [-0.32, -0.4, 0.06], rShoulder: [-0.32, 0.4, -0.06], lElbow: [-1.25, 0, 0], rElbow: [-1.25, 0, 0], lHand: [0, 0, -0.3], rHand: [0, 0, 0.3], lean: 0.1 });
-        this.idleLegs(0.6);
-        this.breathe();
-        break;
       default:
-        this.idle();
+        if (anim.startsWith('signal-')) {
+          this.umpireSignal(anim.slice(7), t);
+          look = false;
+        } else this.idle();
     }
     if (!this.feetFree) this.plantFeet(1);
     for (const sd of SIDES) if (this.heelLift[sd]) this.j[`${sd}Foot`].rotateX(this.heelLift[sd]);
@@ -821,6 +792,108 @@ export class Cricketer {
       this.j.rHand.rotateZ(this.wrist[2]);
     }
     this.blend(dt);
+  }
+
+  /**
+   * An umpire through the ball. Between balls: standing easy, hands loosely together in front (the square-leg
+   * umpire with them behind the back), now and then moving a counter from one hand to the other after a ball
+   * (`counter` 0..1). As the bowler runs in (`r`) the bowler's-end umpire bends forward with the hands on the
+   * thighs; at the delivery (`split`) the head goes down to the crease for the front foot, then up after the ball.
+   */
+  private umpireStance(leg: boolean, r: number, split: number, counter: number): void {
+    r = clamp01(r);
+    if (leg) {
+      this.apply({ lShoulder: [0.35, 0.3, 0.12], rShoulder: [0.35, -0.3, -0.12], lElbow: [-1.3, 0, 0], rElbow: [-1.3, 0, 0], lean: 0.05 + 0.15 * r, lHip: [-0.2 * r, 0, 0.03], rHip: [-0.2 * r, 0, -0.03], lKnee: [0.3 * r, 0, 0], rKnee: [0.3 * r, 0, 0] });
+      this.idleLegs(0.5 * (1 - r));
+      this.breathe();
+      return;
+    }
+    const easy = 1 - r;
+    this.apply({ lShoulder: [-0.32, -0.4, 0.06], rShoulder: [-0.32, 0.4, -0.06], lElbow: [-1.25, 0, 0], rElbow: [-1.25, 0, 0], lHand: [0, 0, -0.3], rHand: [0, 0, 0.3], lean: 0.1 }, easy);
+    // Bent forward over the stumps, hands on the thighs, knees soft.
+    this.apply({ lean: 0.55, lHip: [-0.45, 0, 0.1], rHip: [-0.45, 0, -0.1], lKnee: [0.55, 0, 0], rKnee: [0.55, 0, 0], lShoulder: [-0.55, 0, 0.12], rShoulder: [-0.55, 0, -0.12], lElbow: [-0.25, 0, 0], rElbow: [-0.25, 0, 0], head: [-0.2, 0, 0] }, r);
+    if (split > 0 && split < 1) this.apply({ head: [0.55 * (1 - smooth((split - 0.15) / 0.25)), 0, 0] });
+    if (counter > 0 && counter < 1) {
+      // Clicking the counter over: the right hand to the left at the waist and back.
+      const c = Math.sin(Math.PI * counter);
+      this.apply({ rShoulder: [-0.25 * c, 0.5 * c, 0], rElbow: [-0.4 * c, 0, 0], head: [0.35 * c, 0, 0] });
+    }
+    this.idleLegs(0.6 * easy);
+    this.breathe();
+  }
+
+  /**
+   * The umpire's signals, each with its own rhythm: OUT, the arm rising slowly and deliberately to point the
+   * finger up and holding it; SIX, both arms straight up, lowered and raised again; FOUR, the arm sweeping across
+   * the body three times at waist height; WIDE, both arms out level; NO BALL, one arm out and a call; BYE, an
+   * open hand held up high; LEG BYE, a raised knee tapped; NOT OUT, a shake of the head with the hands staying
+   * together; a decision changed on review (REVOKE), the arms crossed over the chest and opened out.
+   */
+  private umpireSignal(kind: string, t: number): void {
+    const up = (a: number, b: number) => smooth((t - a) / (b - a));
+    const down = (a: number, b: number) => 1 - smooth((t - a) / (b - a));
+    // Feet set a little wider for the bigger signals.
+    this.apply({ lHip: [0, 0, 0.06], rHip: [0, 0, -0.06], lean: -0.03 });
+    switch (kind) {
+      case 'out': {
+        const k = up(0.1, 0.75) * down(2.0, 2.5);
+        this.apply({ rShoulder: [-3.0 * k, 0, -0.08 * k], rElbow: [-0.15 * k, 0, 0], rHand: [-0.25 * k, 0, 0], lShoulder: [-0.3, -0.4, 0.06], lElbow: [-1.2, 0, 0], head: [-0.12 * k, 0, 0], chest: [-0.06 * k, 0, 0] });
+        break;
+      }
+      case 'six': {
+        const k = up(0.05, 0.4) * down(2.3, 2.7);
+        const dip = 0.9 * Math.exp(-(((t - 1.05) / 0.16) ** 2));
+        const a = -3.05 * k + dip * k;
+        this.apply({ rShoulder: [a, 0, -0.12], lShoulder: [a, 0, 0.12], rElbow: [-0.05, 0, 0], lElbow: [-0.05, 0, 0], head: [-0.15 * k, 0, 0], chest: [-0.08 * k, 0, 0] });
+        break;
+      }
+      case 'four': {
+        const k = up(0.05, 0.3) * down(1.9, 2.3);
+        const sweep = Math.sin(Math.max(0, t - 0.25) * 9.5) * k * (t < 1.9 ? 1 : 0);
+        this.apply({ lShoulder: [-0.3, -0.4, 0.06], lElbow: [-1.2, 0, 0], chest: [0, 0.18 * sweep, 0] });
+        // The hand goes from the right hip across in front of the body to the left and back, palm down.
+        const at = new THREE.Vector3(-0.42 + 0.34 * (1 + sweep), 1.12 + 0.04 * k, 0.48 - 0.06 * Math.abs(sweep));
+        if (k > 0.02) this.reach('r', new THREE.Vector3(-0.2, 0.85, 0.05).lerp(at, k), new THREE.Vector3(-0.6, -0.8, -0.2));
+        break;
+      }
+      case 'wide': {
+        const k = up(0.1, 0.5) * down(2.0, 2.4);
+        this.apply({ rShoulder: [-0.05, 0, -1.5 * k], lShoulder: [-0.05, 0, 1.5 * k], rHand: [0, -1.2 * k, 0], lHand: [0, 1.2 * k, 0], chest: [-0.05 * k, 0, 0] });
+        break;
+      }
+      case 'noBall': {
+        const k = up(0.05, 0.35) * down(2.0, 2.4);
+        this.apply({ rShoulder: [-0.05, 0, -1.55 * k], rHand: [0, -1.2 * k, 0], lShoulder: [-0.3, -0.4, 0.06], lElbow: [-1.2, 0, 0], head: [0, -0.35 * k, 0] });
+        break;
+      }
+      case 'bye': {
+        const k = up(0.1, 0.5) * down(1.9, 2.3);
+        this.apply({ rShoulder: [-2.95 * k, 0, -0.1], rElbow: [-0.05, 0, 0], rHand: [0.3 * k, 0, 0], lShoulder: [-0.3, -0.4, 0.06], lElbow: [-1.2, 0, 0] });
+        break;
+      }
+      case 'legBye': {
+        const k = up(0.1, 0.45) * down(1.8, 2.2);
+        const tap = 0.12 * Math.max(0, Math.sin((t - 0.45) * 12)) * (t > 0.45 && t < 1.5 ? 1 : 0);
+        this.apply({ lHip: [-1.1 * k, 0, 0.04], lKnee: [1.2 * k, 0, 0], rKnee: [0.15 * k, 0, 0], lShoulder: [-0.75 * k - tap, 0, 0.15], lElbow: [-0.35 * k, 0, 0], rShoulder: [0, 0, -0.35 * k], lean: 0.12 * k });
+        if (k > 0.2) this.feetFree = false;
+        break;
+      }
+      case 'notOut': {
+        const shake = Math.sin(t * 9) * (1 - smooth((t - 0.5) / 0.5)) * up(0, 0.1);
+        this.apply({ lShoulder: [-0.32, -0.4, 0.06], rShoulder: [-0.32, 0.4, -0.06], lElbow: [-1.25, 0, 0], rElbow: [-1.25, 0, 0], head: [0.05, 0.45 * shake, 0] });
+        this.idleLegs(0.3);
+        break;
+      }
+      case 'revoke': {
+        // Arms crossed over the chest, then opened out (the earlier decision cancelled).
+        const cross = up(0.05, 0.35) * down(0.9, 1.2);
+        const open = up(0.9, 1.25) * down(1.6, 2.0);
+        this.apply({ rShoulder: [-1.3 * cross, 0.9 * cross, -1.0 * open], lShoulder: [-1.3 * cross, -0.9 * cross, 1.0 * open], rElbow: [-1.3 * cross, 0, 0], lElbow: [-1.3 * cross, 0, 0] });
+        break;
+      }
+      default:
+        this.idle();
+    }
   }
 
   private breathe(): void {

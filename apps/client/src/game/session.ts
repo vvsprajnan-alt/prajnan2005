@@ -639,7 +639,9 @@ export class GameSession {
       case 'reviewResult': {
         const sub = e.overturned ? 'Decision overturned' : e.umpiresCall ? "Umpire's call - review retained" : `Decision stands - review lost (${e.reviewsLeft} left)`;
         hud.showTrackingResult(e.out ? 'OUT' : 'NOT OUT', sub, now);
-        world.umpireSignal(e.out ? 'out' : 'notOut', now);
+        // An overturned decision is cancelled first (arms crossed and opened), then the new one given.
+        if (e.overturned) world.umpireSignal('revoke', now);
+        world.umpireSignal(e.out ? 'out' : 'notOut', e.overturned ? now + 1.6 : now);
         this.trackUntil = now + 2.8;
         this.world.cheer(e.overturned ? 0.8 : 0.3);
         this.sfx.crowd(e.out ? 'roar' : 'groan', e.out ? 0.8 : 0.5);
@@ -725,7 +727,7 @@ export class GameSession {
         if (!/^(FOUR|SIX|OUT)/.test(e.summary)) hud.showToast(e.summary, now);
         this.onBallComplete();
         const last = m.inn.log[m.inn.log.length - 1]?.outcome;
-        if (last && (last.extra === 'bye' || last.extra === 'legBye')) world.umpireSignal('bye', now + 0.3);
+        if (last && (last.extra === 'bye' || last.extra === 'legBye')) world.umpireSignal(last.extra, now + 0.3);
         this.followUntil = Math.min(this.followUntil, now + 1.4);
         break;
       }

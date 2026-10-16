@@ -838,13 +838,17 @@ export class GameSession {
     const bowlingNow = mode === 'bowling' && this.can('bowler') && !this.fieldingActive(m);
     if (bowlingNow) this.syncBowlStage(m);
     const placing = bowlingNow && m.phase === 'preDelivery';
-    const showMarker = placing || (guide && (m.phase === 'preDelivery' || (m.phase === 'runUp' && assist > 0)));
+    // The bowler sees the ball land on the target: it stays up until just after the ball pitches.
+    const pitching = bowlingNow && m.phase === 'inPlay' && !m.batContact && (!m.firstBounce || m.ball.pos.z < m.firstBounce.z + 2.5);
+    const showMarker = placing || pitching || (guide && (m.phase === 'preDelivery' || (m.phase === 'runUp' && assist > 0)));
     this.world.stadium.marker.visible = showMarker;
     this.world.stadium.setMarker(placing && this.bowlStage === 'aim' ? 'aim' : 'set', now);
-    this.world.stadium.lengthGuide.visible = showMarker && assist >= 0.5;
+    this.world.stadium.lengthGuide.visible = showMarker && !pitching && assist >= 0.5;
     if (showMarker) {
       const hand = m.strikerDef.batHand;
-      this.world.stadium.marker.position.set(lineToX(this.intent.line, hand), 0.012, lengthToZ(this.intent.length));
+      // Once the bowler is running in, show the target the match will actually bowl at.
+      const target = m.phase === 'preDelivery' ? this.intent : m.intent;
+      this.world.stadium.marker.position.set(lineToX(target.line, hand), 0.012, lengthToZ(target.length));
       const lg = this.world.stadium.lengthGuide;
       lg.scale.z = 1;
     }

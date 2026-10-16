@@ -2,8 +2,11 @@ import {
   BallTracking,
   CricketMatch,
   InningsState,
+  MatchSnapshot,
   TimingWindows,
   VARIATION_LABEL,
+  bowlTypeLabel,
+  bowlerProfile,
   Variation,
   oversString,
   requiredRate,
@@ -13,18 +16,18 @@ import {
 import { QUICK_CHAT } from '@crease/net';
 import { Action, Input } from '../input/input';
 import { esc, h } from './dom';
+import { MiniMap } from './miniMap';
 
 export type HudMode = 'batting' | 'bowling' | 'watching';
 
 /**
- * Broadcast-style HUD: scorebug, batter/bowler lower-third, this-over tracker,
+ * Broadcast-style HUD: the score bar along the bottom (batters, score, bowler, this over),
  * event banners, timing feedback, running calls, bowling meter and on-screen
  * (touch-friendly) controls. Pure presentation over match state.
  */
 export class Hud {
   readonly el: HTMLElement;
-  private scorebug = h('div', { class: 'scorebug' });
-  private lower = h('div', { class: 'lowerthird' });
+  private lower = h('div', { class: 'lowerthird scorebar' });
   private banner = h('div', { class: 'banner' });
   private feedback = h('div', { class: 'feedback' });
   private speed = h('div', { class: 'speed' });
@@ -56,6 +59,13 @@ export class Hud {
   private milestone = h('div', { class: 'milestone' });
   private milestoneUntil = 0;
   private dpad: HTMLElement;
+  private now = 0;
+  /** Where the fielders are; clicking it (when the field can be changed) opens the field editor. */
+  private miniMap = new MiniMap((editable) => {
+    if (editable) this.input.trigger('field');
+    else this.showToast('You can change the field when your team is bowling, between balls', this.now);
+  });
+  private dpadLabels: [HTMLElement, HTMLElement] = [h('div', { class: 'lbl', style: 'top:6px;left:50%;transform:translateX(-50%)' }, 'STRAIGHT'), h('div', { class: 'lbl', style: 'bottom:6px;left:50%;transform:translateX(-50%)' }, 'BEHIND')];
   private bannerUntil = 0;
   private feedbackUntil = 0;
   private toastUntil = 0;
@@ -67,7 +77,7 @@ export class Hud {
     this.dpad = this.makeDpad();
     const pause = h('button', { class: 'ctrl pause-btn', onclick: onPause, 'aria-label': 'Pause' }, 'II');
     const replay = h('button', { class: 'ctrl replay-btn', onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger('replay'); }, 'aria-label': 'Instant replay', title: 'Instant replay (I)' }, '⟲');
-    this.el = h('div', {}, this.scorebug, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.dpad, pause, replay);
+    this.el = h('div', {}, this.lower, this.banner, this.feedback, this.speed, this.call, this.controls, this.meter, this.variations, this.hint, this.toast, this.timing, this.picker, this.reviewBox, this.trackBox, this.roleBox, this.chatLog, this.chatMenu, this.partnerCall, this.caption, this.infoCard, this.milestone, this.replayBadge, this.intro, this.miniMap.el, this.dpad, pause, replay);
     this.chatMenu.style.display = 'none';
     this.roleBox.style.display = 'none';
     this.reviewBox.style.display = 'none';
@@ -83,9 +93,7 @@ export class Hud {
 
   private makeDpad(): HTMLElement {
     const knob = h('div', { class: 'knob' });
-    const pad = h('div', { class: 'dpad', 'aria-label': 'Direction pad' }, knob,
-      h('div', { class: 'lbl', style: 'top:6px;left:50%;transform:translateX(-50%)' }, 'STRAIGHT'),
-      h('div', { class: 'lbl', style: 'bottom:6px;left:50%;transform:translateX(-50%)' }, 'BEHIND'));
+    const pad = h('div', { class: 'dpad', 'aria-label': 'Direction pad' }, knob, ...this.dpadLabels);
     const set = (e: PointerEvent) => {
       const r = pad.getBoundingClientRect();
       let x = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
@@ -209,26 +217,37 @@ export class Hud {
   }
 
   /** Choose the bowler for the over. */
+  /**
+   * Choose the bowler for the over: everyone who can bowl, best first, with accuracy and movement (as bars), the
+   * bowling type, top speed, today's figures and how many overs they have left.
+   */
   showPicker(m: CricketMatch, onPick: (player: number) => void, onClose: () => void): void {
     const inn = m.inn;
     const team = m.bowlingTeam;
     const eligible = new Set(m.eligibleBowlers());
     const rules = m.cfg.rules;
     const rows = team.players
-      .map((p, i) => ({ p, i, card: inn.bowlers.find((b) => b.player === i) }))
+      .map((p, i) => ({ p, i, card: inn.bowlers.find((b) => b.player === i), pro: bowlerProfile(p) }))
       .filter(({ p, i }) => p.attrs.bowling >= 55 || inn.bowlers.some((b) => b.player === i))
       .sort((a, b) => b.p.attrs.bowling - a.p.attrs.bowling);
+    const bar = (v: number, cls: string) => h('span', { class: `bp-bar ${cls}`, title: String(v) }, h('i', { style: `width:${Math.max(4, Math.min(100, v))}%` }), h('em', {}, String(v)));
+    this.picker.className = 'picker bowler-picker';
     this.picker.innerHTML = '';
-    this.picker.append(h('h3', {}, `Choose your bowler · over ${Math.floor(inn.legalBalls / rules.ballsPerOver) + 1}`));
-    for (const { p, i, card } of rows) {
-      const left = rules.maxOversPerBowler > 0 ? rules.maxOversPerBowler - Math.floor((card?.balls ?? 0) / rules.ballsPerOver) : '∞';
+    this.picker.append(
+      h('h3', {}, `Select bowler · over ${Math.floor(inn.legalBalls / rules.ballsPerOver) + 1}`),
+      h('div', { class: 'bp-head' }, h('span', {}, 'Bowler'), h('span', {}, 'Accuracy'), h('span', {}, 'Movement'), h('span', { class: 'bp-speed' }, 'Speed'), h('span', {}, 'Today')),
+    );
+    for (const { p, i, card, pro } of rows) {
+      const left = rules.maxOversPerBowler > 0 ? rules.maxOversPerBowler - Math.floor((card?.balls ?? 0) / rules.ballsPerOver) : null;
       const fig = card ? `${oversString(card.balls)}-${card.maidens}-${card.runs}-${card.wickets}` : 'Yet to bowl';
-      const why = i === inn.lastOverBowler ? 'bowled last over' : !eligible.has(i) ? 'quota used' : `${left} ov left`;
+      const why = i === inn.lastOverBowler ? 'Bowled last over' : !eligible.has(i) ? 'Quota used' : left === null ? '' : `${left} ov left`;
       this.picker.append(
-        h('button', { class: `opt${i === inn.currentBowler ? ' on' : ''}`, disabled: !eligible.has(i), onclick: () => onPick(i) },
-          h('span', {}, h('b', {}, p.name), ' ', h('span', { class: 'muted' }, `${p.bowlStyle} · ${p.bowlArm}-arm · BOWL ${p.attrs.bowling}`)),
-          h('span', { class: 'muted' }, fig),
-          h('span', { class: 'pill' }, why)),
+        h('button', { class: `opt bp-row${i === inn.currentBowler ? ' on' : ''}`, disabled: !eligible.has(i), onclick: () => onPick(i) },
+          h('span', { class: 'bp-name' }, h('b', {}, p.name), h('small', {}, bowlTypeLabel(p))),
+          bar(pro.accuracy, 'acc'),
+          bar(pro.movement, 'mov'),
+          h('span', { class: 'bp-speed' }, `${pro.topSpeedKmh}`, h('small', {}, ' km/h')),
+          h('span', { class: 'bp-today' }, h('span', {}, fig), why ? h('small', {}, why) : '')),
       );
     }
     this.picker.append(h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-end' }, h('button', { class: 'ctrl', onclick: onClose }, 'Done', h('kbd', {}, 'H / Space'))));
@@ -286,6 +305,7 @@ export class Hud {
   showBatterPicker(m: CricketMatch, current: number, onPick: (player: number) => void, onClose: () => void): void {
     const inn = m.inn;
     const team = m.battingTeam;
+    this.picker.className = 'picker';
     this.picker.innerHTML = '';
     this.picker.append(h('h3', {}, 'Who goes in next?'));
     const options = [current, ...inn.order.slice(inn.nextBatter)];
@@ -394,16 +414,22 @@ export class Hud {
       <div class="needle" style="left:${pct(t)}"></div></div>`;
   }
 
-  setVariations(style: Parameters<typeof variationsFor>[0] | null, selected: Variation | null, onPick: (v: Variation) => void): void {
-    const key = `${style}|${selected}`;
+  /** The bowler's deliveries, offered once the target is set (style null hides them). */
+  setVariations(style: Parameters<typeof variationsFor>[0] | null, selected: Variation | null, onPick: (v: Variation) => void, bowler = ''): void {
+    const key = `${style}|${selected}|${bowler}`;
     if (key === this.varKey) return;
     this.varKey = key;
     this.variations.innerHTML = '';
     if (!style) return;
+    this.variations.append(h('div', { class: 'var-title' }, bowler ? `Choose ${bowler}'s delivery` : 'Choose a delivery'));
     variationsFor(style).forEach((v, i) => {
       const b = h('button', { class: `ctrl${v === selected ? ' on' : ''}`, onclick: () => onPick(v) }, VARIATION_LABEL[v], h('kbd', {}, String(i + 1)));
       this.variations.append(b);
     });
+  }
+
+  setMiniMap(snap: MatchSnapshot, editable: boolean, teamColor: string): void {
+    this.miniMap.update(snap, editable, teamColor, this.now);
   }
 
   setHint(text: string): void {
@@ -412,8 +438,13 @@ export class Hud {
   }
 
   /** Context-sensitive on-screen buttons (also the touch controls). */
-  setControls(mode: HudMode, phase: string, device: string, extra: { footwork?: string; side?: string; fielding?: 'holding' | 'chasing' | null } = {}): void {
-    const key = `${mode}|${phase}|${device}|${extra.footwork}|${extra.side}|${extra.fielding}`;
+  setControls(
+    mode: HudMode,
+    phase: string,
+    device: string,
+    extra: { shot?: string; advancing?: boolean; side?: string; fielding?: 'holding' | 'chasing' | null; left?: boolean; stage?: 'aim' | 'delivery'; tv?: boolean } = {},
+  ): void {
+    const key = `${mode}|${phase}|${device}|${extra.shot}|${extra.advancing}|${extra.side}|${extra.fielding}|${extra.left}|${extra.stage}|${extra.tv}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
     this.controls.innerHTML = '';
@@ -421,18 +452,28 @@ export class Hud {
     const btn = (label: string, kb: string, gp: string, a: Action, cls = '') =>
       h('button', { class: `ctrl ${cls}`, onpointerdown: (e: Event) => { e.preventDefault(); this.input.trigger(a); } }, label, h('kbd', {}, pad ? gp : kb));
     const row = (...b: HTMLElement[]) => h('div', { class: 'ctrl-row' }, ...b);
-    this.dpad.style.display = mode === 'watching' ? 'none' : '';
+    // Bowling: the joystick moves the target until OK sets it, then it goes away until the ball is in the field.
+    const placing = mode === 'bowling' && !extra.fielding && extra.stage === 'aim';
+    this.dpad.style.display = mode === 'watching' || (mode === 'bowling' && !extra.fielding && !placing) ? 'none' : '';
+    this.dpad.classList.toggle('target', placing);
+    // Batting in the TV view: the batter faces the camera, so straight is at the bottom.
+    const flip = mode === 'batting' && !!extra.tv;
+    this.dpadLabels[0].textContent = placing ? 'FULLER' : flip ? 'BEHIND' : 'STRAIGHT';
+    this.dpadLabels[1].textContent = placing ? 'SHORTER' : flip ? 'STRAIGHT' : 'BEHIND';
     if (mode === 'batting') {
-      const fw = extra.footwork ?? 'auto';
-      const next = fw === 'auto' ? 'front' : fw === 'front' ? 'back' : 'auto';
-      const fwBtn = h('button', {
-        class: `ctrl toggle ${fw}`,
-        onpointerdown: (e: Event) => { e.preventDefault(); this.input.touchFootwork = next; this.controlsKey = ''; },
-      }, `Feet: ${fw === 'auto' ? 'Auto' : fw === 'front' ? 'Front' : 'Back'}`, h('kbd', {}, pad ? 'RT / LT hold' : 'Shift / V hold'));
+      // Step 1, what to play: Push, Stroke or Loft (a choice that stays lit). Step 2, as the ball comes: how to
+      // play it - Front foot, Back foot, Advanced or Leave - which plays the shot. The shot follows your aim.
+      const shot = extra.shot ?? 'ground';
+      const pickBtn = (label: string, kb: string, gp: string, a: Action, fam: string) => btn(label, kb, gp, a, `shot pick${shot === fam ? ' on' : ''}`);
       this.controls.append(
-        row(btn('Run', 'R / Y', 'Y', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
-        row(fwBtn, btn('Charge', 'F', 'D-pad ▲', 'charge'), btn('Sweep', 'Q', 'LB', 'sweep'), btn('Rev Sweep', 'E', 'RB', 'reverseSweep')),
-        row(btn('Defend', 'L', 'B', 'defend'), btn('Lofted', 'K', 'X', 'lofted', 'big'), btn('Ground', 'Space', 'A', 'primary', 'big')),
+        row(btn('Run', 'R / Y', 'A', 'run', 'run'), btn('Stay', 'N', 'D-pad ▼', 'wait'), btn('Back', 'B', 'L3', 'back')),
+        row(pickBtn('Push', 'L', 'B', 'defend', 'defend'), pickBtn('Stroke', 'J', 'Y', 'stroke', 'ground'), pickBtn('Loft', 'K', 'X', 'lofted', 'lofted')),
+        row(
+          btn('Front foot', 'Space / Q', 'A / LB', 'sweep', 'act big'),
+          btn('Back foot', 'E', 'RB', 'reverseSweep', 'act big'),
+          btn('Advanced', 'F', 'D-pad ▲', 'charge', `act${extra.advancing ? ' on' : ''}`),
+          btn('Leave', 'O', 'D-pad ▼', 'leave', `act${extra.left ? ' on' : ''}`),
+        ),
       );
     } else if (mode === 'bowling' && extra.fielding) {
       const holding = extra.fielding === 'holding';
@@ -441,17 +482,23 @@ export class Hud {
         row(btn(holding ? 'Throw: bowler' : '—', 'K', 'X', 'lofted'), btn(holding ? 'Throw: keeper' : 'Dive', 'Space', 'A', 'primary', 'big')),
       );
     } else if (mode === 'bowling') {
-      const label = phase === 'runUp' ? 'Release' : 'Bowl';
       const sideLbl = extra.side === 'round' ? 'Round' : 'Over';
-      this.controls.append(
-        row(btn('Field', 'G', 'Back', 'field'), btn('Bowler', 'H', '—', 'bowlers'), btn(`${sideLbl} the wkt`, 'T', 'R3', 'side')),
-        row(btn('Prev', 'Z', '◀', 'varPrev'), btn('Next', 'X', '▶', 'varNext')),
-        row(btn(label, 'Space', 'A', 'primary', 'big')),
-      );
+      if (phase === 'runUp') this.controls.append(row(btn('Release', 'Space', 'A', 'primary', 'big')));
+      else if (extra.stage === 'delivery') {
+        // Step 2: a delivery from the panel at the top, then Bowl.
+        this.controls.append(row(btn('Move target', 'B', 'B', 'back', 'act')), row(btn('Bowl', 'Space', 'A', 'primary', 'big')));
+      } else if (extra.stage === 'aim') {
+        // Step 1: place the target with the joystick and set it with OK.
+        this.controls.append(
+          row(btn('Field', 'G', 'Back', 'field'), btn('Bowler', 'H', '—', 'bowlers'), btn(`${sideLbl} the wkt`, 'T', 'R3', 'side')),
+          row(btn('OK', 'Space', 'A', 'primary', 'big ok')),
+        );
+      } else this.controls.append(row(btn('Field', 'G', 'Back', 'field')));
     }
   }
 
   update(m: CricketMatch, now: number, mode: HudMode): void {
+    this.now = now;
     if (now > this.bannerUntil) this.banner.innerHTML = '';
     if (now > this.feedbackUntil) this.feedback.textContent = '';
     this.timing.style.display = now < this.timingUntil ? '' : 'none';
@@ -464,6 +511,8 @@ export class Hud {
     if (this.trackData && this.trackBox.querySelector('.tb-result') === null) this.renderTracking(now, null);
     this.toast.style.display = now < this.toastUntil ? '' : 'none';
     if (now > this.captionUntil) this.caption.style.display = 'none';
+    // On short screens the caption and the control hint share a spot: the caption wins while it shows.
+    this.el.classList.toggle('has-caption', this.caption.style.display !== 'none');
     if (now > this.cardUntil) this.infoCard.style.display = 'none';
     if (now > this.milestoneUntil) this.milestone.style.display = 'none';
     const inn = m.inn;
@@ -479,21 +528,19 @@ export class Hud {
     const bat = m.cfg.teams[inn.battingTeam]!;
     const bowl = m.cfg.teams[inn.bowlingTeam]!;
     const rr = runRate(inn.runs, inn.legalBalls, rules.ballsPerOver).toFixed(2);
-    let info = `<span>RR <b>${rr}</b></span>`;
+    const legalLeft = inn.overs * rules.ballsPerOver - inn.legalBalls;
+    let info = `CRR ${rr}`;
     if (inn.target !== null) {
-      const need = Math.max(0, inn.target - inn.runs);
-      const left = inn.overs * rules.ballsPerOver - inn.legalBalls;
       const rrr = requiredRate(inn, rules);
-      info = `<span>Need <b>${need}</b> off <b>${left}</b></span><span>RRR <b>${rrr !== null ? rrr.toFixed(2) : '-'}</b> · RR ${rr}</span>`;
-    } else {
-      info += `<span>${inn.superOver ? 'Super Over' : esc(rules.format)} · ${inn.overs} ov</span>`;
+      info = `Need ${Math.max(0, inn.target - inn.runs)} off ${legalLeft} · RRR ${rrr !== null ? rrr.toFixed(2) : '-'}`;
     }
-    this.scorebug.style.setProperty('--team', bat.colors.primary);
-    this.scorebug.innerHTML = `<div class="team">${esc(bat.shortName)}</div>
-      <div class="score">${inn.runs}-${inn.wickets}<small>${oversString(inn.legalBalls, rules.ballsPerOver)}</small></div>
-      <div class="info">${info}</div>${inn.freeHit ? '<div class="freehit">FREE HIT</div>' : ''}${
-        inn.superOver ? '<div class="pp so">SUPER OVER</div>' : inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver ? '<div class="pp">POWERPLAY</div>' : ''}`;
-
+    const badge = inn.freeHit
+      ? '<span class="sb-badge hit">FREE HIT</span>'
+      : inn.superOver
+        ? '<span class="sb-badge so">SUPER OVER</span>'
+        : inn.legalBalls < rules.powerplayOvers * rules.ballsPerOver
+          ? '<span class="sb-badge" title="Powerplay">P1</span>'
+          : '';
     const card = (i: number) => inn.batters[i]!;
     const s = card(inn.striker);
     const n = card(inn.nonStriker);
@@ -505,11 +552,14 @@ export class Hud {
         return `<span class="ball-chip ${cls}">${c === '0' ? '•' : esc(c)}</span>`;
       })
       .join('');
+    const batter = (b: typeof s, strike: boolean) =>
+      `<div class="sb-bat${strike ? ' strike' : ''}"><span class="nm">${esc(bat.players[b.player]!.shortName)}${strike ? '*' : ''}</span><b>${b.runs}</b><small>${b.balls}</small></div>`;
+    // One bar along the bottom, like a TV graphic: batting side, the two batters, the score, the bowler, bowling side.
     this.lower.innerHTML = `
-      <div class="lt-box"><div><span class="name">${esc(bat.players[s.player]!.shortName)}*</span><span class="val">${s.runs}</span> <span class="sub">(${s.balls})</span></div>
-        <div><span class="name">${esc(bat.players[n.player]!.shortName)}</span><span class="val">${n.runs}</span> <span class="sub">(${n.balls})</span></div></div>
-      <div class="lt-box hide-sm"><div class="sub">Partnership</div><div><span class="val" style="margin:0">${inn.partnership.runs}</span> <span class="sub">(${inn.partnership.balls})</span></div></div>
-      <div class="lt-box"><div><span class="name">${esc(bowler.shortName)}</span><span class="val">${bw ? `${bw.wickets}-${bw.runs}` : '0-0'}</span> <span class="sub">${bw ? oversString(bw.balls) : '0.0'}</span></div>
-        <div class="balls">${chips || '<span class="sub">New over</span>'}</div></div>`;
+      <div class="sb-end" style="--c:${esc(bat.colors.primary)}">${esc(bat.shortName)}</div>
+      ${batter(s, true)}${batter(n, false)}
+      <div class="sb-score"><div class="sc"><span class="tm">${esc(bat.shortName)}</span><b>${inn.runs}-${inn.wickets}</b>${badge}<span class="ov">${oversString(inn.legalBalls, rules.ballsPerOver)}</span></div><div class="sub">${info}</div></div>
+      <div class="sb-bowl"><div><span class="nm">${esc(bowler.shortName)}</span><b>${bw ? `${bw.wickets}-${bw.runs}` : '0-0'}</b><small>${bw ? oversString(bw.balls) : '0.0'}</small></div><div class="balls">${chips || '<span class="sub">New over</span>'}</div></div>
+      <div class="sb-end" style="--c:${esc(bowl.colors.primary)}">${esc(bowl.shortName)}</div>`;
   }
 }

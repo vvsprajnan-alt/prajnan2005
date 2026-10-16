@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DT, LENGTHS, PITCH_PRESETS, Rng, TEAMS, planDelivery, predictTrajectory, STRIKER_STUMPS_Z } from '../src/index';
+import { DT, LENGTHS, PITCH_PRESETS, Rng, TARGET_SPREAD, TEAMS, cloneBall, lengthToZ, lineToX, planDelivery, predictTrajectory, stepBall, STRIKER_STUMPS_Z } from '../src/index';
 
 const cond = PITCH_PRESETS.balanced!;
 const fast = TEAMS[0]!.players[7]!;
@@ -53,6 +53,42 @@ describe('deliveries', () => {
     expect(late.noBall).toBe(true);
     const ok = planDelivery(fast, 'R', { variation: 'stock', line: 0.1, length: 6 }, 0.02, cond, new Rng(1), 1);
     expect(ok.noBall).toBe(false);
+  });
+
+  it('pitches on the target: in the middle with a good release, never off it with a bad one', () => {
+    /** Where each delivery first bounces, relative to where it was aimed. */
+    const misses = (bowler: (typeof TEAMS)[number]['players'][number], variation: string, err: number, assist: number) => {
+      const out: { x: number; z: number }[] = [];
+      for (let i = 0; i < 60; i++) {
+        for (const [line, length] of [[0.15, 6], [-0.4, 3.5], [0.5, 9]] as const) {
+          const e = i % 2 ? err : -err;
+          const plan = planDelivery(bowler, i % 3 ? 'R' : 'L', { variation: variation as never, line, length }, e, cond, new Rng(500 + i), assist);
+          const b = cloneBall(plan.ball);
+          for (let k = 0; k < 600; k++) {
+            const bounce = stepBall(b, 1 / 240, cond, null).find((ev) => ev.type === 'bounce');
+            if (bounce && bounce.type === 'bounce') {
+              out.push({ x: bounce.pos.x - lineToX(line, i % 3 ? 'R' : 'L'), z: bounce.pos.z - lengthToZ(length) });
+              break;
+            }
+          }
+        }
+      }
+      return out;
+    };
+    const rms = (v: number[]) => Math.sqrt(v.reduce((a, b) => a + b * b, 0) / v.length);
+    const bowlers = TEAMS.flatMap((t) => t.players).filter((p, i, all) => all.findIndex((q) => q.bowlStyle === p.bowlStyle) === i);
+    for (const b of bowlers) {
+      const variation = b.bowlStyle === 'offspin' ? 'offbreak' : b.bowlStyle === 'legspin' ? 'legbreak' : 'outswing';
+      const good = misses(b, variation, 0.02, 0.5);
+      expect(rms(good.map((m) => m.x))).toBeLessThan(0.12);
+      expect(rms(good.map((m) => m.z))).toBeLessThan(0.25);
+      for (const err of [0, 0.08, 0.2]) {
+        for (const m of misses(b, variation, err, 0)) {
+          expect(Math.abs(m.x)).toBeLessThan(TARGET_SPREAD.line + 0.08);
+          expect(Math.abs(m.z)).toBeLessThan(TARGET_SPREAD.length + 0.15);
+        }
+      }
+    }
   });
 
   it('is deterministic for a given rng seed', () => {

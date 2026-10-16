@@ -19,11 +19,11 @@ export function startServer(port: number, opts: { staticDir?: string; timeScale?
   const staticDir = opts.staticDir && existsSync(opts.staticDir) ? resolve(opts.staticDir) : null;
   const types: Record<string, string> = {
     '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
-    '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon',
+    '.png': 'image/png', '.json': 'application/json', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
   };
   // Static files are read once and kept with brotli and gzip versions (the build is immutable while running).
   const cache = new Map<string, { mtime: number; raw: Buffer; br?: Buffer; gz?: Buffer }>();
-  const compressible = /\.(js|css|html|svg|json)$/;
+  const compressible = /\.(js|css|html|svg|json|webmanifest)$/;
   const staticFile = (file: string) => {
     const mtime = statSync(file).mtimeMs;
     let e = cache.get(file);

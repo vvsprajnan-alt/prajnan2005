@@ -53,13 +53,23 @@ const check = (ok, msg) => {
 
 /** Bowl one ball as the local player (closing the bowler picker if it is up). */
 async function bowlOne(p) {
-  await waitFor(p, (s) => s.phase === 'preDelivery' && !s.replay, 150000, 'pre-delivery');
+  const before = await waitFor(p, (s) => s.phase === 'preDelivery' && !s.replay, 150000, 'pre-delivery');
   const overStart = await p.evaluate(() => window.__crease.currentMatch.inn.thisOver.length === 0);
   if (overStart) await p.waitForSelector('.picker', { state: 'visible', timeout: 20000 }).catch(() => {});
   if (await p.locator('.picker').isVisible()) await p.locator('.picker button', { hasText: 'Done' }).click();
   await p.waitForTimeout(300);
-  await p.keyboard.press('Space');
-  await waitFor(p, (s) => s.phase === 'runUp', 30000, 'run-up');
+  // Software rendering can run the game at a few frames a second, stretching the short pause before the
+  // bowler may start: press again while still waiting. A whole run-up can also pass between two polls,
+  // so any sign the delivery started will do.
+  const started = (s) => s.phase !== 'preDelivery' || s.balls > before.balls;
+  let s = null;
+  for (let tries = 0; tries < 10 && !s; tries++) {
+    if (!started(await state(p))) await p.keyboard.press('Space');
+    s = await waitFor(p, started, 4000, 'run-up').catch(() => null);
+  }
+  if (!s) throw new Error(`timeout: run-up (last ${JSON.stringify(await state(p))})`);
+  const startedState = s;
+  if (startedState.phase !== 'runUp') return;
   const dur = await p.evaluate(() => window.__crease.currentMatch.runUpDuration);
   await p.waitForTimeout(Math.max(0, dur * 1000 - 400));
   await p.keyboard.press('Space');
@@ -71,8 +81,16 @@ async function singlePlayer() {
   await p.getByText('Play', { exact: true }).click();
   await p.getByText('To the toss').click();
   await p.getByText('Heads', { exact: true }).click();
+  // The coin goes up and lands on the pitch first; then the winner's choice (or "Take the field" / "Pad up").
+  const choice = p.locator('.toss-btn').filter({ hasNotText: /^(Heads|Tails)$/ }).first();
+  await choice.waitFor({ timeout: 30000 });
+  check(true, 'toss played out on the pitch');
   if (await p.getByText('Bat first').count()) await p.getByText('Bat first').click();
-  else await p.locator('.btn').first().click();
+  else await choice.click();
+  // The anthem line-up and the umpires walking out: check it starts, then skip it.
+  await p.locator('.pm-skip').waitFor({ timeout: 10000 });
+  check(await p.locator('.pm-caption').isVisible(), 'anthem line-up plays');
+  await p.locator('.pm-skip').click();
   await p.waitForTimeout(1500);
   check(await p.locator('.intro').isVisible(), 'team intro shows');
   await p.keyboard.press('Space');
@@ -82,9 +100,11 @@ async function singlePlayer() {
     const s = await waitFor(p, (s) => (s.phase === 'preDelivery' || s.phase === 'runUp') && !s.replay, 150000, 'next ball');
     if (s.batting !== 0) await bowlOne(p);
     else {
+      // Pick the shot (Loft or Stroke), then play it off the front foot as the ball arrives.
+      await p.keyboard.press(i % 2 ? 'KeyK' : 'KeyJ');
       await waitFor(p, (s) => s.phase === 'inPlay' && s.z > 0, 60000, 'ball in play');
       await p.keyboard.down('KeyW');
-      await p.keyboard.press(i % 2 ? 'KeyK' : 'Space');
+      await p.keyboard.press('Space');
       await p.waitForTimeout(150);
       await p.keyboard.up('KeyW');
     }

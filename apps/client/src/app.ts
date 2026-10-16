@@ -2,19 +2,31 @@ import {
   CricketMatch,
   Difficulty,
   InningsState,
+  NATIONS,
   PITCH_PRESETS,
+  PlayerDef,
   Rng,
   TEAMS,
   TeamDef,
+  bowlTypeLabel,
   defaultConfig,
+  getNation,
+  squadTeam,
+  teamStrength,
   makeRules,
   oversString,
 } from '@crease/sim';
 import { Sfx } from './audio/sfx';
 import { FrameLimiter, ResolutionGovernor } from './perf';
+import { MobileProfile, currentEnv, enterFullscreen, mobileProfile } from './mobile';
 import { GameSession } from './game/session';
 import { Input } from './input/input';
 import { World } from './render/world';
+import { TossScene } from './render/tossScene';
+import { PreMatchScene } from './render/preMatch';
+import { cleanName, loadNames, saveNames, withNames } from './names';
+import { numberFor } from './render/players';
+import { jerseySvg } from './ui/jersey';
 import { Settings, loadSettings, saveSettings } from './settings';
 import { esc, h } from './ui/dom';
 import type { CentreTab, MatchCentreOptions } from './ui/matchCentre';
@@ -32,6 +44,9 @@ interface MatchSetup {
   myTeam: string;
   /** Batting order for my team (player indices), or null for squad order. */
   myOrder: number[] | null;
+  /** International sides: my eleven (squad indices, in batting order) and captain; null = the usual ones. */
+  myXI: number[] | null;
+  myCaptain: number | null;
   oppTeam: string;
   overs: number;
   difficulty: Difficulty;
@@ -53,9 +68,16 @@ export class App {
   private fpsEl: HTMLElement;
   private fpsFrames = 0;
   private fpsSince = performance.now();
-  private setup: MatchSetup = { myOrder: null, myTeam: 'hawks', oppTeam: 'summit', overs: 2, difficulty: 'normal', pitch: 'balanced' };
+  private setup: MatchSetup = { myOrder: null, myXI: null, myCaptain: null, myTeam: 'ind', oppTeam: 'eng', overs: 2, difficulty: 'normal', pitch: 'balanced' };
+  /** The toss being played out on the pitch (between the menus and the match). */
+  private ceremony: TossScene | null = null;
+  /** The anthem line-up and the umpires walking out (between the toss and the match). */
+  private preScene: PreMatchScene | null = null;
+  private root: HTMLElement;
+  private mobile: MobileProfile = mobileProfile(currentEnv());
 
   constructor(root: HTMLElement) {
+    this.root = root;
     this.applyAudio();
     this.world = new World(root.querySelector('#scene') as HTMLCanvasElement, this.settings);
     this.screens = root.querySelector('#screens') as HTMLElement;
@@ -68,8 +90,19 @@ export class App {
     this.fpsEl = h('div', { class: 'fps' });
     this.fpsEl.style.display = this.settings.showFps ? '' : 'none';
     root.append(this.fpsEl, this.rotateHint());
-    // Save battery and CPU in the background: audio sleeps while the tab is hidden.
-    document.addEventListener('visibilitychange', () => this.sfx.setSuspended(document.hidden));
+    // Save battery and CPU in the background: audio sleeps while the tab is hidden, and a match
+    // against the AI pauses (a call or a switch to another app shouldn't cost a wicket).
+    document.addEventListener('visibilitychange', () => {
+      this.sfx.setSuspended(document.hidden);
+      const s = this.session;
+      if (document.hidden && s && s.humanTeam !== null && !s.driver.networked && !s.paused) this.pauseMenu();
+    });
+    // Phones: the first tap on any button takes the game full screen and holds landscape
+    // (browsers only allow it from a tap). iPhone Safari has no full screen: see the home screen tip.
+    root.addEventListener('click', (e) => {
+      if (this.mobile.fullscreen && this.settings.autoFullscreen && (e.target as HTMLElement | null)?.closest?.('button')) void enterFullscreen();
+    }, true);
+    root.classList.toggle('touch', this.mobile.touch);
     this.startAttract();
     const idle = (window as unknown as { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 2000));
     idle(() => void Promise.all([loadCentre(), loadFieldEditor()]).catch(() => {}));
@@ -90,7 +123,14 @@ export class App {
     if (!this.limiter.ready(t)) return;
     const dt = (t - this.last) / 1000;
     this.last = t;
-    this.session?.frame(dt);
+    if (this.ceremony || this.preScene) {
+      // Space / Enter / A (or Esc) skips the line-up; nothing pressed here carries over into the match.
+      const actions = this.input.poll();
+      if (this.preScene && actions.some((a) => a === 'primary' || a === 'pause')) this.preScene.skip();
+      this.sfx.update(0.3, 'dead');
+      if (this.ceremony) this.ceremony.frame(Math.min(dt, 0.1));
+      else this.preScene?.frame(Math.min(dt, 0.1));
+    } else this.session?.frame(dt);
     if (this.settings.adaptiveResolution) {
       const scale = this.governor.sample(dt);
       if (scale !== null) this.world.setResolutionScale(scale);
@@ -106,6 +146,27 @@ export class App {
       }
     }
   };
+
+  /** iPhone Safari cannot go full screen; from the home screen the game gets the whole screen. */
+  private homeScreenTip(): HTMLElement | null {
+    const KEY = 'crease-clash-tip-home';
+    try {
+      if (!this.mobile.homeScreenTip || localStorage.getItem(KEY)) return null;
+    } catch {
+      return null;
+    }
+    const el = h('div', { class: 'home-tip' },
+      h('span', {}, 'Play full screen: tap ', h('b', {}, 'Share'), ' then ', h('b', {}, 'Add to Home Screen'), ', and open Crease Clash from there.'),
+      h('button', { class: 'ctrl', 'aria-label': 'Dismiss tip', onclick: () => {
+        try {
+          localStorage.setItem(KEY, '1');
+        } catch {
+          /* ignore */
+        }
+        el.remove();
+      } }, '✕'));
+    return el;
+  }
 
   /** Phones held upright get a hint to turn sideways (dismissable). */
   private rotateHint(): HTMLElement {
@@ -124,6 +185,7 @@ export class App {
 
   private startAttract(): void {
     this.session?.dispose();
+    this.root.classList.remove('in-match');
     const cfg = defaultConfig([TEAMS[2]!, TEAMS[3]!], 20, (Math.random() * 1e9) | 0);
     this.session = new GameSession(cfg, null, this.world, this.input, this.sfx, this.settings, {
       onInningsBreak: () => {},
@@ -133,19 +195,32 @@ export class App {
     }, this.hudRoot);
   }
 
+  /** A team ready to play: an international side's eleven (and captain) or a franchise, with the user's names. */
+  private teamFor(id: string, xi: number[] | null = null, captain: number | null = null): TeamDef {
+    const n = getNation(id);
+    const t = n ? squadTeam(n, xi ?? n.defaultXI, captain ?? n.captain) : TEAMS.find((x) => x.id === id) ?? TEAMS[0]!;
+    return withNames(t);
+  }
+
+  private myTeamFor(setup: MatchSetup): TeamDef {
+    return this.teamFor(setup.myTeam, setup.myXI, setup.myCaptain);
+  }
+
   private startMatch(setup: MatchSetup, humanBatsFirst: boolean, practice: 'bat' | 'bowl' | null = null): void {
+    this.endCeremony();
     this.session?.dispose();
-    const my = TEAMS.find((t) => t.id === setup.myTeam)!;
-    const opp = TEAMS.find((t) => t.id === setup.oppTeam)!;
+    const my = this.myTeamFor(setup);
+    const opp = this.teamFor(setup.oppTeam);
     const overs = practice ? 50 : setup.overs;
     const cfg = defaultConfig([my, opp], overs, (Math.random() * 1e9) | 0);
     cfg.rules = makeRules(overs, practice ? { playersPerSide: 11, maxOversPerBowler: 0 } : {});
     cfg.difficulty = setup.difficulty;
     cfg.conditions = PITCH_PRESETS[setup.pitch] ?? PITCH_PRESETS.balanced!;
     cfg.battingFirst = humanBatsFirst ? 0 : 1;
-    cfg.battingOrders = [setup.myOrder, null];
+    cfg.battingOrders = [getNation(setup.myTeam) ? null : setup.myOrder, null];
     cfg.introSeconds = practice ? 0 : 12;
     this.clearScreens();
+    this.root.classList.add('in-match');
     this.session = new GameSession(cfg, 0, this.world, this.input, this.sfx, this.settings, {
       onInningsBreak: (m) => this.inningsBreak(m),
       onComplete: (m) => this.results(m, setup),
@@ -196,15 +271,10 @@ export class App {
         this.tile('Settings', 'Graphics quality, time of day, assists, sound.', () => this.settingsScreen()),
         this.tile('Controls', 'Keyboard, controller and touch.', () => this.controlsScreen()),
       ),
-      h('p', { class: 'muted', style: 'margin-top:18px;font-size:12px' }, `${GAME_NAME} is an original game. All teams, players, sponsors and stadiums are fictional.`),
+      this.homeScreenTip(),
+      h('p', { class: 'muted', style: 'margin-top:18px;font-size:12px' }, `${GAME_NAME} is an original game. All players, franchises, sponsors and stadiums are fictional.`),
     );
     this.show(card);
-  }
-
-  private teamSelect(id: string, value: string, onChange: (v: string) => void): HTMLElement {
-    const sel = h('select', { id, onchange: (e: Event) => onChange((e.target as HTMLSelectElement).value) },
-      ...TEAMS.map((t) => h('option', { value: t.id, selected: t.id === value }, t.name)));
-    return sel;
   }
 
   private quickMatch(): void {
@@ -214,10 +284,7 @@ export class App {
       h('select', { onchange: (e: Event) => set((e.target as HTMLSelectElement).value) }, ...vals.map(([v, l]) => h('option', { value: v, selected: v === cur }, l)));
     const card = h('div', { class: 'menu-card' },
       this.header('Quick Match'),
-      h('div', { class: 'row' },
-        field('Your team', this.teamSelect('my', s.myTeam, (v) => { s.myTeam = v; s.myOrder = null; })),
-        field('Opponent', this.teamSelect('opp', s.oppTeam, (v) => (s.oppTeam = v))),
-      ),
+      this.teamPicker(),
       h('div', { class: 'row', style: 'margin-top:12px' },
         field('Overs', opts([['1', '1 over'], ['2', '2 overs'], ['5', '5 overs'], ['10', '10 overs'], ['20', '20 overs (T20)']], String(s.overs), (v) => (s.overs = Number(v)))),
         field('AI difficulty', opts([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['expert', 'Expert']], s.difficulty, (v) => (s.difficulty = v as Difficulty))),
@@ -225,17 +292,73 @@ export class App {
       ),
       h('div', { class: 'row', style: 'margin-top:22px' },
         h('button', { class: 'btn', onclick: () => (s.myTeam === s.oppTeam ? alert('Pick two different teams') : this.toss()) }, 'To the toss'),
-        h('button', { class: 'btn secondary', onclick: () => this.battingOrderScreen() }, 'Batting order'),
+        getNation(s.myTeam)
+          ? h('button', { class: 'btn secondary', onclick: () => this.squadScreen() }, 'Squad & XI')
+          : h('button', { class: 'btn secondary', onclick: () => this.battingOrderScreen() }, 'Batting order'),
         h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'),
       ),
     );
     this.show(card);
   }
 
+  /**
+   * Team selection: each side's shirt with arrows to change team, VS, and batting / bowling / fielding strength
+   * bars comparing the two elevens.
+   */
+  private teamPicker(): HTMLElement {
+    const s = this.setup;
+    const all = [...NATIONS.map((n) => ({ id: n.id, kind: 'International' })), ...TEAMS.map((t) => ({ id: t.id, kind: 'Franchise' }))];
+    const next = (cur: string, avoid: string, dir: number) => {
+      let i = all.findIndex((t) => t.id === cur);
+      do i = (i + dir + all.length) % all.length;
+      while (all[i]!.id === avoid);
+      return all[i]!.id;
+    };
+    const set = (which: 'my' | 'opp', id: string) => {
+      this.sfx.ui();
+      if (which === 'my') Object.assign(s, { myTeam: id, myOrder: null, myXI: null, myCaptain: null });
+      else s.oppTeam = id;
+      this.quickMatch();
+    };
+    const my = this.myTeamFor(s);
+    const opp = this.teamFor(s.oppTeam);
+    const side = (which: 'my' | 'opp', t: TeamDef) => {
+      const id = which === 'my' ? s.myTeam : s.oppTeam;
+      const other = which === 'my' ? s.oppTeam : s.myTeam;
+      const capt = t.players[t.captain ?? 0]!;
+      return h('div', { class: `ts-side ${which}` },
+        h('div', { class: 'ts-kind' }, which === 'my' ? 'Your team' : 'Opponent'),
+        h('div', { class: 'ts-kit' },
+          h('button', { class: 'ctrl ts-arrow', 'aria-label': `Previous team (${which === 'my' ? 'yours' : 'opponent'})`, onclick: () => set(which, next(id, other, -1)) }, '◀'),
+          h('div', { class: 'ts-jersey', html: jerseySvg(t.colors, t.shortName, numberFor(capt.id), 132) }),
+          h('button', { class: 'ctrl ts-arrow', 'aria-label': `Next team (${which === 'my' ? 'yours' : 'opponent'})`, onclick: () => set(which, next(id, other, 1)) }, '▶')),
+        h('div', { class: 'ts-name' }, t.name),
+        h('div', { class: 'ts-sub' }, `${all.find((x) => x.id === id)?.kind ?? ''} · Captain ${capt.shortName}`));
+    };
+    return h('div', { class: 'team-picker' }, side('my', my), h('div', { class: 'ts-mid' }, h('div', { class: 'ts-vs' }, 'VS'), this.strengthBars(teamStrength(my), teamStrength(opp))), side('opp', opp));
+  }
+
+  /** Two-sided bars (the stronger side highlighted); one-sided when there is nothing to compare with. */
+  private strengthBars(a: ReturnType<typeof teamStrength>, b: ReturnType<typeof teamStrength> | null): HTMLElement {
+    const pct = (v: number) => Math.max(4, Math.min(100, (v - 50) * 2));
+    const rows = (['batting', 'bowling', 'fielding', 'overall'] as const).map((k) => {
+      const label = k[0]!.toUpperCase() + k.slice(1);
+      const av = a[k];
+      const bv = b?.[k];
+      return h('div', { class: `ts-bar${b ? '' : ' single'}` },
+        h('span', { class: `v${bv !== undefined && av > bv ? ' win' : ''}` }, String(av)),
+        h('span', { class: 'l' }, h('i', { style: `width:${pct(av)}%` })),
+        h('span', { class: 'k' }, label),
+        b ? h('span', { class: 'r' }, h('i', { style: `width:${pct(bv!)}%` })) : '',
+        b ? h('span', { class: `v${bv! > av ? ' win' : ''}` }, String(bv)) : '');
+    });
+    return h('div', { class: 'ts-bars' }, ...rows);
+  }
+
   /** Reorder the batting line-up with up/down buttons. */
   private battingOrderScreen(): void {
     const s = this.setup;
-    const team = TEAMS.find((t) => t.id === s.myTeam)!;
+    const team = this.teamFor(s.myTeam);
     const order = s.myOrder ? [...s.myOrder] : team.players.map((_, i) => i);
     const list = h('div', { class: 'order-list' });
     const render = () => {
@@ -263,25 +386,180 @@ export class App {
         h('button', { class: 'btn secondary', onclick: () => this.quickMatch() }, 'Cancel'))));
   }
 
+  /**
+   * The toss, out in the middle: the captains meet the match referee, you call, the coin goes up, and the
+   * winner chooses to bat or bowl.
+   */
   private toss(): void {
     const s = this.setup;
-    const call = (c: 'heads' | 'tails') => {
-      const coin = new Rng((Date.now() & 0xffff) ^ 0x5bd1).next() < 0.5 ? 'heads' : 'tails';
-      const won = coin === c;
-      if (won) {
-        this.show(h('div', { class: 'menu-card' }, this.header(`It's ${coin}. You won the toss!`),
-          h('div', { class: 'menu-grid' },
-            this.tile('Bat first', 'Set a target.', () => this.startMatch(s, true), true),
-            this.tile('Bowl first', 'Chase it down.', () => this.startMatch(s, false)))));
-      } else {
-        const aiBats = Math.random() < 0.5;
-        const opp = TEAMS.find((t) => t.id === s.oppTeam)!;
-        this.show(h('div', { class: 'menu-card' }, this.header(`It's ${coin}. ${opp.name} won the toss and chose to ${aiBats ? 'bat' : 'bowl'}.`),
-          h('button', { class: 'btn', onclick: () => this.startMatch(s, !aiBats) }, aiBats ? 'Take the field' : 'Pad up')));
-      }
+    const my = this.myTeamFor(s);
+    const opp = this.teamFor(s.oppTeam);
+    this.session?.dispose();
+    this.session = null;
+    this.root.classList.add('in-match');
+    this.endCeremony();
+    const scene = new TossScene(this.world, my, opp);
+    this.ceremony = scene;
+    const capt = (t: TeamDef) => t.players[t.captain ?? 0]!.name;
+    const panel = (...kids: (HTMLElement | string)[]) => {
+      this.clearScreens();
+      this.screens.append(h('div', { class: 'toss-ui' }, h('div', { class: 'toss-panel' }, ...kids)));
+      (this.screens.querySelector('.toss-panel button') as HTMLButtonElement | null)?.focus();
     };
-    this.show(h('div', { class: 'menu-card' }, this.header('The toss. Call it!'),
-      h('div', { class: 'menu-grid' }, this.tile('Heads', '', () => call('heads'), true), this.tile('Tails', '', () => call('tails')))));
+    const call = (c: 'heads' | 'tails') => {
+      this.sfx.ui();
+      const coin = new Rng((Date.now() & 0xffff) ^ 0x5bd1).next() < 0.5 ? 'heads' : 'tails';
+      panel(h('div', { class: 'toss-title' }, `${capt(my)} calls ${c}...`));
+      void scene.call(coin === 'heads').then(() => {
+        if (this.ceremony !== scene) return;
+        const won = coin === c;
+        scene.celebrate(won);
+        const label = coin === 'heads' ? 'Heads' : 'Tails';
+        if (won) {
+          panel(h('div', { class: 'toss-title' }, `It's ${label}! You won the toss.`), h('div', { class: 'toss-sub' }, 'What would you like to do?'),
+            h('div', { class: 'toss-choice' },
+              h('button', { class: 'btn toss-btn', onclick: () => this.preMatch(s, true) }, h('b', {}, 'Bat first'), h('small', {}, 'Set a target')),
+              h('button', { class: 'btn toss-btn', onclick: () => this.preMatch(s, false) }, h('b', {}, 'Bowl first'), h('small', {}, 'Chase it down'))));
+        } else {
+          const aiBats = Math.random() < 0.5;
+          panel(h('div', { class: 'toss-title' }, `It's ${label}. ${opp.name} won the toss.`), h('div', { class: 'toss-sub' }, `${capt(opp)} chooses to ${aiBats ? 'bat' : 'bowl'} first.`),
+            h('div', { class: 'toss-choice' }, h('button', { class: 'btn toss-btn', onclick: () => this.preMatch(s, !aiBats) }, h('b', {}, aiBats ? 'Take the field' : 'Pad up'))));
+        }
+      });
+    };
+    panel(h('div', { class: 'toss-title' }, 'The toss'),
+      h('div', { class: 'toss-sub' }, `${capt(my)} (${my.shortName}) and ${capt(opp)} (${opp.shortName}) meet the match referee. Call it!`),
+      h('div', { class: 'toss-choice' },
+        h('button', { class: 'btn toss-btn', onclick: () => call('heads') }, h('b', {}, 'Heads')),
+        h('button', { class: 'btn toss-btn', onclick: () => call('tails') }, h('b', {}, 'Tails'))),
+      h('button', { class: 'ctrl toss-back', onclick: () => { this.endCeremony(); this.startAttract(); this.quickMatch(); } }, 'Back'));
+  }
+
+  private endCeremony(): void {
+    this.ceremony?.dispose();
+    this.ceremony = null;
+    this.preScene?.dispose();
+    this.preScene = null;
+  }
+
+  /** After the toss: the anthem line-up and the umpires walking out, then the match (skippable). */
+  private preMatch(s: MatchSetup, humanBatsFirst: boolean): void {
+    const my = this.myTeamFor(s);
+    const opp = this.teamFor(s.oppTeam);
+    this.endCeremony();
+    this.input.poll();
+    const main = h('div', { class: 'pm-main' });
+    const sub = h('div', { class: 'pm-sub' });
+    let started = false;
+    const scene = new PreMatchScene(this.world, my, opp, (m, t) => {
+      main.textContent = m;
+      sub.textContent = t;
+    }, () => {
+      if (started) return;
+      started = true;
+      this.startMatch(s, humanBatsFirst);
+    });
+    this.preScene = scene;
+    this.clearScreens();
+    this.screens.append(h('div', { class: 'pm-ui' },
+      h('div', { class: 'pm-caption' }, main, sub),
+      h('button', { class: 'ctrl pm-skip', onclick: () => scene.skip() }, 'Skip', h('kbd', {}, 'Space / A'))));
+    this.sfx.anthem();
+  }
+
+  /** International side: pick the eleven from the squad of fifteen, their batting order and the captain. */
+  private squadScreen(): void {
+    const s = this.setup;
+    const n = getNation(s.myTeam);
+    if (!n) return this.quickMatch();
+    const names = loadNames();
+    const name = (p: PlayerDef) => names[p.id] ?? p.name;
+    let xi = [...(s.myXI ?? n.defaultXI)];
+    let captain = s.myCaptain ?? n.captain;
+    const table = h('table', { class: 'card squad-table' });
+    const final = h('div', { class: 'order-list' });
+    const strength = h('div', { class: 'squad-strength' });
+    const shirt = h('div', { class: 'ts-jersey' });
+    const status = h('p', { class: 'muted' });
+    const save = h('button', { class: 'btn', onclick: () => {
+      if (xi.length !== 11) return;
+      s.myXI = [...xi];
+      s.myCaptain = xi.includes(captain) ? captain : xi[0]!;
+      this.quickMatch();
+    } }, 'Save') as HTMLButtonElement;
+    const render = () => {
+      table.innerHTML = '<thead><tr><th></th><th>Player</th><th>Role</th><th>BAT</th><th>TIM</th><th>PWR</th><th>BOWL</th><th>Bowling</th></tr></thead>';
+      const body = h('tbody', {});
+      n.squad.forEach((p, i) => {
+        const inXI = xi.includes(i);
+        const toggle = () => {
+          if (inXI) xi = xi.filter((j) => j !== i);
+          else if (xi.length < 11) xi.push(i);
+          render();
+        };
+        body.append(h('tr', { class: inXI ? 'in-xi' : '' },
+          h('td', {}, h('button', { class: `ctrl pick${inXI ? ' on' : ''}`, 'aria-label': `${inXI ? 'Drop' : 'Pick'} ${name(p)}`, onclick: toggle }, inXI ? '✓' : '+')),
+          h('td', {}, name(p), i === captain ? h('span', { class: 'pill' }, 'C') : ''),
+          h('td', {}, p.role), h('td', {}, String(p.attrs.batting)), h('td', {}, String(p.attrs.timing)), h('td', {}, String(p.attrs.power)),
+          h('td', {}, String(p.attrs.bowling)), h('td', { class: 'muted' }, bowlTypeLabel(p))));
+      });
+      table.append(body);
+      final.innerHTML = '';
+      xi.forEach((i, k) => {
+        const p = n.squad[i]!;
+        const move = (d: number) => {
+          const j = k + d;
+          if (j < 0 || j >= xi.length) return;
+          [xi[k], xi[j]] = [xi[j]!, xi[k]!];
+          render();
+        };
+        final.append(h('div', { class: 'order-row' },
+          h('span', { class: 'order-no' }, String(k + 1)),
+          h('span', { class: 'order-name' }, h('b', {}, name(p)), ' ', h('span', { class: 'muted' }, p.role)),
+          h('button', { class: `ctrl${i === captain ? ' on' : ''}`, 'aria-label': `Make ${name(p)} captain`, title: 'Captain', onclick: () => { captain = i; render(); } }, 'C'),
+          h('button', { class: 'ctrl', 'aria-label': `Move ${name(p)} up`, onclick: () => move(-1) }, '▲'),
+          h('button', { class: 'ctrl', 'aria-label': `Move ${name(p)} down`, onclick: () => move(1) }, '▼')));
+      });
+      shirt.innerHTML = jerseySvg(n.colors, n.shortName, numberFor(n.squad[captain]!.id), 96);
+      strength.innerHTML = '';
+      strength.append(this.strengthBars(teamStrength({ players: xi.map((i) => n.squad[i]!) }), null));
+      const keeper = xi.some((i) => n.squad[i]!.role === 'keeper');
+      status.textContent = `${xi.length} / 11 picked${xi.length === 11 && !keeper ? ' · no wicketkeeper: a fielder will keep' : ''}${xi.includes(captain) ? '' : ' · tap C to choose a captain'}`;
+      save.disabled = xi.length !== 11;
+    };
+    render();
+    this.show(h('div', { class: 'menu-card' }, this.header(`${n.name} · squad`),
+      h('div', { class: 'squad-head' },
+        shirt,
+        h('div', {}, h('div', { class: 'ts-kind' }, 'Team strength (your eleven)'), strength)),
+      h('p', { class: 'muted' }, 'Pick your eleven (+ / ✓), set the batting order with ▲ ▼ and choose the captain (C).'),
+      h('div', { class: 'squad-wrap' }, h('div', { style: 'overflow:auto' }, table), h('div', {}, h('h3', {}, 'Final XI'), final)),
+      status,
+      h('div', { class: 'row', style: 'margin-top:12px' }, save,
+        h('button', { class: 'btn secondary', onclick: () => { s.myXI = null; s.myCaptain = null; this.quickMatch(); } }, 'Reset'),
+        h('button', { class: 'btn secondary', onclick: () => this.quickMatch() }, 'Cancel'))));
+  }
+
+  /** Rename any player (kept in this browser). */
+  private nameEditor(title: string, players: PlayerDef[], back: () => void): void {
+    const names = loadNames();
+    const inputs = players.map((p) => h('input', { type: 'text', value: names[p.id] ?? p.name, maxlength: 24, 'aria-label': `Name for ${p.name}` }) as HTMLInputElement);
+    const rows = players.map((p, i) => h('div', { class: 'name-row' }, h('span', { class: 'muted' }, p.name), inputs[i]!));
+    this.show(h('div', { class: 'menu-card' }, this.header(`${title} · edit names`),
+      h('p', { class: 'muted' }, 'Names you change are kept in this browser and used in your matches. Leave a name empty (or as it was) to keep the original.'),
+      h('div', { class: 'name-list' }, ...rows),
+      h('div', { class: 'row', style: 'margin-top:14px' },
+        h('button', { class: 'btn', onclick: () => {
+          players.forEach((p, i) => {
+            const v = cleanName(inputs[i]!.value);
+            if (!v || v === p.name) delete names[p.id];
+            else names[p.id] = v;
+          });
+          saveNames(names);
+          back();
+        } }, 'Save'),
+        h('button', { class: 'btn secondary', onclick: () => { players.forEach((p) => delete names[p.id]); saveNames(names); back(); } }, 'Reset all'),
+        h('button', { class: 'btn secondary', onclick: back }, 'Cancel'))));
   }
 
   private practiceMenu(): void {
@@ -294,25 +572,33 @@ export class App {
   }
 
   private teamsScreen(): void {
-    const list = h('div', { class: 'menu-grid' },
-      ...TEAMS.map((t) => {
-        const tile = this.tile(t.name, `${t.city} · ${t.players.length} players`, () => this.teamDetail(t));
-        tile.style.borderLeft = `6px solid ${t.colors.primary}`;
-        return tile;
-      }));
-    this.show(h('div', { class: 'menu-card' }, this.header('Teams'), list, h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
+    const tile = (t: { name: string; colors: TeamDef['colors'] }, desc: string, open: () => void) => {
+      const el = this.tile(t.name, desc, open);
+      el.style.borderLeft = `6px solid ${t.colors.primary}`;
+      return el;
+    };
+    this.show(h('div', { class: 'menu-card' }, this.header('Teams'),
+      h('h3', {}, 'International'),
+      h('div', { class: 'menu-grid' }, ...NATIONS.map((n) => tile(n, `Squad of ${n.squad.length}`, () => this.teamDetail({ ...n, players: n.squad })))),
+      h('h3', {}, 'Franchises'),
+      h('div', { class: 'menu-grid' }, ...TEAMS.map((t) => tile(t, `${t.city} · ${t.players.length} players`, () => this.teamDetail(t)))),
+      h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
   }
 
-  private teamDetail(t: TeamDef): void {
-    const rows = t.players.map((p) => `<tr><td>${esc(p.name)} <span class="pill">${p.role}</span></td><td>${p.batHand}HB</td><td>${p.bowlStyle}</td><td>${p.attrs.batting}</td><td>${p.attrs.bowling}</td><td>${p.attrs.fielding}</td></tr>`).join('');
+  private teamDetail(team: Pick<TeamDef, 'name' | 'city' | 'players'>): void {
+    const t = withNames(team);
+    const rows = t.players.map((p) => `<tr><td>${esc(p.name)} <span class="pill">${p.role}</span></td><td>${p.batHand}HB</td><td>${esc(bowlTypeLabel(p))}</td><td>${p.attrs.batting}</td><td>${p.attrs.bowling}</td><td>${p.attrs.fielding}</td></tr>`).join('');
     const table = h('table', { class: 'card', html: `<thead><tr><th>Player</th><th>Bat</th><th>Bowls</th><th>BAT</th><th>BOWL</th><th>FIELD</th></tr></thead><tbody>${rows}</tbody>` });
-    this.show(h('div', { class: 'menu-card' }, this.header(`${t.name} · ${t.city}`), table,
-      h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.teamsScreen() }, 'Back'))));
+    this.show(h('div', { class: 'menu-card' }, this.header(team.name === team.city ? team.name : `${team.name} · ${team.city}`), table,
+      h('div', { class: 'row', style: 'margin-top:18px' },
+        h('button', { class: 'btn', onclick: () => this.nameEditor(team.name, team.players, () => this.teamDetail(team)) }, 'Edit names'),
+        h('button', { class: 'btn secondary', onclick: () => this.teamsScreen() }, 'Back'))));
   }
 
   private playersScreen(): void {
     const keys = ['batting', 'timing', 'power', 'running', 'bowling', 'pace', 'spin', 'fielding', 'catching', 'throwing', 'stamina', 'reaction'] as const;
-    const rows = TEAMS.flatMap((t) => t.players.map((p) => `<tr><td>${esc(p.name)} <span class="muted">${t.shortName}</span></td>${keys.map((k) => `<td>${p.attrs[k]}</td>`).join('')}</tr>`)).join('');
+    const all = [...NATIONS.map((n) => withNames({ shortName: n.shortName, players: n.squad })), ...TEAMS.map((t) => withNames(t))];
+    const rows = all.flatMap((t) => t.players.map((p) => `<tr><td>${esc(p.name)} <span class="muted">${t.shortName}</span></td>${keys.map((k) => `<td>${p.attrs[k]}</td>`).join('')}</tr>`)).join('');
     const table = h('table', { class: 'card', html: `<thead><tr><th>Player</th>${keys.map((k) => `<th>${k.slice(0, 4).toUpperCase()}</th>`).join('')}</tr></thead><tbody>${rows}</tbody>` });
     this.show(h('div', { class: 'menu-card' }, this.header('Players'), h('div', { style: 'overflow:auto' }, table),
       h('div', { class: 'row', style: 'margin-top:18px' }, h('button', { class: 'btn secondary', onclick: () => this.mainMenu() }, 'Back'))));
@@ -334,6 +620,7 @@ export class App {
         field('Frame rate', h('select', { onchange: (e: Event) => { s.fpsCap = Number((e.target as HTMLSelectElement).value); } },
           ...[[60, '60 fps'], [30, '30 fps (battery saver)'], [0, 'Unlimited (display rate)']].map(([v, l]) => h('option', { value: String(v), selected: s.fpsCap === v }, String(l))))),
         field('Performance overlay', sel('showFps', [['false', 'Off'], ['true', 'On']])),
+        this.mobile.fullscreen ? field('Full screen (phones)', sel('autoFullscreen', [['true', 'On tap'], ['false', 'Off']])) : null,
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
         field('Assistance', sel('assist', [['beginner', 'Beginner (wide timing, full guide)'], ['standard', 'Standard'], ['pro', 'Pro (no guide during run-up)']])),
@@ -341,6 +628,7 @@ export class App {
         field('Fielding', sel('fielding', [['assisted', 'Assisted (recommended)'], ['manual', 'Manual'], ['auto', 'Automatic (AI fields)']])),
       ),
       h('div', { class: 'row', style: 'margin-top:12px' },
+        field('Camera', sel('camera', [['tv', 'TV (from the bowler\'s end, like a broadcast)'], ['behind', 'Behind the batter / bowler']])),
         field('Bowling pitch guide', sel('showPitchGuide', [['true', 'On'], ['false', 'Off']])),
         field('Sound', sel('sound', [['true', 'On'], ['false', 'Off']])),
       ),
@@ -378,29 +666,38 @@ export class App {
       <h3>Batting</h3>
       <table class="card"><tbody>
       <tr><td>Aim the shot (hold while playing)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
-      <tr><td>Ground shot</td><td>Space / J</td><td>A</td><td>Ground</td></tr>
-      <tr><td>Lofted shot</td><td>K / Shift+Space</td><td>X</td><td>Lofted</td></tr>
-      <tr><td>Defend</td><td>L</td><td>B</td><td>Defend</td></tr>
-      <tr><td>Sweep / Reverse sweep</td><td>Q / E</td><td>LB / RB</td><td>Sweep buttons</td></tr>
-      <tr><td>Front-foot / back-foot (hold while playing)</td><td>Shift / V</td><td>RT / LT</td><td>Feet toggle</td></tr>
-      <tr><td>Charge down the pitch (during the run-up)</td><td>F</td><td>D-pad up</td><td>Charge</td></tr>
-      <tr><td>Scoop / upper cut</td><td>Lofted + aim behind</td><td>X + stick down</td><td>Lofted + pad down</td></tr>
-      <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y / N / B</td><td>Y / D-pad down / L3</td><td>Run / Stay / Back</td></tr>
+      <tr><td colspan="4"><b>1. Pick the shot</b> (it stays picked until you change it)</td></tr>
+      <tr><td><b>Push</b> - a block, or soft hands into the gap you aim at</td><td>L</td><td>B</td><td>Push</td></tr>
+      <tr><td><b>Stroke</b> - a full shot along the ground</td><td>J</td><td>Y</td><td>Stroke</td></tr>
+      <tr><td><b>Loft</b> - over the top</td><td>K</td><td>X</td><td>Loft</td></tr>
+      <tr><td colspan="4"><b>2. Play it</b> as the ball comes, with your footwork</td></tr>
+      <tr><td><b>Front foot</b> - press as the ball arrives</td><td>Space / Q</td><td>A / LB</td><td>Front foot</td></tr>
+      <tr><td><b>Back foot</b> - press as the ball arrives</td><td>E</td><td>RB</td><td>Back foot</td></tr>
+      <tr><td><b>Advanced</b> - down the pitch: press as the ball leaves the bowler's hand</td><td>F</td><td>D-pad up</td><td>Advanced</td></tr>
+      <tr><td><b>Leave</b> - shoulder arms</td><td>O</td><td>D-pad down</td><td>Leave</td></tr>
+      <tr><td>Run ("YES") / Stay ("NO") / Go back</td><td>R or Y (or Space once it is hit) / N / B</td><td>A / D-pad down / L3</td><td>Run / Stay / Back</td></tr>
       </tbody></table>
-      <p class="muted">Footwork is automatic by default. Getting forward to full balls and back to short ones improves your contact; the wrong foot costs you. Charging makes good-length spin into a half-volley, but miss it and the keeper will stump you.</p>
-      <p class="muted">Up = straight down the ground, left/right = the side of the screen you want to hit to, down = behind the wicket. Timing is everything: start the shot as the ball arrives. The stroke (drive, pull, cut, flick...) is chosen from your aim and the length of the ball.</p>
+      <p class="muted">First pick <b>what</b> to play (Push, Stroke or Loft) - picking does not play it. Then, as the ball is bowled, read it and play it
+      with <b>Front foot</b>, <b>Back foot</b> or <b>Advanced</b>, aiming <b>where</b> you want it to go; or <b>Leave</b> it. The batter plays the right shot for the ball:
+      a Stroke aimed through the covers is a cover drive to a full ball and a back-foot punch to a short one; aimed to the leg side it is a flick or a pull;
+      a Loft aimed behind is a scoop or an upper cut. With no aim the batter plays with the line of the ball (a Push with no aim is a solid block).</p>
+      <p class="muted">Getting forward to full balls and back to short ones improves your contact; the wrong foot costs you.
+      <b>Front foot</b> against spin or gentle pace turns a Stroke or Loft aimed square or fine on the leg side into a sweep (a slog sweep when lofted), and fine on the off side into a reverse sweep.
+      <b>Advanced</b> makes a good-length ball a half-volley - press it as the ball is released, too early and the bowler sees you coming - but miss it and the keeper will stump you. <b>Leave</b> lets the ball go - safe outside off stump, but not if it is hitting the stumps.</p>
+      <p class="muted">Aim where you want the ball to go on the screen: in the TV view the batter faces you, so down = straight back past the bowler and up = behind the wicket (the joystick is labelled). Timing is everything: press Front foot or Back foot as the ball arrives.</p>
       <h3>Bowling</h3>
       <table class="card"><tbody>
-      <tr><td>Move the pitch marker (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
-      <tr><td>Choose delivery</td><td>1-8, Z / X</td><td>D-pad left/right</td><td>Delivery buttons</td></tr>
+      <tr><td>1. Move the target on the pitch (line &amp; length)</td><td>WASD / Arrows</td><td>Left stick</td><td>Joystick</td></tr>
+      <tr><td>2. Set the target</td><td>Space</td><td>A</td><td>OK</td></tr>
+      <tr><td>3. Choose a delivery (B: move the target again)</td><td>1-8, Z / X</td><td>D-pad left/right</td><td>Delivery buttons</td></tr>
       <tr><td>Over / round the wicket</td><td>T</td><td>R3</td><td>Over / Round</td></tr>
-      <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field</td></tr>
+      <tr><td>Set the field (between balls)</td><td>G</td><td>Back / Select</td><td>Field, or tap the mini map</td></tr>
       <tr><td>Choose the bowler (start of an over)</td><td>H</td><td>—</td><td>Bowler</td></tr>
       <tr><td>Review an LBW decision (when offered)</td><td>U</td><td>Y</td><td>Review</td></tr>
-      <tr><td>Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
+      <tr><td>4. Run in, then release in the green zone</td><td>Space</td><td>A</td><td>Bowl / Release</td></tr>
       </tbody></table>
       <p class="muted">One bouncer (above shoulder height) is allowed per over; the second is a no-ball. From about the 12th over a pace bowler's swing deliveries can reverse. LBW decisions can be reviewed with ball tracking: you keep the review if it is overturned or umpire's call. Tied matches go to a Super Over.</p>
-      <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. On Beginner and Standard assistance a dashed line previews the delivery's path including swing and turn. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
+      <p class="muted">Releasing late oversteps (no-ball, free hit). Releasing early loses pace and accuracy. Field restrictions apply: 2 fielders outside the circle in the powerplay, 5 after it, and no more than 2 behind square on the leg side.</p>
       <h3>Fielding (when your side is bowling)</h3>
       <table class="card"><tbody>
       <tr><td>Run with the highlighted fielder</td><td>WASD / Arrows</td><td>Left stick</td><td>Direction pad</td></tr>
@@ -690,6 +987,7 @@ export class App {
   private startOnline(c: NetClient, m: Extract<ServerMsg, { t: 'start' }>): void {
     this.session?.dispose();
     this.clearScreens();
+    this.root.classList.add('in-match');
     const driver = new NetDriver(c, m.match, m.you);
     const seat: Seat | null = m.you;
     this.session = new GameSession(driver.match.cfg, seat ? seat.team : null, this.world, this.input, this.sfx, this.settings, {

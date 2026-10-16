@@ -3,11 +3,13 @@
 An original 3D cricket game built around fast, friendly **2v2 multiplayer**. Two friends bat together
 (striker + non-striker calling the runs) against two friends bowling and fielding.
 
-> Crease Clash is an original project. All teams, players, sponsors, stadiums, UI, art and sound are
-> fictional and made for this game (the 3D art, textures and sounds are generated in code). It is not
-> affiliated with, and does not copy from, any existing cricket game.
+> Crease Clash is an original project. All players, franchises, sponsors, stadiums, UI, art and sound are
+> fictional and made for this game (the 3D art, textures and sounds are generated in code). The international
+> sides use real country names, but every player in them is invented - none stands for a real cricketer. It is
+> not affiliated with, and does not copy from, any existing cricket game.
 
-**Status:** Phase 10 complete - testing and bug fixing: soak tests over complete matches with scorecard and
+**Status:** Phase 10 complete, and the players have since been rebuilt as animated people (sculpted faces, hair,
+hands with fingers, natural walking and running, hands that grip the bat). Phase 10 was testing and bug fixing: soak tests over complete matches with scorecard and
 physics invariants, a balance pass against real T20 numbers, end-to-end multiplayer tests (whole 2v2 matches,
 chaos, hostile clients, many rooms), a browser suite and CI - and the crashes, stalls and rule bugs they found
 are fixed. Phase 9 brought optimization: split and compressed downloads, about half the draw calls, level of
@@ -55,26 +57,60 @@ Other scripts:
 | `npx tsx scripts/physics-probe.ts` | Print delivery and shot characteristics (for tuning) |
 | `node scripts/smoke.mjs [url] [outDir] [bat\|bowl]` | Browser smoke test with Playwright: plays a few balls and saves screenshots |
 
+## Playing on a phone or tablet
+
+Run the server on a computer (`npm run server`), make sure the phone is on the same Wi-Fi, and open
+`http://<computer's-IP>:8787` in the phone's browser (Chrome on Android, Safari on iPhone/iPad).
+
+- **Hold the phone sideways.** Menus work upright too; a match asks you to turn the phone (or tap
+  **Play upright** to keep it vertical with a compact layout).
+- **Full screen.** On Android the first tap on a button takes the game full screen and locks it sideways
+  (turn this off in **Settings > Full screen (phones)**). iPhone Safari has no full screen for web pages, so the
+  menu shows a tip: tap **Share > Add to Home Screen** and open Crease Clash from the home-screen icon - it then
+  runs full screen like an app. The same works on Android (browser menu > **Install app** / **Add to Home screen**).
+- **Touch controls.** Drag the round pad on the left to aim (shots, the bowling target, fielder) and tap the buttons
+  on the right: Push / Stroke / Loft, Front foot / Back foot / Advance / Leave and Run / Stay / Back when batting; when bowling,
+  move the target with the joystick and tap **OK**, pick a delivery at the top, tap **Bowl**, then **Release**; Catch / Dive / Throw when fielding.
+- **Performance.** Phones start on Medium (Low with a 30 fps cap on low-memory phones), resolution adapts to
+  keep the frame rate up, and only nearby players use the detailed models. Switching apps pauses a match
+  against the AI.
+
 ## How to play
 
-From the main menu choose **Play**, pick teams, overs and difficulty, then call the toss.
+From the main menu choose **Play**, pick teams, overs and difficulty, then go **To the toss**.
 **Practice** drops you straight into batting or bowling nets.
+
+- **Teams.** Six international sides (India, England, Australia, Pakistan, South Africa, New Zealand) with squads
+  of fifteen, and four franchises of eleven. Quick Match shows both sides' shirts (◀ ▶ changes team) with batting,
+  bowling, fielding and overall strength bars comparing the two elevens. For an international side, **Squad & XI**
+  picks your eleven from the fifteen, sets the batting order and chooses the captain; its strength bars follow
+  the eleven you pick.
+- **The toss** is played out in the middle: the two captains meet the match referee, you call heads or tails, the
+  coin goes up and the camera shows it on the pitch. The winner chooses to bat or bowl.
+- **Before the first ball** the two teams line up with the match officials for the anthems (an original tune,
+  not any country's anthem) while the camera tracks along the line naming each player, and then the umpires walk
+  out to the middle. **Skip** (Space / A) goes straight to the match.
+- **The score bar** along the bottom shows the batting side, both batters, the score (with the powerplay, free hit
+  and the chase), the bowler and this over's balls.
+- **Player names.** In **Teams**, open a team and choose **Edit names** to rename any player. The names are kept
+  in your browser and used in your matches (online, everyone sees the original names).
 
 ### Controls
 
 | Action | Keyboard | Controller | Touch / mouse |
 | --- | --- | --- | --- |
-| Aim shot / move bowling marker | WASD or arrows | Left stick | Direction pad (bottom left) |
-| Ground shot | Space or J | A | Ground |
-| Lofted shot | K | X | Lofted |
-| Defend | L | B | Defend |
-| Sweep / reverse sweep | Q / E | LB / RB | Sweep / Rev Sweep |
-| Front foot / back foot (hold) | Shift / V | RT / LT | Feet toggle |
-| Charge down the pitch | F (during the run-up) | D-pad up | Charge |
+| Aim shot / move the bowling target | WASD or arrows | Left stick | Direction pad / joystick (bottom left) |
+| **Push** (block, or soft hands into the gap) | L | B | Push |
+| **Stroke** (along the ground) | Space or J | A | Stroke |
+| **Loft** (over the top) | K | X | Loft |
+| Front foot / back foot (for this ball) | Q / E (or hold Shift / V) | LB / RB (or hold RT / LT) | Front foot / Back foot |
+| Advance down the pitch | F (during the run-up) | D-pad up | Advance |
+| Leave the ball | O | D-pad down (before the ball arrives) | Leave |
 | Run ("YES") / Stay ("NO") / Go back | R or Y / N / B | Y / D-pad down / L3 | Run / Stay / Back |
-| Pick delivery | 1-8, Z / X | D-pad left/right | Delivery buttons |
+| Bowling: set the target | Space or Enter | A | OK |
+| Bowling: pick a delivery (after OK; B moves the target again) | 1-8, Z / X | D-pad left/right | Delivery buttons |
 | Over / round the wicket | T | R3 | Over / Round |
-| Set the field | G | Back / Select | Field |
+| Set the field (or click the mini map, top left) | G | Back / Select | Field / mini map |
 | Choose the bowler (start of an over) | H | - | Bowler |
 | Review an LBW decision (when offered) | U | Y | Review |
 | Fielding: run / dive / catch | WASD / Space / L | Stick / A / B | Pad / Dive / Catch |
@@ -86,23 +122,42 @@ From the main menu choose **Play**, pick teams, overs and difficulty, then call 
 | Instant replay of the last ball | I | - | ⟲ |
 | Skip a replay / the team intros | Space | A | Skip |
 
-**Batting.** Hold a direction for where you want to hit it (up = straight, left/right = that side of the
-screen, down = behind) and press a shot as the ball arrives. The stroke (drive, cut, pull, flick, glance...)
-is chosen from your aim and the length and line of the ball, so the same button plays a cover drive to a
-full ball and a cut to a short one. Timing is graded perfect / good / early / late. Early timing drags the
+**Batting.** There are three shots - **Push**, **Stroke** and **Loft** - and four actions - **Front foot**,
+**Back foot**, **Advance** and **Leave**. Hold a direction for where you want the ball to go on the screen (in the
+TV view the batter faces you, so down = straight back past the bowler, up = behind the wicket; with the camera
+behind the batter it is the other way round) and press a shot as the ball arrives: the batter plays
+the right cricket shot for your choice, your aim and the ball. A Stroke through the covers is a cover drive
+to a full ball and a back-foot punch to a short one; to the leg side it is a flick or a pull; a Push into a
+gap is a soft single (with no aim it is a solid block); a Loft behind the wicket is a scoop or an upper cut.
+Front foot against spin or gentle pace, aimed square or fine on the leg side, sweeps (a slog sweep with Loft),
+and fine on the off side reverse-sweeps. Leave lets the ball go - safe outside off stump, out if it hits the
+stumps or traps you LBW. Timing is graded perfect / good / early / late. Early timing drags the
 ball to the leg side, late timing to the off side. Movement off the seam after you commit can beat the bat
 or find the edge. When the ball is in the field, your partner shouts **YES / NO / WAIT**; press Run to go.
-Footwork is automatic unless you hold a modifier: getting forward to full balls and back to short ones
-improves contact, the wrong foot costs you. Charge (F) during the run-up to turn good-length spin into a
-half-volley - but if you miss, a keeper standing up will stump you. Lofted + aim behind plays the scoop (full
-balls) or the upper cut (short, wide ones). After each shot a timing bar shows how many milliseconds early or
+Footwork is automatic unless you pick it for the ball (it resets every delivery): getting forward to full
+balls and back to short ones improves contact, the wrong foot costs you. Advance (F) during the run-up to turn
+good-length spin into a half-volley - but if you miss, a keeper standing up will stump you. After each shot a timing bar shows how many milliseconds early or
 late you were; on Beginner a closing ring on the pitch shows when to play.
 
-**Bowling.** Move the marker to choose line and length (the coloured bands show yorker, full, good and short
-lengths), pick a delivery, press Space to run in and press again in the green zone of the release meter.
+**Choosing the bowler.** At the start of each over (or with H) the bowler screen lists everyone who can bowl, best
+first, with **accuracy** (how close the ball lands to your target) and **movement** (swing and seam for the quicks,
+spin for the spinners) as bars, the bowling type, top speed, today's figures and overs left.
+
+**Camera.** Like a TV broadcast: before and during each delivery the picture is the long-lens view from high
+behind the bowler, with the batter facing you; when the ball is hit it cuts to a wide shot that follows the ball,
+and cuts back for the next ball. (Settings > Camera can put it behind the batter / bowler instead.)
+
+**Bowling.** Move the circle target on the pitch with the joystick (WASD, the left stick or the on-screen joystick)
+to choose line and length - the coloured bands show yorker, full, good and short lengths - and press **OK** (Space / A)
+to set it. The bowler's deliveries then come up: pick one (a yorker or bouncer moves the target to its length; B moves
+the target again), press Space to run in and press again in the green zone of the release meter.
 Early releases lose pace and accuracy; late ones overstep for a no-ball and a free hit. On Beginner and
 Standard assistance a dotted line previews the delivery's path, including swing and turn. Press T to switch
 between over and round the wicket.
+
+**The field.** The mini map in the top-left corner shows where every fielder is (and follows them, the batters and
+the ball during play: after a hit the ball leaves a dotted trail, so you can see where it went). When your side is bowling, click or tap it between balls to set the field: choose a preset, or
+tap a fielder and then tap where you want them (or drag them). The circle and leg-side limits are counted for you.
 
 **Captaincy.** At the start of each over you pick the bowler (or keep the captain's choice). Press G between
 balls to set the field: pick a preset or drag fielders on the map. T20 restrictions are enforced by the rules

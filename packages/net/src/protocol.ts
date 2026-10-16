@@ -9,7 +9,7 @@ import {
   makeRules,
 } from '@crease/sim';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 /** Server ticks per network batch (120 Hz sim -> 20 batches per second). */
 export const TICKS_PER_BATCH = 6;
 /** Send a state hash every N ticks so clients can detect drift. */

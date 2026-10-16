@@ -11,6 +11,12 @@ export type ShotFamily = 'defend' | 'ground' | 'lofted' | 'sweep' | 'reverseSwee
  * Both zero = "play naturally with the line of the ball".
  */
 export interface ShotInput {
+  /**
+   * The three shots a player picks: 'defend' (Push: a block, or soft hands into
+   * the aimed gap), 'ground' (Stroke) and 'lofted' (Loft). The stroke itself
+   * comes from the aim, the ball and the footwork (see chooseStroke). The two
+   * sweep families remain for the AI.
+   */
   family: ShotFamily;
   aimX: number;
   aimY: number;
@@ -22,6 +28,7 @@ export type Footwork = 'auto' | 'front' | 'back';
 
 export type Stroke =
   | 'defence'
+  | 'push'
   | 'straightDrive'
   | 'coverDrive'
   | 'punch'
@@ -51,6 +58,8 @@ interface StrokeSpec {
 
 export const STROKES: Record<Stroke, StrokeSpec> = {
   defence: { label: 'Defence', horizontalBat: false, angle: [-60, 60], natural: 0, offX: [-0.5, 0.8], h: [0, 1.4], batSpeed: 7 },
+  // Soft hands into a gap for a single: along the ground, any direction in front of square or just behind.
+  push: { label: 'Push', horizontalBat: false, angle: [-150, 150], natural: 0, offX: [-0.6, 0.95], h: [0, 1.35], batSpeed: 12 },
   straightDrive: { label: 'Straight Drive', horizontalBat: false, angle: [-25, 25], natural: 0, offX: [-0.25, 0.45], h: [0.03, 0.95], batSpeed: 31 },
   coverDrive: { label: 'Cover Drive', horizontalBat: false, angle: [20, 80], natural: 55, offX: [0.1, 0.95], h: [0.03, 0.95], batSpeed: 31 },
   punch: { label: 'Back-foot Punch', horizontalBat: false, angle: [10, 80], natural: 45, offX: [0, 0.8], h: [0.6, 1.3], batSpeed: 26 },
@@ -144,15 +153,27 @@ export function aimAngle(input: ShotInput, hand: BatHand): number | null {
   return Math.atan2(input.aimX * offSign(hand), input.aimY) / DEG;
 }
 
-/** Pick the stroke a batter commits to, given the aim and how they read the ball. */
+/** Slow enough to sweep (spin and gentle medium pace). */
+export const SWEEPABLE_SPEED = 26;
+
+/**
+ * Pick the stroke a batter commits to, given the shot (Push / Stroke / Loft),
+ * the aim, the footwork and how they read the ball. Front foot to a slow ball
+ * aimed square or fine on the leg side is a sweep (a slog sweep when lofted),
+ * and fine on the off side a reverse sweep.
+ */
 export function chooseStroke(input: ShotInput, hand: BatHand, ball: BallAtBat): Stroke {
-  if (input.family === 'defend') return 'defence';
   if (input.family === 'sweep') return 'sweep';
   if (input.family === 'reverseSweep') return 'reverseSweep';
+  const a = aimAngle(input, hand);
+  if (input.family === 'defend') return a === null ? 'defence' : 'push';
   const short = isShortBall(ball);
   const offX = ball.pos.x * offSign(hand);
   const lofted = input.family === 'lofted';
-  const a = aimAngle(input, hand);
+  if (input.footwork === 'front' && a !== null && !short && length(ball.vel) < SWEEPABLE_SPEED) {
+    if (a <= -70) return 'sweep';
+    if (a >= 110) return 'reverseSweep';
+  }
   if (lofted && Math.abs(a ?? 0) >= 155 && !short) return 'scoop';
   if (a === null) {
     if (short) return offX > 0.35 ? 'cut' : lofted && ball.pos.y > 1.2 ? 'hook' : 'pull';
@@ -270,7 +291,8 @@ export function resolveContact(p: ContactParams): ContactResult {
   const re = p.readError ?? { x: 0, y: 0 };
   const dev = Math.hypot(re.x, re.y * 0.6);
   // Beaten by the movement: the bat is simply in the wrong place.
-  if (dev > (stroke === 'defence' ? 0.16 : 0.13)) return { ...base, outcome: 'miss' };
+  const soft = stroke === 'defence' || stroke === 'push';
+  if (dev > (soft ? 0.16 : 0.13)) return { ...base, outcome: 'miss' };
 
   let qt: number;
   if (absErr <= w.perfect) qt = 1;
@@ -287,6 +309,7 @@ export function resolveContact(p: ContactParams): ContactResult {
   let edgeP = inEdgeZone ? 0.55 : Math.max(0, 0.5 - q) * 1.25;
   edgeP += dev > 0.04 ? (dev - 0.04) * 7 : 0;
   if (stroke === 'defence') edgeP *= 0.5;
+  else if (stroke === 'push') edgeP *= 0.6;
   const missP = inEdgeZone ? 0.45 : suit < 0.3 ? (0.3 - suit) * 2.2 : 0;
 
   const r = rng.next();
@@ -327,6 +350,11 @@ export function resolveContact(p: ContactParams): ContactResult {
     speed = 3 + 5 * q + rng.range(0, 1.5);
     elev = rng.range(-8, 2);
     spin = -10;
+  } else if (stroke === 'push') {
+    // Enough to beat the infield for a single, rarely more.
+    speed = 6 + 7 * q + rng.range(0, 1.5);
+    elev = rng.range(-6, 3);
+    spin = -15;
   } else if (stroke === 'scoop') {
     speed = 6 + inSpeed * 0.55 * q;
     elev = 28 + (1 - q) * 25 + rng.gauss() * 3;

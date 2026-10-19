@@ -129,6 +129,18 @@ function baseSpeed(p: PlayerDef): number {
   }
 }
 
+/**
+ * What the bowler-selection screen shows, from the same numbers the deliveries use: accuracy is the bowling skill
+ * (how close the ball lands to the target), movement is swing and seam for the quicks and the rate of spin for the
+ * spinners (both 0-100), and the top speed of their stock ball.
+ */
+export function bowlerProfile(p: PlayerDef): { accuracy: number; movement: number; topSpeedKmh: number } {
+  const skill = a01(p.attrs.bowling);
+  const spinner = p.bowlStyle === 'offspin' || p.bowlStyle === 'legspin';
+  const movement = spinner ? 50 + 50 * a01(p.attrs.spin) : (100 * (p.bowlStyle === 'fast' ? 2.2 : 2.6) * (0.5 + 0.5 * skill)) / 2.6;
+  return { accuracy: Math.round(skill * 100), movement: Math.round(movement), topSpeedKmh: Math.round(baseSpeed(p) * 3.6) };
+}
+
 /** Convert a line relative to the batter's off side into world x. */
 export const lineToX = (line: number, batHand: BatHand): number => (batHand === 'R' ? line : -line);
 export const xToLine = (x: number, batHand: BatHand): number => (batHand === 'R' ? x : -x);
@@ -232,12 +244,14 @@ export function planDelivery(
   speed *= 1 - 0.07 * timingPenalty * (releaseError < 0 ? 1 : 0.4);
   const noBall = releaseError > 0.12;
 
-  // Accuracy scatter (metres) grows with poor timing, lower skill, less assist.
-  const baseErr = (0.08 + 0.22 * (1 - skill)) * (1.25 - 0.25 * assist);
-  const errSd = baseErr + 0.9 * timingPenalty;
+  // Accuracy: the ball pitches where it was aimed (the bowling target on the pitch). A good bowler with a
+  // well-timed release hits the middle of it; less skill, less assist and poor timing spread it (an early
+  // release a touch fuller, a late one dragged a touch shorter), but never off the target - see TARGET_SPREAD.
+  const baseErr = (0.03 + 0.06 * (1 - skill)) * (1.2 - 0.2 * assist);
+  const side = releaseError < 0 ? -1 : 1;
   // A preview (aiming guide) shows the intended ball: no scatter, no seam.
-  const lineErr = opts.preview ? 0 : rng.gauss() * errSd * 0.8;
-  const lenErr = opts.preview ? 0 : rng.gauss() * errSd * 1.6 + (releaseError < 0 ? -1 : 1) * timingPenalty * 1.2;
+  const lineErr = opts.preview ? 0 : clamp(rng.gauss() * (baseErr + 0.12 * timingPenalty), -TARGET_SPREAD.line, TARGET_SPREAD.line);
+  const lenErr = opts.preview ? 0 : clamp(rng.gauss() * (2 * baseErr + 0.25 * timingPenalty) + side * 0.35 * timingPenalty, -TARGET_SPREAD.length, TARGET_SPREAD.length);
   if (opts.preview) seam = 0;
 
   length = clamp(length + lenErr, -3, 16);
@@ -261,6 +275,12 @@ export function planDelivery(
     reverse,
   };
 }
+
+/**
+ * The furthest a delivery pitches from where it was aimed (metres across and along the pitch): inside the bowling
+ * target drawn on the pitch, however the release was timed.
+ */
+export const TARGET_SPREAD = { line: 0.45, length: 1.0 } as const;
 
 /** Handy default intent for a style. */
 export function defaultIntent(style: BowlStyle): BowlIntent {

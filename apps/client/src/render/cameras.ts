@@ -32,8 +32,9 @@ export class CameraDirector {
     const dir = new THREE.Vector3(ballVel.x, 0, ballVel.z);
     if (dir.lengthSq() < 1e-4) dir.set(0, 0, -1);
     dir.normalize();
-    // Sit high behind the striker for shots down the ground; behind the bowler for shots behind square.
-    this.followFrom.set(-dir.x * 26, 20, dir.z < 0.3 ? 34 : -34);
+    // A wide shot from high in the stand, like the TV cut after a hit: behind the striker for shots
+    // down the ground, behind the bowler for shots behind square, a little to the other side of the ball.
+    this.followFrom.set(-dir.x * 30, 24, dir.z < 0.3 ? 40 : -40);
   }
 
   /** Jump straight to the next framing (a cut rather than a camera move). */
@@ -62,6 +63,14 @@ export class CameraDirector {
         look = new THREE.Vector3(0, 0.2, 8.5);
         fov = 40;
         ease = 4;
+        break;
+      case 'broadcast':
+        // The main TV camera: high in the stand behind the bowler, on a long lens down the pitch.
+        // The batter is framed in the middle; the bowler runs in from the bottom of the picture.
+        pos = new THREE.Vector3(0, 8, -46);
+        look = new THREE.Vector3(0, 1, 7.2);
+        fov = 12.5;
+        ease = 3;
         break;
       case 'follow': {
         pos = this.followFrom.clone();

@@ -440,6 +440,30 @@ export class Sfx {
     if (kind === 'six' || kind === 'win') this.burst(7000, 0.7, 1.6, 0.18, 'highpass', { at: beat, bus: 'music', attack: 0.005, send: 0.4 }); // cymbal
   }
 
+  /**
+   * A short, stately original tune for the line-up before the match (about 13 s): a brass melody over soft
+   * string chords, with a timpani roll at the start and at the close. It is not any country's anthem.
+   */
+  anthem(): void {
+    if (!this.ctx || this.ambientOnly) return;
+    const beat = 1; // 60 bpm
+    const melody: [number, number, number][] = [
+      [0, 72, 1], [1, 74, 1], [2, 76, 2], [4, 77, 1], [5, 76, 1], [6, 74, 2],
+      [8, 72, 1], [9, 76, 1], [10, 74, 1.5], [11.5, 72, 1.5],
+    ];
+    const chords: [number, number[], number][] = [
+      [0, [48, 52, 55], 2], [2, [53, 57, 60], 2], [4, [55, 59, 62], 2], [6, [57, 60, 64], 2],
+      [8, [53, 57, 60], 2], [10, [55, 59, 62], 1.5], [11.5, [48, 52, 55, 60], 1.5],
+    ];
+    for (const [at, note, len] of melody) {
+      for (const det of [1, 1.005]) this.tone(midi(note) * det, len * beat * 0.97, 0.07, 'sawtooth', { at: at * beat, bus: 'music', attack: 0.08, filter: 2200, send: 0.45 });
+    }
+    for (const [at, notes, len] of chords) {
+      for (const n of notes) this.tone(midi(n), len * beat, 0.05, 'triangle', { at: at * beat, bus: 'music', attack: 0.25, send: 0.5 });
+    }
+    for (const at of [0, 0.15, 0.3, 11.5, 11.65, 11.8]) this.drum(at * beat, at === 0 || at === 11.8);
+  }
+
   ui(): void {
     this.tone(880, 0.05, 0.15, 'triangle');
   }

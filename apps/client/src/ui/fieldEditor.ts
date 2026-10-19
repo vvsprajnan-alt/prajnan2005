@@ -77,8 +77,10 @@ export function fieldEditor(m: CricketMatch, onDone: (r: FieldEditorResult | nul
     working.spots.forEach((spot, i) => {
       const w = spotToWorld(spot, hand);
       const p = toSvg(w.x, w.z);
-      const c = svg('circle', { cx: p.x, cy: p.y, r: 2.4, fill: '#ffb627', stroke: '#1b1300', 'stroke-width': 0.5, class: 'fielder-dot', 'data-i': i, tabindex: 0 });
-      g.append(c, label(p.x, p.y + 5, spot.name, 2.6));
+      const sel = i === selected;
+      if (sel) g.append(svg('circle', { cx: p.x, cy: p.y, r: 4.6, fill: 'none', stroke: '#fff', 'stroke-width': 0.7, 'stroke-dasharray': '1.5 1' }));
+      const c = svg('circle', { cx: p.x, cy: p.y, r: sel ? 3 : 2.4, fill: sel ? '#fff' : '#ffb627', stroke: '#1b1300', 'stroke-width': 0.5, class: 'fielder-dot', 'data-i': i, tabindex: 0 });
+      g.append(c, label(p.x, p.y + 5, spot.name, 2.6, sel ? '#ffd27a' : '#fff'));
     });
     const c = checkField(working.spots, maxOut);
     const over = c.outside > maxOut;
@@ -88,23 +90,16 @@ export function fieldEditor(m: CricketMatch, onDone: (r: FieldEditorResult | nul
     presetButtons.querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.id === (presetId ?? (autoOn ? 'auto' : ''))));
   };
 
-  // Dragging.
+  // Tap a fielder to pick them, then tap where they should go - or drag them there.
   let dragging = -1;
+  let selected = -1;
   const pt = (e: PointerEvent) => {
     const rect = root.getBoundingClientRect();
     const sx = ((e.clientX - rect.left) / rect.width) * 2 * R - R;
     const sy = ((e.clientY - rect.top) / rect.height) * 2 * R - R;
     return toWorld(sx, sy);
   };
-  root.addEventListener('pointerdown', (e) => {
-    const t = e.target as Element;
-    if (!t.classList.contains('fielder-dot')) return;
-    dragging = Number(t.getAttribute('data-i'));
-    root.setPointerCapture(e.pointerId);
-  });
-  root.addEventListener('pointermove', (e) => {
-    if (dragging < 0) return;
-    let { x, z } = pt(e);
+  const place = (i: number, x: number, z: number) => {
     const rr = Math.hypot(x, z);
     if (rr > BOUNDARY_RADIUS - 4) {
       x *= (BOUNDARY_RADIUS - 4) / rr;
@@ -114,10 +109,40 @@ export function fieldEditor(m: CricketMatch, onDone: (r: FieldEditorResult | nul
     if (Math.abs(x) < 2 && Math.abs(z) < 12) x = x < 0 ? -2 : 2;
     const spot: FieldSpot = worldToSpot('', { x, z }, hand);
     spot.name = describeSpot(spot.angle, spot.dist);
-    working.spots[dragging] = spot;
+    working.spots[i] = spot;
     working = { ...working, id: 'custom', name: 'Custom' };
     presetId = null;
     autoOn = false;
+  };
+  /** The fielder under (or within a few metres of) a point - fingers are bigger than the dots. */
+  const nearest = (x: number, z: number) => {
+    let best = -1;
+    let bestD = 6;
+    working.spots.forEach((spot, i) => {
+      const w = spotToWorld(spot, hand);
+      const d = Math.hypot(w.x - x, w.z - z);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+  root.addEventListener('pointerdown', (e) => {
+    const { x, z } = pt(e);
+    const hit = nearest(x, z);
+    if (hit >= 0) {
+      selected = dragging = hit;
+      root.setPointerCapture(e.pointerId);
+    } else if (selected >= 0) {
+      place(selected, x, z);
+    }
+    render();
+  });
+  root.addEventListener('pointermove', (e) => {
+    if (dragging < 0) return;
+    const { x, z } = pt(e);
+    place(dragging, x, z);
     render();
   });
   const end = () => (dragging = -1);
@@ -134,7 +159,7 @@ export function fieldEditor(m: CricketMatch, onDone: (r: FieldEditorResult | nul
   render();
   return h('div', { class: 'menu-card field-editor' },
     h('div', { class: 'brand' }, h('h1', { style: 'font-size:32px' }, `Set the field · ${kind === 'pace' ? 'Pace' : 'Spin'}`)),
-    h('p', { class: 'muted' }, `Drag fielders to move them. Batter: ${m.strikerDef.name} (${hand === 'R' ? 'right' : 'left'}-handed).`),
+    h('p', { class: 'muted' }, `Tap a fielder, then tap where you want them (or drag them). Batter: ${m.strikerDef.name} (${hand === 'R' ? 'right' : 'left'}-handed).`),
     presetButtons,
     h('div', { class: 'field-wrap' }, root as unknown as HTMLElement),
     status,

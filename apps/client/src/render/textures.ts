@@ -108,6 +108,57 @@ export function adBoardTexture(): THREE.CanvasTexture {
   return t;
 }
 
+/** Roof cladding: one panel with a rib along its edge and a darker gutter line; repeats round the canopy. */
+export function roofTexture(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(64, 128);
+  const g = ctx.createLinearGradient(0, 0, 0, 128);
+  g.addColorStop(0, '#e9edf2');
+  g.addColorStop(1, '#c9cfd8');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 128);
+  ctx.fillStyle = '#9aa2ae';
+  ctx.fillRect(0, 0, 4, 128);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillRect(4, 0, 2, 128);
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  for (let y = 16; y < 128; y += 32) ctx.fillRect(0, y, 64, 2);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** A sight screen's face: vertical slats with thin shadowed joins (white by day, black at night). */
+export function slatTexture(night: boolean): THREE.CanvasTexture {
+  const [c, ctx] = canvas(256, 64);
+  ctx.fillStyle = night ? '#0b0b0c' : '#f2f2f2';
+  ctx.fillRect(0, 0, 256, 64);
+  ctx.fillStyle = night ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.09)';
+  for (let x = 0; x < 256; x += 16) ctx.fillRect(x, 0, 2, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/** A logo painted on the outfield grass: pale lettering in a ring, on a transparent background. */
+export function grassLogoTexture(text: string): THREE.CanvasTexture {
+  const [c, ctx] = canvas(1024, 256);
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.roundRect(14, 14, 996, 228, 110);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = 'bold 128px Arial Black, Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 512, 136, 900);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 /** Soft round sprite used for glows and the ball shadow. */
 export function radialTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,0)'): THREE.CanvasTexture {
   const [c, ctx] = canvas(64, 64);
@@ -145,41 +196,120 @@ export function makeScreen(): { tex: THREE.CanvasTexture; draw: (lines: string[]
 }
 
 /**
- * Seating for the stepped stand. `rows` gives each profile segment (in lathe v
- * order) as a tread (seats), riser (concrete) or other; sections alternate
- * seat colours round the ground with dark aisles between them.
+ * The stepped stand, painted with a packed crowd. `rows` gives each profile segment (in lathe v order) as a tread,
+ * a riser or other. The texture covers two blocks of seats, each with a stairway down one side, and repeats round
+ * the ground. On each tread most seats are taken: the fan's legs on the tread and their body and head against the
+ * riser behind (and the bottom of the tread above); empty seats show their seat and back. Fans of one side sit
+ * together in one block, the other side's in the next. The outside wall ('facade') is bands of glazing between
+ * concrete floors, behind vertical fins. `draw` repaints it in the two teams' colours.
  */
-export function seatTexture(rows: ('tread' | 'riser' | 'other')[], night: boolean): THREE.CanvasTexture {
+export function standTexture(rows: ('tread' | 'riser' | 'other' | 'facade')[], night: boolean, blockSeats: number, aisleSeats: number, shirt: (seed: number, home: string, away: string) => string): { tex: THREE.CanvasTexture; draw: (home: string, away: string) => void } {
+  const S = 24;
   const W = 2048;
-  const H = rows.length * 8;
+  const H = rows.length * S;
   const [c, ctx] = canvas(W, H);
-  const sections = 32;
-  const seatColors = ['#1f4f8f', '#23676b', '#1f4f8f', '#8a3a2c'];
-  const concrete = night ? '#4a505c' : '#9aa1ad';
-  rows.forEach((kind, j) => {
-    const y = H - (j + 1) * 8; // canvas y grows down; lathe v grows up the profile
-    if (kind === 'tread') {
-      for (let s = 0; s < sections; s++) {
-        const x0 = (s / sections) * W;
-        const w = W / sections;
-        ctx.fillStyle = seatColors[s % seatColors.length]!;
-        ctx.fillRect(x0, y, w, 8);
-        // Individual seat backs.
-        ctx.fillStyle = 'rgba(0,0,0,0.25)';
-        for (let k = 0; k < w; k += 6) ctx.fillRect(x0 + k, y, 1, 8);
-        // Aisle.
-        ctx.fillStyle = concrete;
-        ctx.fillRect(x0, y, w * 0.06, 8);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  const dim = night ? 0.62 : 1;
+  const shade = (hex: string, k: number) => {
+    const col = new THREE.Color(hex).multiplyScalar(k * dim);
+    return `#${col.getHexString()}`;
+  };
+  const seatColors = ['#1f4f8f', '#23676b'];
+  const concrete = shade('#9aa1ad', 1);
+  const cols = 2 * (blockSeats + aisleSeats);
+  const colW = W / cols;
+  const yOf = (j: number) => H - (j + 1) * S; // canvas y grows down; lathe v grows up the profile
+  const draw = (home: string, away: string) => {
+    let sd = 1234567;
+    const rnd = () => {
+      sd = (sd * 16807) % 2147483647;
+      return sd / 2147483647;
+    };
+    // Backgrounds: concrete risers and trims, seats on the treads, stairways at the side of each block.
+    rows.forEach((kind, j) => {
+      const y = yOf(j);
+      ctx.fillStyle = kind === 'tread' ? shade('#7d8592', 1) : kind === 'riser' ? concrete : shade('#8a93a3', 1);
+      ctx.fillRect(0, y, W, S);
+      if (kind === 'facade') {
+        // The whole outside wall is this one segment, 38 m tall: the drawing is squeezed into its S pixels.
+        for (let f = 0; f < 6; f++) {
+          ctx.fillStyle = night ? 'rgba(255,214,140,0.55)' : 'rgba(40,60,82,0.85)';
+          ctx.fillRect(0, y + (f / 6) * S + 1, W, (S / 6) * 0.55);
+        }
+        ctx.fillStyle = shade('#cfd4db', 1);
+        for (let x = 0; x < W; x += W / 24) ctx.fillRect(x, y, 6, S);
       }
-    } else {
-      ctx.fillStyle = kind === 'riser' ? concrete : night ? '#3a4150' : '#8a93a3';
-      ctx.fillRect(0, y, W, 8);
+    });
+    const people: { x: number; j: number; col: string; skin: string; hair: string; cap: string | null }[] = [];
+    rows.forEach((kind, j) => {
+      if (kind !== 'tread') return;
+      const y = yOf(j);
+      for (let b = 0; b < 2; b++) {
+        const bx = b * (blockSeats + aisleSeats) * colW;
+        // Stairway: lighter concrete with a nosing line on each step.
+        ctx.fillStyle = shade('#b4bac4', 1);
+        ctx.fillRect(bx, y, aisleSeats * colW, S);
+        ctx.fillStyle = shade('#e3c22f', 0.9);
+        ctx.fillRect(bx, y + S - 3, aisleSeats * colW, 2);
+        for (let k = 0; k < blockSeats; k++) {
+          const x = bx + (aisleSeats + k) * colW;
+          const seat = seatColors[b]!;
+          ctx.fillStyle = shade(seat, 0.8);
+          ctx.fillRect(x + 2, y + S * 0.35, colW - 4, S * 0.65);
+          const taken = rnd() < 0.9;
+          const r = rnd();
+          if (taken) {
+            // Lean the block to one side: a third of its seats certainly that side's, the rest a mix.
+            const seed = rnd() < 0.35 ? (b === 0 ? r * 0.38 : 0.38 + r * 0.38) : r;
+            const skinK = rnd();
+            const skin = `rgb(${Math.round(242 - 165 * skinK)},${Math.round(189 - 143 * skinK)},${Math.round(145 - 117 * skinK)})`;
+            const hr = rnd();
+            const hair = hr < 0.72 ? '#14100c' : hr < 0.9 ? '#4a2c16' : '#9c7a48';
+            const capR = rnd();
+            people.push({ x: x + colW / 2, j, col: shade(shirt(seed, home, away), 0.62 + 0.38 * rnd()), skin: shade(skin, 0.9), hair: shade(hair, 1), cap: capR > 0.78 ? (capR > 0.9 ? shade('#eeeeee', 1) : shade(home, 0.9)) : null });
+            // Legs (trousers) on the tread.
+            ctx.fillStyle = shade(['#22304a', '#141416', '#857256', '#4f555e'][Math.floor(rnd() * 4)]!, 1);
+            ctx.fillRect(x + colW * 0.24, y + S * 0.1, colW * 0.52, S * 0.9);
+          } else {
+            // An empty seat: its back against the riser behind.
+            people.push({ x: x + colW / 2, j: -j - 1, col: shade(seat, 1.1), skin: '', hair: '', cap: null });
+          }
+        }
+      }
+    });
+    // Bodies and heads, against the riser behind each tread and into the bottom of the tread above.
+    for (const p of people) {
+      if (p.j < 0) {
+        const y = yOf(-p.j - 1 + 1);
+        ctx.fillStyle = p.col;
+        ctx.fillRect(p.x - colW * 0.4, y + S * 0.45, colW * 0.8, S * 0.55);
+        continue;
+      }
+      const y = yOf(p.j + 1); // the riser
+      const w = colW;
+      ctx.fillStyle = p.col;
+      ctx.beginPath();
+      ctx.roundRect(p.x - w * 0.34, y + S * 0.18, w * 0.68, S * 0.82, [w * 0.18, w * 0.18, 0, 0]);
+      ctx.fill();
+      // Arms a shade darker at the sides, with hands resting forward.
+      ctx.fillStyle = 'rgba(0,0,0,0.22)';
+      ctx.fillRect(p.x - w * 0.34, y + S * 0.3, w * 0.1, S * 0.7);
+      ctx.fillRect(p.x + w * 0.24, y + S * 0.3, w * 0.1, S * 0.7);
+      ctx.fillStyle = p.skin;
+      ctx.beginPath();
+      ctx.ellipse(p.x, y - S * 0.05, w * 0.17, S * 0.24, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = p.cap ?? p.hair;
+      ctx.beginPath();
+      ctx.ellipse(p.x, y - S * 0.12, w * 0.18, S * 0.19, 0, Math.PI, Math.PI * 2);
+      ctx.fill();
     }
-  });
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = THREE.RepeatWrapping;
-  return t;
+    tex.needsUpdate = true;
+  };
+  draw('#0f4c81', '#7a1f2b');
+  return { tex, draw };
 }
 
 /** Floodlight lamp bank: a grid of bright lamps. */

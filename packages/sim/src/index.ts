@@ -6,6 +6,7 @@ export * from './physics/surface';
 export * from './physics/solver';
 export * from './data/players';
 export * from './data/teams';
+export * from './data/nations';
 export * from './bowling/delivery';
 export * from './batting/shots';
 export * from './rules/config';

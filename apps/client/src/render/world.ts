@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { MatchSnapshot, STROKES, Stroke, TeamDef } from '@crease/sim';
+import { MatchSnapshot, STRIKER_STUMPS_Z, STROKES, Stroke, TeamDef } from '@crease/sim';
 import { QUALITY, Settings } from '../settings';
 import { BallView } from './ballView';
 import { CameraDirector } from './cameras';
@@ -7,13 +7,12 @@ import { Cricketer, UMPIRE_KIT, kitFor } from './players';
 import { Stadium, animateStumps, buildStadium } from './stadium';
 import { TrackingView } from './tracking';
 
-export type UmpireSignal = 'out' | 'four' | 'six' | 'wide' | 'noBall' | 'bye' | 'notOut';
+export type UmpireSignal = 'out' | 'four' | 'six' | 'wide' | 'noBall' | 'bye' | 'legBye' | 'notOut' | 'revoke';
 
 /**
  * Owns the three.js renderer and scene, and turns simulation snapshots into
  * pictures. Holds no game logic.
  */
-const PREVIEW_DOTS = 80;
 
 export class World {
   readonly renderer: THREE.WebGLRenderer;
@@ -23,26 +22,33 @@ export class World {
   readonly ball: BallView;
   private batters: Cricketer[] = [];
   private bowler: Cricketer | null = null;
+  /** The bowler's style and arm (for the action, and to mirror a left-armer). */
+  private bowlerStyle: string | undefined;
+  private bowlerArm: 'L' | 'R' = 'R';
   private fielders: Cricketer[] = [];
   private umpires: Cricketer[] = [];
   private rosterKey = '';
   private excitement = 0;
   private stumpsBrokenAt: { S: number | null; B: number | null } = { S: null, B: null };
-  private preview: THREE.InstancedMesh;
   private cue: THREE.Mesh;
   readonly tracking = new TrackingView();
   private controlRing: THREE.Mesh;
   private landingMark: THREE.Mesh;
-  private signal: { kind: UmpireSignal; at: number } | null = null;
+  /** Signals queued for the bowler's-end umpire (the latest one due is shown). */
+  private signals: { kind: UmpireSignal; at: number }[] = [];
   /** Presentation-only reactions (celebrations, dejection) keyed by actor. */
   private reactions = new Map<string, { anim: string; from: number; until: number }>();
   private lastPos = new Map<string, { x: number; z: number; v: number }>();
   private cast = new Map<string, Cricketer>();
+  private playerDetail: number;
   private batterIds: string[] = [];
   private fielderPlayers: number[] = [];
 
   constructor(canvas: HTMLCanvasElement, settings: Settings) {
     const q = QUALITY[settings.quality];
+    // Phones and tablets keep the detailed players (faces, fingers) to the near ones.
+    const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    this.playerDetail = touch ? Math.min(q.playerDetail, 20) : q.playerDetail;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: q.antialias, powerPreference: 'high-performance' });
     this.basePixelRatio = Math.min(window.devicePixelRatio || 1, q.pixelRatio);
     this.renderer.setPixelRatio(this.basePixelRatio);
@@ -61,15 +67,6 @@ export class World {
       this.umpires.push(u);
       this.scene.add(u.root);
     }
-    // Bowling guide: predicted path of the delivery, drawn as a trail of glowing dots.
-    this.preview = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.05, 8, 6),
-      new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.9, depthWrite: false }),
-      PREVIEW_DOTS,
-    );
-    this.preview.frustumCulled = false;
-    this.preview.visible = false;
-    this.scene.add(this.preview);
     // Batting cue: a ring at the contact point that closes as the moment to play arrives.
     this.cue = new THREE.Mesh(
       new THREE.RingGeometry(0.16, 0.2, 40),
@@ -95,33 +92,6 @@ export class World {
     this.scene.add(this.controlRing, this.landingMark);
     this.resize();
     window.addEventListener('resize', () => this.resize());
-  }
-
-  setPathPreview(points: { x: number; y: number; z: number }[] | null): void {
-    if (!points || points.length < 2) {
-      this.preview.visible = false;
-      return;
-    }
-    // Resample to evenly spaced dots.
-    const m = new THREE.Matrix4();
-    let n = 0;
-    let carry = 0;
-    for (let i = 1; i < points.length && n < PREVIEW_DOTS; i++) {
-      const a = points[i - 1]!;
-      const b = points[i]!;
-      const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-      let d = carry;
-      while (d < seg && n < PREVIEW_DOTS) {
-        const t = d / seg;
-        m.makeTranslation(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
-        this.preview.setMatrixAt(n++, m);
-        d += 0.45;
-      }
-      carry = d - seg;
-    }
-    this.preview.count = n;
-    this.preview.instanceMatrix.needsUpdate = true;
-    this.preview.visible = true;
   }
 
   /** `k` = 1 far from the moment to play, 0 = play now. */
@@ -181,19 +151,24 @@ export class World {
     for (const r of [...this.batters, ...this.fielders]) this.scene.remove(r.root);
     if (this.bowler) this.scene.remove(this.bowler.root);
     this.lastPos.clear();
+    this.headings.clear();
     this.reactions.clear();
     // Characters are cached: building a skinned rig is not free and rosters change every over.
     const get = (team: TeamDef, id: string, role: 'batter' | 'bowler' | 'keeper' | 'fielder') => {
       const k = `${team.id}|${id}|${role}`;
       let c = this.cast.get(k);
       if (!c) {
-        c = new Cricketer(kitFor(team.colors, id, role), this.renderer.shadowMap.enabled);
+        const name = team.players.find((p) => p.id === id)?.name;
+        c = new Cricketer(kitFor(team.colors, id, role, { name, team: team.shortName }), this.renderer.shadowMap.enabled);
         this.cast.set(k, c);
       }
       return c;
     };
     this.batters = batterIds.map((id) => get(batting, id, 'batter'));
     this.bowler = get(bowling, bowlerId, 'bowler');
+    const bdef = bowling.players.find((p) => p.id === bowlerId);
+    this.bowlerStyle = bdef?.bowlStyle;
+    this.bowlerArm = bdef?.bowlArm === 'L' ? 'L' : 'R';
     this.fielders = fielderIds.map((id, i) => get(bowling, id, i === 0 ? 'keeper' : 'fielder'));
     for (const r of [...this.batters, this.bowler, ...this.fielders]) this.scene.add(r.root);
   }
@@ -222,6 +197,22 @@ export class World {
     return busy ? { anim, t } : { anim: r.anim, t: time - r.from };
   }
 
+  private headings = new Map<string, number>();
+
+  /** Turn an actor towards a new heading quickly rather than snapping round. */
+  private smoothHeading(key: string, target: number, dt: number): number {
+    const prev = this.headings.get(key);
+    if (prev === undefined || dt <= 0) {
+      this.headings.set(key, target);
+      return target;
+    }
+    let d = target - prev;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    const h = Math.abs(d) < 1e-3 ? target : prev + d * Math.min(1, dt * 14);
+    this.headings.set(key, h);
+    return h;
+  }
+
   /** Ground speed of an actor from its position change (smoothed). */
   private speedOf(key: string, x: number, z: number, dt: number): number {
     const prev = this.lastPos.get(key);
@@ -235,13 +226,13 @@ export class World {
     return v;
   }
 
-  /** The bowler's-end umpire signals a decision. */
+  /** The bowler's-end umpire signals a decision (at `time`, which may be a moment from now). */
   umpireSignal(kind: UmpireSignal, time: number): void {
-    this.signal = { kind, at: time };
+    this.signals = this.signals.filter((g) => g.at < time).concat({ kind, at: time });
   }
 
   clearSignal(): void {
-    this.signal = null;
+    this.signals = [];
   }
 
   /** Stumps state as of `time` (used when a replay ends). */
@@ -265,6 +256,16 @@ export class World {
     this.excitement = Math.max(this.excitement, level);
   }
 
+  /** Show or hide the match players, umpires and ball (hidden while the toss is played out). */
+  setActorsVisible(on: boolean): void {
+    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.root.visible = on;
+    this.ball.group.visible = on;
+    if (!on) {
+      this.stadium.marker.visible = false;
+      this.stadium.lengthGuide.visible = false;
+    }
+  }
+
   render(s: MatchSnapshot, dt: number, time: number): void {
     const offS = s.strikerHand === 'R' ? 1 : -1;
     // Batters.
@@ -281,7 +282,9 @@ export class World {
       const heading = stance ? (offS > 0 ? Math.PI / 2 : -Math.PI / 2) : s.striker.heading;
       st.setTransform(s.striker.pos.x, s.striker.pos.z, heading);
       const stroke = (s.swing?.stroke ?? 'straightDrive') as Stroke;
-      st.pose(a.anim, a.t, dt, { speed: Math.max(v, s.striker.anim === 'run' ? 3 : 0), stroke, shotAngle: STROKES[stroke]?.natural ?? 0, look: ballAt });
+      // Backlift: the bat goes up as the bowler reaches the crease and stays up while the ball comes down.
+      const backlift = s.phase === 'runUp' ? Math.max(0, Math.min(1, (s.runUp.t - 0.62) / 0.33)) : s.phase === 'inPlay' && !s.hit && s.ball.pos.z < 9.6 ? 1 : 0;
+      st.pose(a.anim, a.t, dt, { speed: Math.max(v, s.striker.anim === 'run' ? 3 : 0), stroke, shotAngle: STROKES[stroke]?.natural ?? 0, family: s.swing?.family, look: ballAt, backlift });
     }
     if (ns) {
       ns.setMirror(1);
@@ -295,28 +298,43 @@ export class World {
       const v = this.speedOf('bowler', s.bowler.pos.x, s.bowler.pos.z, dt);
       const a = this.animFor('bowler', s.bowler.anim, s.bowler.t, v, time);
       this.bowler.setTransform(s.bowler.pos.x, s.bowler.pos.z, s.bowler.heading);
-      this.bowler.pose(a.anim, a.t, dt, { speed: a.anim === 'runup' ? 4 + 3 * s.bowler.t : Math.max(v, a.anim === 'run' ? 3 : 0), look: ballAt });
+      this.bowler.setMirror(this.bowlerArm === 'L' ? -1 : 1);
+      const toRelease = a.anim === 'runup' ? (1 - s.runUp.t) * s.runUp.duration : undefined;
+      this.bowler.pose(a.anim, a.t, dt, { speed: a.anim === 'runup' ? 4 + 3 * s.bowler.t : Math.max(v, a.anim === 'run' ? 3 : 0), look: ballAt, toRelease, bowlStyle: this.bowlerStyle });
     }
     // Fielders (snapshot excludes the bowler; first is the keeper).
     this.fielderPlayers = s.fielders.map((f) => f.player);
+    // How set the fielders are: easy between balls, crouching as the bowler runs in, set (after a little hop)
+    // as the ball is bowled. The keeper squats as the bowler runs in and rises as the ball comes.
+    const runT = s.phase === 'runUp' ? s.runUp.t : 0;
+    const ready = s.phase === 'runUp' ? Math.max(0, Math.min(1, (runT - 0.35) / 0.5)) : s.phase === 'inPlay' ? 1 : 0;
+    const split = s.phase === 'inPlay' ? Math.min(1, s.phaseTime / 0.3) : 0;
+    const keeperSquat = s.phase === 'runUp' ? Math.max(0, Math.min(1, runT / 0.5)) : s.phase === 'inPlay' ? 1 : 0;
     s.fielders.forEach((f, i) => {
       const r = this.fielders[i];
       if (!r) return;
-      r.setTransform(f.pos.x, f.pos.z, f.heading);
+      r.setTransform(f.pos.x, f.pos.z, this.smoothHeading(`f${i}`, f.heading, dt));
       const v = this.speedOf(`f${i}`, f.pos.x, f.pos.z, dt);
       let anim = f.anim;
       if (f.keeper && anim === 'ready') anim = 'keeper';
       const a = this.animFor(`f${i}`, anim, f.t, v, time);
-      r.pose(a.anim, a.t, dt, { speed: Math.max(v, a.anim === 'run' ? 2 : 0), look: ballAt });
+      const holding = s.ball.held && Math.hypot(s.ball.pos.x - f.pos.x, s.ball.pos.z - f.pos.z) < 1;
+      const close = !f.keeper && Math.hypot(f.pos.x, f.pos.z - STRIKER_STUMPS_Z) < 14;
+      r.pose(a.anim, a.t, dt, { speed: Math.max(v, a.anim === 'run' ? 2 : 0), look: ballAt, ready: f.keeper ? keeperSquat : ready, split, close, holding });
     });
     // Umpires: bowler's end and square leg.
     // Stand wide of the bowler's approach so the bowling camera has a clear view.
     const armSide = s.bowler.pos.x >= 0 ? 1 : -1;
     this.umpires[0]!.setTransform(-1.5 * armSide, -12.2, 0);
-    const sig = this.signal && time - this.signal.at < 2.6 ? this.signal : null;
-    this.umpires[0]!.pose(sig ? `signal-${sig.kind}` : 'umpire', sig ? time - sig.at : 0, dt, { look: ballAt });
+    // The latest signal that is due (each lasts its own length), otherwise the umpire's stance through the ball.
+    let sig: { kind: UmpireSignal; at: number } | null = null;
+    for (const g of this.signals) if (g.at <= time && time - g.at < (g.kind === 'six' ? 2.8 : 2.6)) sig = g;
+    this.signals = this.signals.filter((g) => time - g.at < 3);
+    const counter = s.phase === 'dead' ? Math.max(0, Math.min(1, (s.phaseTime - 0.9) / 0.7)) : 0;
+    const umpSplit = s.phase === 'inPlay' ? Math.min(1, s.phaseTime / 0.6) : 0;
+    this.umpires[0]!.pose(sig ? `signal-${sig.kind}` : 'umpire', sig ? time - sig.at : 0, dt, { look: ballAt, ready: s.phase === 'runUp' ? Math.max(0, Math.min(1, (runT - 0.5) / 0.4)) : s.phase === 'inPlay' ? 1 - Math.min(1, Math.max(0, (s.phaseTime - 0.8) / 0.8)) : 0, split: umpSplit, counter });
     this.umpires[1]!.setTransform(-24 * offS, 10.5, offS > 0 ? Math.PI / 2 : -Math.PI / 2);
-    this.umpires[1]!.pose('umpire', 0, dt, { look: ballAt });
+    this.umpires[1]!.pose('umpireLeg', 0, dt, { look: ballAt, ready });
 
     // Stumps.
     for (const end of ['S', 'B'] as const) {
@@ -326,6 +344,22 @@ export class World {
 
     // Ball.
     const bp = new THREE.Vector3(s.ball.pos.x, s.ball.pos.y, s.ball.pos.z);
+    // Before it is bowled the ball is in the bowler's hand, going round with the arm; a fielder holding it has
+    // it in their throwing hand.
+    if ((s.phase === 'runUp' || s.phase === 'preDelivery') && this.bowler) this.bowler.handBall(bp);
+    else if (s.ball.held) {
+      let best: Cricketer | null = null;
+      let bd = 1.2;
+      s.fielders.forEach((f, i) => {
+        const d = Math.hypot(s.ball.pos.x - f.pos.x, s.ball.pos.z - f.pos.z);
+        if (d < bd && this.fielders[i]) {
+          bd = d;
+          best = this.fielders[i]!;
+        }
+      });
+      if (this.bowler && Math.hypot(s.ball.pos.x - s.bowler.pos.x, s.ball.pos.z - s.bowler.pos.z) < bd) best = this.bowler;
+      if (best) (best as Cricketer).handBall(bp);
+    }
     const fast = Math.hypot(s.ball.vel.x, s.ball.vel.y, s.ball.vel.z) > 12 && !s.ball.held;
     this.ball.update(bp, s.ball.visible, fast, this.cams.camera.position.distanceTo(bp), time);
 
@@ -346,7 +380,7 @@ export class World {
 
     // Level of detail for every character from the last frame's camera position.
     const camPos = this.cams.camera.position;
-    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.setDistance(c.root.position.distanceTo(camPos));
+    for (const c of [...this.batters, ...this.fielders, ...this.umpires, ...(this.bowler ? [this.bowler] : [])]) c.setDistance(c.root.position.distanceTo(camPos), this.playerDetail);
 
     // Crowd and camera.
     this.excitement *= Math.exp(-0.5 * dt);

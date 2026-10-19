@@ -3,34 +3,32 @@ import {
   BowlIntent,
   CricketMatch,
   DT,
-  LENGTHS,
   MatchConfig,
   MatchEvent,
   MatchHost,
   REVIEW_WINDOW,
-  Rng,
   STRIKER_STUMPS_Z,
   STROKES,
   SWING_TIME,
-  ShotFamily,
   VARIATION_LABEL,
   Variation,
   defaultIntent,
   lengthToZ,
   lineToX,
-  planDelivery,
-  predictTrajectory,
   timingWindows,
   variationsFor,
 } from '@crease/sim';
 import { Sfx } from '../audio/sfx';
 import { Action, Input } from '../input/input';
 import { World } from '../render/world';
+import type { CamMode } from '../render/cameras';
 import { ASSIST_LEVEL, Settings } from '../settings';
 import { Hud, HudMode } from '../ui/hud';
 import { describeBall } from '../ui/commentary';
 import { BallRecorder, ReplayFrame, ReplayInfo, ReplayShot, frameAt, planReplay } from './replay';
 import { LocalDriver, MatchDriver } from './driver';
+import { BowlStage, chooseVariation, confirmAim, moveTarget } from './bowlFlow';
+import { ADVANCE_IDEAL_Z, SHOT_LABEL, ShotType, advanceError, advanceSwingDue } from './battingFlow';
 import { QUICK_CHAT } from '@crease/net';
 
 export interface SessionCallbacks {
@@ -44,10 +42,10 @@ export interface SessionCallbacks {
 }
 
 /** Short hints for touch screens (the buttons carry their own labels). */
-function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean): string {
-  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Drag the pad to aim · tap a shot as the ball arrives';
+function touchHint(mode: HudMode, phase: string, fielding: 'holding' | 'chasing' | null, autoRun: boolean, stage: BowlStage): string {
+  if (mode === 'batting') return phase === 'inPlay' ? (autoRun ? '' : 'Tap Run, Stay or Back') : 'Pick Push, Stroke or Loft · drag to aim · Front foot or Back foot as the ball arrives (Advanced as it is bowled)';
   if (fielding) return fielding === 'holding' ? 'Tap a throw, or drag to run it in' : 'Drag the pad to run · Dive · Catch';
-  if (phase === 'preDelivery') return 'Drag to move the marker · pick a delivery · tap Bowl';
+  if (phase === 'preDelivery') return stage === 'aim' ? 'Move the target with the joystick · tap OK' : 'Choose a delivery · tap Bowl';
   if (phase === 'runUp') return 'Tap Release in the green zone';
   return '';
 }
@@ -75,17 +73,23 @@ export class GameSession {
   paused = false;
   private intent: BowlIntent;
   private intentBowler = -1;
+  /** Bowling before the run-up: place the target and press OK, then choose the delivery (it starts again every ball). */
+  private bowlStage: BowlStage = 'aim';
+  private stageKey = '';
+  /** The length set with OK, for going back to after a yorker or bouncer is swapped out. */
+  private aimedLength: number | null = null;
   private lastAim = '';
   private followUntil = 0;
   private cutUntil = 0;
   private lastCall: string | null = null;
+  /** An Advanced press waiting to play its shot: when it was pressed, and when it should have been (once known). */
+  private advance: { pressedAt: number; ideal: number | null } | null = null;
   private breakShownFor = -1;
   private trackUntil = 0;
   private completeShown = false;
   private disposed = false;
   private screenKey = '';
   private pickerFor = '';
-  private previewKey = '';
   /** Snapshots of the current and last delivery, for replays. */
   readonly recorder = new BallRecorder();
   private replay: { frames: ReplayFrame[]; shots: ReplayShot[]; shot: number; t: number; simElapsed: number; down: { S: boolean; B: boolean } } | null = null;
@@ -146,9 +150,25 @@ export class GameSession {
     return this.match.inn.battingTeam === this.humanTeam ? 'batting' : 'bowling';
   }
 
+  /** Before and during the delivery: the TV view from behind the bowler (or, by choice, behind the batter / bowler). */
   private preBallCam() {
     const mode = this.mode();
+    if (this.settings.camera !== 'behind') return 'broadcast';
     return mode === 'batting' ? 'batting' : mode === 'bowling' ? 'bowling' : 'broadcast';
+  }
+
+  /** Batting aim from the stick, as on screen: in the TV view the batter faces the camera, so straight is down the screen. */
+  private shotAim(): { x: number; y: number } {
+    const d = this.input.dir();
+    return this.settings.camera !== 'behind' ? { x: -d.x, y: -d.y } : d;
+  }
+
+  /** Switch camera; following the hit and coming back from it are cuts, as on TV. */
+  private setCam(mode: CamMode): void {
+    const cams = this.world.cams;
+    if (cams.mode === mode) return;
+    if (mode === 'follow' || cams.mode === 'follow') cams.cut();
+    cams.mode = mode;
   }
 
   private syncRoster(): void {
@@ -255,42 +275,97 @@ export class GameSession {
         return;
       }
       // Review: U, or the "run" button (Y) while a decision can be challenged.
-      if ((a === 'review' || (a === 'run' && m.phase === 'review')) && m.pendingReview?.team === this.humanTeam) {
+      if ((a === 'review' || ((a === 'run' || a === 'stroke') && m.phase === 'review')) && m.pendingReview?.team === this.humanTeam) {
         this.requestReview();
         return;
       }
     }
     if (mode === 'batting') {
       for (const a of actions) this.battingAction(a);
+      this.advanceShot(m);
     } else if (mode === 'bowling') {
       this.bowlingInput(actions, m);
     }
   }
 
+  /**
+   * Batting in two steps: Push, Stroke or Loft picks the kind of shot (it stays picked); then, with the ball on its
+   * way, Front foot or Back foot plays it (timed as the ball arrives), Advanced steps down the pitch and plays it
+   * (timed as the ball leaves the hand), or Leave lets it go. The stroke itself follows the aim and the ball.
+   */
   private battingAction(a: Action): void {
-    const fam: Partial<Record<Action, ShotFamily>> = { primary: 'ground', lofted: 'lofted', defend: 'defend', sweep: 'sweep', reverseSweep: 'reverseSweep' };
-    const f = fam[a];
+    const pick: Partial<Record<Action, ShotType>> = { defend: 'defend', stroke: 'ground', lofted: 'lofted' };
     const m = this.match;
-    if (f) {
-      if (m.phase === 'inPlay' && !m.swing && !m.batContact) {
-        if (!this.can('striker')) return;
-        const d = this.input.dir();
-        this.send({ type: 'bat.shot', shot: { family: f, aimX: d.x, aimY: d.y, footwork: this.input.footwork() }, at: m.tick });
-      } else if (m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact) && a === 'primary') {
-        // Space doubles as "run" once the ball is in the field.
-        this.send({ type: 'run.call', call: 'run' });
-        this.lastCall = 'run';
-      }
+    const beforeTheBall = (m.phase === 'preDelivery' || m.phase === 'runUp' || m.phase === 'inPlay') && !m.swing && !m.batContact && !m.padContact && !m.passedBatter;
+    const hit = m.phase === 'inPlay' && (m.batContact || m.passedBatter || m.padContact);
+    const p = pick[a];
+    if (p) {
+      if (!hit) this.input.pickedShot = p;
       return;
     }
-    if (a === 'charge') {
-      if (this.can('striker')) this.send({ type: 'bat.charge' });
+    // Space doubles as "run" once the ball is in the field.
+    if (a === 'primary' && hit) {
+      this.send({ type: 'run.call', call: 'run' });
+      this.lastCall = 'run';
+      return;
+    }
+    if ((a === 'primary' || a === 'sweep' || a === 'reverseSweep') && beforeTheBall) {
+      if (m.phase === 'inPlay' && this.can('striker') && !this.advance) this.playShot(a === 'reverseSweep' ? 'back' : 'front');
+      return;
+    }
+    if (a === 'charge' && beforeTheBall && m.phase !== 'preDelivery' && !this.advance && m.leaveTime === null) {
+      if (!this.can('striker')) return;
+      // Too late to get down the pitch (or already there): play it off the front foot where you stand.
+      const canGo = !m.charged && (m.phase === 'runUp' || m.ball.pos.z < -2);
+      if (!canGo) {
+        if (m.phase === 'inPlay') this.playShot('front');
+        return;
+      }
+      this.send({ type: 'bat.charge' });
+      this.advance = { pressedAt: m.time, ideal: m.phase === 'inPlay' ? this.advanceIdeal(m) : null };
+      return;
+    }
+    // Leave: the Leave button, or "Stay" before the ball arrives (D-pad down on a controller).
+    if ((a === 'leave' || a === 'wait') && beforeTheBall && m.phase !== 'preDelivery' && m.leaveTime === null && !this.advance) {
+      if (this.can('striker')) this.send({ type: 'bat.leave' });
       return;
     }
     if (a === 'run' || a === 'wait' || a === 'back') {
       this.send({ type: 'run.call', call: a });
       this.lastCall = a;
     }
+  }
+
+  /** Play the picked shot now, aimed where the stick points. `ago` backdates it (seconds). */
+  private playShot(footwork: 'front' | 'back', ago = 0): void {
+    const m = this.match;
+    const d = this.shotAim();
+    const back = Math.min(30, Math.max(0, Math.round(ago / DT)));
+    this.send({ type: 'bat.shot', shot: { family: this.input.pickedShot, aimX: d.x, aimY: d.y, footwork }, at: m.tick - back });
+  }
+
+  /** When the ball came (or will come) past ADVANCE_IDEAL_Z, or null before then. */
+  private advanceIdeal(m: CricketMatch): number | null {
+    const b = m.ball;
+    if (b.pos.z < ADVANCE_IDEAL_Z) return null;
+    return m.time - (b.pos.z - ADVANCE_IDEAL_Z) / Math.max(5, b.vel.z);
+  }
+
+  /** After Advanced: once the ball is close enough, play the picked shot off the front foot, as early or late as the press was. */
+  private advanceShot(m: CricketMatch): void {
+    const adv = this.advance;
+    if (!adv) return;
+    if ((m.phase !== 'runUp' && m.phase !== 'inPlay') || m.swing || m.batContact || m.padContact || m.passedBatter || m.leaveTime !== null) {
+      this.advance = null;
+      return;
+    }
+    if (m.phase !== 'inPlay') return;
+    adv.ideal ??= this.advanceIdeal(m);
+    if (adv.ideal === null) return;
+    const due = advanceSwingDue(m.timeToPlane(m.frontPlane), SWING_TIME[this.input.pickedShot], advanceError(adv.pressedAt, adv.ideal));
+    if (due === null) return;
+    this.advance = null;
+    this.playShot('front', due);
   }
 
   private lastMove = { x: 0, z: 0 };
@@ -348,14 +423,8 @@ export class GameSession {
       this.intentBowler = bowlerIdx;
       this.intent = defaultIntent(style);
     }
+    this.syncBowlStage(m);
     const vars = variationsFor(style);
-    const pick = (v: Variation) => {
-      this.intent = { ...this.intent, variation: v };
-      if (v === 'yorker') this.intent.length = LENGTHS.yorker;
-      else if (v === 'bouncer') this.intent.length = LENGTHS.bouncer;
-      else if (this.intent.length < 2 || this.intent.length > 9.5) this.intent.length = style === 'fast' || style === 'medium' ? LENGTHS.good : LENGTHS.full + 0.5;
-      this.sfx.ui();
-    };
     for (const a of actions) {
       if (a === 'field') {
         if (m.phase === 'preDelivery' || m.phase === 'dead') this.cb.onFieldEditor();
@@ -375,27 +444,27 @@ export class GameSession {
         this.hud.hidePicker();
         continue;
       }
-      if (a.startsWith('var') && a !== 'varPrev' && a !== 'varNext') {
-        const v = vars[Number(a.slice(3)) - 1];
-        if (v) pick(v);
-      } else if (a === 'varPrev' || a === 'varNext') {
+      if (m.phase === 'preDelivery' && /^var\d+$|^varPrev$|^varNext$/.test(a)) {
+        // Choosing a delivery while still placing the target also sets the target where it is.
+        if (this.bowlStage === 'aim') this.confirmTarget(m);
         const i = vars.indexOf(this.intent.variation);
-        pick(vars[(i + (a === 'varNext' ? 1 : vars.length - 1)) % vars.length]!);
+        const v = a === 'varPrev' || a === 'varNext' ? vars[(i + (a === 'varNext' ? 1 : vars.length - 1)) % vars.length] : vars[Number(a.slice(3)) - 1];
+        if (v) this.pickVariation(v);
+      } else if ((a === 'back' || a === 'defend') && m.phase === 'preDelivery' && this.bowlStage === 'delivery') {
+        // B: back to the target to move it again.
+        this.bowlStage = 'aim';
+        this.sfx.ui();
       } else if (a === 'primary') {
-        this.flushAim();
-        if (m.phase === 'preDelivery') this.send({ type: 'bowl.start' }, 'bowler');
-        else if (m.phase === 'runUp') this.send({ type: 'bowl.release', at: m.tick }, 'bowler');
+        if (m.phase === 'preDelivery' && this.bowlStage === 'aim') this.confirmTarget(m);
+        else if (m.phase === 'preDelivery') {
+          this.flushAim();
+          this.send({ type: 'bowl.start' }, 'bowler');
+        } else if (m.phase === 'runUp') this.send({ type: 'bowl.release', at: m.tick }, 'bowler');
       }
     }
     if (m.phase === 'preDelivery' || m.phase === 'runUp') {
-      const d = this.input.dir();
-      const dt = 1 / 60;
-      const hand = m.strikerDef.batHand;
-      // Bowling camera looks down +z, so screen-right is world -x.
-      const dxWorld = -d.x * 1.3 * dt;
-      const dLine = hand === 'R' ? dxWorld : -dxWorld;
-      this.intent.line = Math.max(-1.2, Math.min(1.4, this.intent.line + dLine));
-      this.intent.length = Math.max(0.3, Math.min(12.5, this.intent.length - d.y * 6 * dt));
+      // The joystick moves the target only while it is being placed; after OK it stays where it was set.
+      if (m.phase === 'preDelivery' && this.bowlStage === 'aim') this.intent = moveTarget(this.intent, this.input.dir(), m.strikerDef.batHand, 1 / 60);
       const key = JSON.stringify(this.intent);
       if (key !== this.lastAim) {
         this.lastAim = key;
@@ -404,6 +473,31 @@ export class GameSession {
       // Online, the aim is sent at most 15 times a second (and always before the run-up starts).
       if (this.aimDirty && this.due('aim', 1 / 15)) this.flushAim();
     }
+  }
+
+  /** A new ball (or a new bowler) starts with placing the target. */
+  private syncBowlStage(m: CricketMatch): void {
+    const key = `${m.inningsIndex}|${m.inn.log.length}|${m.inn.currentBowler}`;
+    if (key === this.stageKey) return;
+    this.stageKey = key;
+    this.bowlStage = 'aim';
+    this.aimedLength = null;
+  }
+
+  /** OK: the target is set; the bowler's deliveries come up next. */
+  private confirmTarget(m: CricketMatch): void {
+    const r = confirmAim(this.intent, m.bowlerDef.bowlStyle);
+    this.intent = r.intent;
+    this.aimedLength = r.aimedLength;
+    this.bowlStage = 'delivery';
+    this.aimDirty = true;
+    this.flushAim();
+    this.sfx.ui();
+  }
+
+  private pickVariation(v: Variation): void {
+    this.intent = chooseVariation(this.intent, v, this.match.bowlerDef.bowlStyle, this.aimedLength);
+    this.sfx.ui();
   }
 
   private aimDirty = false;
@@ -487,6 +581,9 @@ export class GameSession {
         if (e.onPitch) this.world.ball.pitchMark(e.pos.x, e.pos.z, now);
         this.sfx.bounce(e.onPitch, this.panOf(e.pos));
         break;
+      case 'leave':
+        if (humanBatting) hud.showFeedback('LEFT ALONE', 'good', now);
+        break;
       case 'shot': {
         const r = e.result;
         const pan = this.panOf(m.ball.pos);
@@ -499,7 +596,7 @@ export class GameSession {
           if (r.outcome === 'hit' && r.quality > 0.75 && m.ball.vel.y > 6) this.sfx.crowd('rise', 0.8);
           const v = m.ball.vel;
           this.world.cams.startFollow(new THREE.Vector3(v.x, v.y, v.z));
-          this.world.cams.mode = 'follow';
+          this.setCam('follow');
           this.followUntil = Infinity;
           if (r.quality > 0.85 && r.outcome === 'hit') this.world.cheer(0.3);
         }
@@ -542,7 +639,9 @@ export class GameSession {
       case 'reviewResult': {
         const sub = e.overturned ? 'Decision overturned' : e.umpiresCall ? "Umpire's call - review retained" : `Decision stands - review lost (${e.reviewsLeft} left)`;
         hud.showTrackingResult(e.out ? 'OUT' : 'NOT OUT', sub, now);
-        world.umpireSignal(e.out ? 'out' : 'notOut', now);
+        // An overturned decision is cancelled first (arms crossed and opened), then the new one given.
+        if (e.overturned) world.umpireSignal('revoke', now);
+        world.umpireSignal(e.out ? 'out' : 'notOut', e.overturned ? now + 1.6 : now);
         this.trackUntil = now + 2.8;
         this.world.cheer(e.overturned ? 0.8 : 0.3);
         this.sfx.crowd(e.out ? 'roar' : 'groan', e.out ? 0.8 : 0.5);
@@ -628,7 +727,7 @@ export class GameSession {
         if (!/^(FOUR|SIX|OUT)/.test(e.summary)) hud.showToast(e.summary, now);
         this.onBallComplete();
         const last = m.inn.log[m.inn.log.length - 1]?.outcome;
-        if (last && (last.extra === 'bye' || last.extra === 'legBye')) world.umpireSignal('bye', now + 0.3);
+        if (last && (last.extra === 'bye' || last.extra === 'legBye')) world.umpireSignal(last.extra, now + 0.3);
         this.followUntil = Math.min(this.followUntil, now + 1.4);
         break;
       }
@@ -710,7 +809,7 @@ export class GameSession {
     if (reviewing) {
       this.world.cams.mode = 'tracking';
     } else if (m.phase === 'preDelivery' || m.phase === 'runUp') {
-      this.world.cams.mode = this.preBallCam();
+      this.setCam(this.preBallCam());
       this.followUntil = 0;
       this.lastCall = null;
     } else if (now < this.cutUntil) {
@@ -721,12 +820,12 @@ export class GameSession {
       if (this.world.cams.mode !== 'follow') {
         const v = m.ball.vel;
         this.world.cams.startFollow(new THREE.Vector3(v.x, v.y, v.z));
-        this.world.cams.mode = 'follow';
+        this.setCam('follow');
       }
     } else if ((m.phase === 'dead' || m.phase === 'review') && now > this.followUntil) {
-      this.world.cams.mode = this.preBallCam();
+      this.setCam(this.preBallCam());
     } else if (m.phase === 'inPlay' && !m.batContact && this.world.cams.mode === 'follow') {
-      this.world.cams.mode = this.preBallCam();
+      this.setCam(this.preBallCam());
     }
     if (m.phase === 'preDelivery') this.world.resetStumps();
     // After a wicket the dismissed batter stays out there (dejected) until the next ball is set up.
@@ -735,17 +834,25 @@ export class GameSession {
     // Bowling guide.
     const guide = this.settings.showPitchGuide && mode === 'bowling';
     const assist = ASSIST_LEVEL[this.settings.assist];
-    const showMarker = guide && (m.phase === 'preDelivery' || (m.phase === 'runUp' && assist > 0));
+    // While the bowler places it, the target is always shown (it is the control), pulsing until OK sets it.
+    const bowlingNow = mode === 'bowling' && this.can('bowler') && !this.fieldingActive(m);
+    if (bowlingNow) this.syncBowlStage(m);
+    const placing = bowlingNow && m.phase === 'preDelivery';
+    // The bowler sees the ball land on the target: it stays up until just after the ball pitches.
+    const pitching = bowlingNow && m.phase === 'inPlay' && !m.batContact && (!m.firstBounce || m.ball.pos.z < m.firstBounce.z + 2.5);
+    const showMarker = placing || pitching || (guide && (m.phase === 'preDelivery' || (m.phase === 'runUp' && assist > 0)));
     this.world.stadium.marker.visible = showMarker;
-    this.world.stadium.lengthGuide.visible = showMarker && assist >= 0.5;
+    this.world.stadium.setMarker(placing && this.bowlStage === 'aim' ? 'aim' : 'set', now);
+    this.world.stadium.lengthGuide.visible = showMarker && !pitching && assist >= 0.5;
     if (showMarker) {
       const hand = m.strikerDef.batHand;
-      this.world.stadium.marker.position.set(lineToX(this.intent.line, hand), 0.012, lengthToZ(this.intent.length));
+      // Once the bowler is running in, show the target the match will actually bowl at.
+      const target = m.phase === 'preDelivery' ? this.intent : m.intent;
+      this.world.stadium.marker.position.set(lineToX(target.line, hand), 0.012, lengthToZ(target.length));
       const lg = this.world.stadium.lengthGuide;
       lg.scale.z = 1;
     }
 
-    this.updatePathPreview(m, mode, assist);
     this.updateShotCue(m, mode, assist);
     if (mode === 'bowling' && this.can('bowler') && m.phase === 'preDelivery' && m.inn.thisOver.length === 0) {
       // New over: offer the bowler choice once.
@@ -767,13 +874,11 @@ export class GameSession {
       hud.setRole(label, this.driver.backlog());
     }
     const fielding = this.fieldingActive(m) ? (m.fielding.holder >= 0 && m.fielding.holder === m.fielding.human?.controlled ? 'holding' : 'chasing') : null;
-    hud.setControls(mode, m.phase, this.input.device, { footwork: this.input.footwork(), side: this.intent.side ?? 'over', fielding });
+    const stage = bowlingNow && m.phase === 'preDelivery' ? this.bowlStage : undefined;
+    hud.setControls(mode, m.phase, this.input.device, { shot: this.input.pickedShot, advancing: this.advance !== null || m.charged, side: this.intent.side ?? 'over', fielding, left: m.leaveTime !== null, stage, tv: this.settings.camera !== 'behind' });
     if (mode === 'bowling') {
-      hud.setVariations(m.phase === 'preDelivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => {
-        this.intent = { ...this.intent, variation: v };
-        if (v === 'yorker') this.intent.length = LENGTHS.yorker;
-        if (v === 'bouncer') this.intent.length = LENGTHS.bouncer;
-      });
+      // The bowler's deliveries come up once the target is set.
+      hud.setVariations(stage === 'delivery' ? m.bowlerDef.bowlStyle : null, this.intent.variation, (v) => this.pickVariation(v), m.bowlerDef.shortName);
       const w = timingWindows(m.bowlerDef, assist);
       hud.setMeter(m.phase === 'runUp', m.runUpTime, m.runUpDuration, 0.03 + 0.02 * assist, w.good);
     } else {
@@ -787,25 +892,30 @@ export class GameSession {
     let hint = '';
     if (mode === 'batting') {
       if (m.phase === 'preDelivery' || m.phase === 'runUp' || (m.phase === 'inPlay' && !m.swing && !m.batContact && !m.passedBatter))
-        hint = pad ? 'Stick: aim · A ground · X lofted · B defend · RT/LT front/back foot · D-pad ▲ charge' : 'Aim WASD · Space ground · K lofted · L defend · hold Shift/V front/back foot · F charge';
-      else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'Y run · RT stay · LT back' : 'R/Y run · N stay · B back';
+        hint = `${SHOT_LABEL[this.input.pickedShot]} picked · ` + (pad ? 'B push · Y stroke · X loft · then A/LB front foot · RB back foot · D-pad ▲ advanced · ▼ leave' : 'L push · J stroke · K loft · then Space/Q front foot · E back foot · F advanced · O leave');
+      else if (m.phase === 'inPlay' && !this.settings.autoRun) hint = pad ? 'A run · D-pad ▼ stay · L3 back' : 'R/Y run · N stay · B back';
     } else if (mode === 'bowling' && fielding) {
       hint = fielding === 'holding'
         ? pad ? 'A: throw to keeper · X: throw to bowler · stick: run it in' : 'Space: throw to keeper · K: throw to bowler · WASD: run it in'
         : pad ? 'Stick: run · A: dive · B: catch · LB: switch · RB: auto' : 'WASD: run · Space: dive · L: catch · Q: switch fielder · E: auto';
     } else if (mode === 'bowling') {
-      if (m.phase === 'preDelivery') hint = pad ? 'Stick: marker · D-pad: variation · R3: over/round · Back: field · A: run in' : 'WASD: marker · 1-8: variation · T: over/round · G: field · H: bowler · Space: run in';
+      if (m.phase === 'preDelivery' && this.bowlStage === 'aim') hint = pad ? 'Stick: move the target · A: OK · R3: over/round · Back: field' : 'WASD: move the target · Space: OK · T: over/round · G: field · H: bowler';
+      else if (m.phase === 'preDelivery') hint = pad ? 'D-pad: choose a delivery · A: bowl · B: move the target again' : '1-8 or Z/X: choose a delivery · Space: bowl · B: move the target again';
       else if (m.phase === 'runUp') hint = pad ? 'Press A in the green zone' : 'Press Space in the green zone to release';
     }
     if (this.driver.networked && mode === 'batting' && !this.can('striker')) hint = 'You are the non-striker: call the runs (R / N / B) - your partner plays the shots';
     if (this.driver.networked && mode === 'bowling' && !this.can('bowler') && !fielding) hint = 'Your partner is bowling this over - you field when the ball is hit (G: set the field)';
-    if (this.input.device === 'touch' && hint) hint = touchHint(mode, m.phase, fielding, this.settings.autoRun);
+    const waitingForBall = m.phase === 'inPlay' && !m.swing && !m.batContact && !m.padContact && !m.passedBatter;
+    if (this.input.device === 'touch' && hint) hint = touchHint(mode, mode === 'batting' && waitingForBall ? 'runUp' : m.phase, fielding, this.settings.autoRun, this.bowlStage);
     hud.setHint(hint);
 
     this.checkScreens(m);
     this.updateBigScreen(m);
     if (this.humanTeam !== null || this.driver.networked) this.sfx.update(this.world.excitementLevel, m.phase);
     const snap = m.snapshot();
+    // Mini map: the field can be changed from it by the bowling side between balls.
+    const canSetField = this.humanTeam !== null && mode === 'bowling' && !fielding && (m.phase === 'preDelivery' || m.phase === 'dead');
+    hud.setMiniMap(snap, canSetField, m.bowlingTeam.colors.primary);
     this.world.render(snap, dt, this.time);
   }
 
@@ -873,7 +983,6 @@ export class GameSession {
     this.hud.hideReviewPrompt();
     this.world.clearSignal();
     this.world.clearReactions();
-    this.world.setPathPreview(null);
     this.world.setShotCue(null);
     this.world.stadium.marker.visible = false;
     this.world.stadium.lengthGuide.visible = false;
@@ -1024,27 +1133,6 @@ export class GameSession {
     const lines = [`${m.battingTeam.shortName} ${inn.runs}/${inn.wickets}`, `OVERS ${overs}`];
     lines.push(inn.target !== null ? `TARGET ${inn.target}` : m.lastSummary.toUpperCase() || 'CREASE CLASH');
     this.world.stadium.screen.draw(lines, m.battingTeam.colors.primary);
-  }
-
-  /** Dashed line along the intended delivery (beginner/standard assistance). */
-  private updatePathPreview(m: CricketMatch, mode: string, assist: number): void {
-    const show = mode === 'bowling' && this.can('bowler') && this.settings.showPitchGuide && assist >= 0.5 && (m.phase === 'preDelivery' || m.phase === 'runUp');
-    if (!show) {
-      if (this.previewKey) this.world.setPathPreview(null);
-      this.previewKey = '';
-      return;
-    }
-    const key = `${JSON.stringify(this.intent)}|${m.inn.currentBowler}|${m.strikerDef.id}`;
-    if (key === this.previewKey) return;
-    this.previewKey = key;
-    const plan = planDelivery(m.bowlerDef, m.strikerDef.batHand, this.intent, 0, m.cfg.conditions, new Rng(1), assist, { preview: true });
-    const traj = predictTrajectory(plan.ball, m.cfg.conditions, 1.5, DT, 3);
-    const pts = [];
-    for (const t of traj) {
-      pts.push(t.pos);
-      if (t.pos.z > STRIKER_STUMPS_Z + 0.5) break;
-    }
-    this.world.setPathPreview(pts);
   }
 
   /** Beginner cue: a ring at the contact point that closes when it is time to play. */

@@ -243,6 +243,9 @@ export class Cricketer {
   /** The countdown time a timed action (catch, dive, pick-up, throw) started from, and the ball's height for a catch. */
   private animT0 = 0;
   private catchH = 1.2;
+  /** Where the ball was across the body (root-local x) when a catch or dive began; the keeper's shuffle across. */
+  private catchX = 0;
+  private keeperShift = 0;
   private fadeT = 1;
   private fadeDur = 0.2;
   private from: THREE.Quaternion[] = [];
@@ -615,6 +618,7 @@ export class Cricketer {
       this.anim = anim;
       this.animT0 = t;
       this.catchH = extra.look ? extra.look.y : 1.2;
+      this.catchX = extra.look ? this.toLocal(extra.look).x : 0;
     }
     this.reset();
     const speed = extra.speed ?? 0;
@@ -648,23 +652,29 @@ export class Cricketer {
         } else this.idleReady(extra.ready ?? 1, !!extra.close, extra.split ?? 0);
         break;
       case 'keeper':
-        this.keeperReady(extra.ready ?? 1, extra.split ?? 0);
+        this.keeperReady(extra.ready ?? 1, extra.split ?? 0, extra.look ? this.toLocal(extra.look) : null, dt);
         break;
       case 'dive':
-        this.dive(t);
+        if (this.isKeeper) this.keeperDive(t);
+        else this.dive(t);
         grounded = false;
         look = false;
         break;
       case 'catch':
-        this.catchBall(t);
+        if (this.isKeeper) this.keeperTake(t);
+        else this.catchBall(t);
         look = false;
         break;
       case 'pickup':
-        this.pickup(t, speed);
+        // A keeper takes the ball in the gloves; only one rolling along the ground is scooped up.
+        if (this.isKeeper && this.catchH > 0.12) this.keeperTake(t);
+        else this.pickup(t, speed);
         look = false;
         break;
       case 'throw':
-        this.throwBall(t);
+        // A keeper close to the stumps whips the bails off; further away they throw.
+        if (this.isKeeper && this.animT0 < 0.35) this.keeperStump(t);
+        else this.throwBall(t);
         look = false;
         break;
       case 'mark':
@@ -974,27 +984,126 @@ export class Cricketer {
     this.breathe();
   }
 
+  private get isKeeper(): boolean {
+    return this.kit.gloves === 'keeping';
+  }
+
+  /** A world point in this player's own frame (x: their left, y: up, z: forward). */
+  private toLocal(p: { x: number; y: number; z: number }): THREE.Vector3 {
+    this.refresh();
+    return new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(this.inv);
+  }
+
   /**
-   * The keeper: standing easy between balls, down in a deep squat with the gloves between the feet as the bowler
-   * runs in (`r`), then rising into a half crouch with the gloves up as the ball comes (`rise` 0..1).
+   * The keeper: standing easy between balls, gloves together and now and then clapped to gee up the bowler;
+   * down in a deep squat with the gloves between the feet as the bowler runs in (`r`); then rising into a half
+   * crouch with the gloves up as the ball comes (`rise` 0..1), shuffling across with the line of the ball and
+   * the gloves following its height.
    */
-  private keeperReady(r: number, rise: number): void {
+  private keeperReady(r: number, rise: number, ball: THREE.Vector3 | null, dt: number): void {
     r = clamp01(r);
     if (r < 0.05) {
-      this.idle();
+      this.keeperShift = 0;
+      const s = this.idleLegs(0.8);
+      const clap = Math.pow(Math.max(0, Math.sin(this.phase * 1.25 + this.kit.number)), 14);
+      this.apply({ lShoulder: [-0.75 - 0.25 * clap, -0.45 - 0.15 * clap, 0.06], rShoulder: [-0.75 - 0.25 * clap, 0.45 + 0.15 * clap, -0.06], lElbow: [-1.0 + 0.3 * clap, 0, 0], rElbow: [-1.0 + 0.3 * clap, 0, 0], head: [0.05, 0, 0.03 * s] });
+      this.breathe();
       return;
     }
+    const up = smooth(rise);
+    // Shuffle across with the line of the ball once it is on its way.
+    const want = ball && rise > 0 ? Math.max(-0.55, Math.min(0.55, ball.x)) : 0;
+    this.keeperShift += (want - this.keeperShift) * Math.min(1, dt * 7);
+    const sh = this.keeperShift * up;
     const bob = Math.sin(this.phase * 2.2) * 0.02 * (1 - rise);
-    const q = r * (1 - 0.5 * smooth(rise));
+    const q = r * (1 - 0.5 * up);
+    // Gloves up towards the ball's height as it comes.
+    const gh = ball && rise > 0 ? Math.max(-0.3, Math.min(0.5, ball.y - 0.8)) * up : 0;
     this.apply({
       lean: 0.25 + 0.2 * q,
-      lHip: [-1.75 * q - bob, 0, 0.38 * r], rHip: [-1.75 * q - bob, 0, -0.38 * r],
+      lHip: [-1.75 * q - bob, 0, 0.38 * r + 0.25 * Math.max(0, -sh)], rHip: [-1.75 * q - bob, 0, -0.38 * r - 0.25 * Math.max(0, sh)],
       lKnee: [2.35 * q + bob * 2, 0, 0], rKnee: [2.35 * q + bob * 2, 0, 0],
-      lShoulder: [-0.45 * r - 0.6 * smooth(rise), 0, 0.12], rShoulder: [-0.45 * r - 0.6 * smooth(rise), 0, -0.12],
-      lElbow: [-0.3 - 0.3 * smooth(rise), 0, 0], rElbow: [-0.3 - 0.3 * smooth(rise), 0, 0],
-      lHand: [-0.3 * smooth(rise), 0, 0], rHand: [-0.3 * smooth(rise), 0, 0],
+      lShoulder: [-0.45 * r - (0.6 + 0.6 * gh) * up, 0, 0.12], rShoulder: [-0.45 * r - (0.6 + 0.6 * gh) * up, 0, -0.12],
+      lElbow: [-0.3 - 0.3 * up, 0, 0], rElbow: [-0.3 - 0.3 * up, 0, 0],
+      lHand: [-0.3 * up, 0, 0], rHand: [-0.3 * up, 0, 0],
+      chest: [0, 0, -0.25 * sh],
       head: [-0.3, 0, 0],
     });
+    this.body.position.x = sh * 0.6;
+  }
+
+  /**
+   * A keeper's take: the gloves go together to the ball where it is (fingers down for a low one, up for a high
+   * one), riding it back towards the body and across to the hip, the legs staying low or rising with it; then
+   * up to the chest, ready to whip the bails off or throw.
+   */
+  private keeperTake(t: number): void {
+    const p = clamp01(1 - t / Math.max(0.2, this.animT0));
+    const h = this.catchH;
+    const x = Math.max(-0.75, Math.min(0.75, this.catchX));
+    const reachK = smooth(p / 0.18);
+    const give = smooth((p - 0.2) / 0.4);
+    const toChest = smooth((p - 0.65) / 0.35);
+    const low = clamp01((0.7 - h) / 0.5);
+    const high = clamp01((h - 1.2) / 0.6);
+    const crouch = (0.9 * low + 0.45 * (1 - low - high)) * (1 - 0.6 * toChest);
+    const hb = Math.max(0.15, Math.min(2.0, h));
+    const at = new THREE.Vector3(x * 0.8, hb, 0.35).lerp(new THREE.Vector3(x * 0.5 + 0.12, hb + 0.05, 0.12), give).lerp(new THREE.Vector3(0.08, 1.1, 0.2), toChest);
+    const c = new THREE.Vector3(x * 0.3, 0.9, 0.3).lerp(at, reachK);
+    this.apply({
+      lean: 0.2 + 0.35 * low - 0.15 * high,
+      lHip: [-1.5 * crouch, 0, 0.3 + 0.2 * Math.max(0, x)], rHip: [-1.5 * crouch, 0, -0.3 - 0.2 * Math.max(0, -x)],
+      lKnee: [2.0 * crouch, 0, 0], rKnee: [2.0 * crouch, 0, 0],
+      chest: [0, -0.35 * x, 0.3 * x],
+      head: [low > 0.5 ? 0.3 : high > 0.5 ? -0.35 : 0, -0.3 * x, 0],
+    });
+    if (high > 0.6 && p < 0.4) this.heelLift.l = this.heelLift.r = 0.35;
+    this.body.position.x = x * 0.45 * (1 - toChest);
+    // Fingers down below the waist, up above it.
+    const pole = h < 0.9 ? [new THREE.Vector3(0.9, 0.3, -0.1), new THREE.Vector3(-0.9, 0.3, -0.1)] : [new THREE.Vector3(0.8, -0.6, 0), new THREE.Vector3(-0.8, -0.6, 0)];
+    this.reach('l', c.clone().add(new THREE.Vector3(0.06, 0, 0)), pole[0]);
+    this.reach('r', c.clone().add(new THREE.Vector3(-0.06, 0, 0)), pole[1]);
+  }
+
+  /**
+   * A keeper's dive: off to the side the ball is going, rolling onto the hip with both gloves stretched out
+   * past the head, landing on the side and sliding, then back up.
+   */
+  private keeperDive(t: number): void {
+    const p = clamp01(1 - t / Math.max(0.3, this.animT0));
+    const side = this.catchX >= 0 ? 1 : -1;
+    const air = smooth((p - 0.04) / 0.25);
+    const rec = smooth((p - 0.62) / 0.38);
+    const flat = air * (1 - rec);
+    const arc = Math.sin(Math.PI * clamp01((p - 0.04) / 0.38)) * 0.28;
+    this.body.rotation.z = -side * 1.35 * flat;
+    this.body.position.x = side * (0.55 * smooth(p / 0.5)) * (1 - rec);
+    this.body.position.y = (arc + 0.12 * air) * (1 - rec);
+    const crouch = (1 - air) * smooth(p / 0.06) + rec * (1 - smooth((p - 0.85) / 0.15));
+    this.apply({
+      // Gloves together beyond the head on the diving side.
+      lShoulder: [-2.6 * flat - 0.6 * crouch, side * 0.3 * flat, 0.35 * flat * (side > 0 ? 1 : 0.2)],
+      rShoulder: [-2.6 * flat - 0.6 * crouch, side * 0.3 * flat, -0.35 * flat * (side < 0 ? 1 : 0.2)],
+      lElbow: [-0.2, 0, 0], rElbow: [-0.2, 0, 0],
+      lHip: [-1.3 * crouch - 0.2 * flat, 0, 0.25 * flat * side], rHip: [-1.3 * crouch - 0.4 * flat, 0, 0.25 * flat * side],
+      lKnee: [1.6 * crouch + 0.3 * flat, 0, 0], rKnee: [1.6 * crouch + 0.6 * flat, 0, 0],
+      chest: [0, 0, side * 0.2 * flat],
+      lean: 0.45 * crouch,
+      head: [-0.2 * flat, 0, side * 0.3 * flat],
+    });
+    this.feetFree = flat > 0.05;
+  }
+
+  /** Breaking the stumps: ball in the gloves at the chest, a quick lunge and sweep of both gloves into the stumps. */
+  private keeperStump(t: number): void {
+    const p = clamp01(1 - t / Math.max(0.15, this.animT0));
+    const hit = smooth(p / 0.35);
+    const back = smooth((p - 0.55) / 0.45);
+    const k = hit * (1 - 0.5 * back);
+    const c = new THREE.Vector3(0.05, 1.05, 0.2).lerp(new THREE.Vector3(0, 0.6, 0.75), k);
+    this.apply({ lean: 0.25 + 0.5 * k, lHip: [-0.8 - 0.5 * k, 0, 0.25], rHip: [-0.6 + 0.3 * k, 0, -0.25], lKnee: [1.1 + 0.3 * k, 0, 0], rKnee: [0.9, 0, 0], head: [0.25 * k, 0, 0] });
+    this.reach('l', c.clone().add(new THREE.Vector3(0.06, 0, 0)), new THREE.Vector3(0.9, 0.2, -0.2));
+    this.reach('r', c.clone().add(new THREE.Vector3(-0.06, 0, 0)), new THREE.Vector3(-0.9, 0.2, -0.2));
   }
 
   /** Put a hand at a point (root-local), palm facing forward, the elbow towards `pole`. */
